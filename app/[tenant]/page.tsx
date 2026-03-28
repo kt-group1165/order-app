@@ -1389,30 +1389,53 @@ function ClientDetail({
 
   // 用具カード共通（ステータス変更ボタン付き）
   const ItemCard = ({ item, dim = false }: { item: OrderItem; dim?: boolean }) => (
-    <div className={`bg-white rounded-xl p-3 shadow-sm border-l-4 ${dim ? "border-gray-200 opacity-75" : "border-emerald-400"}`}>
-      <div className="flex items-start justify-between gap-2">
-        <p className={`text-sm font-medium ${dim ? "text-gray-600" : "text-gray-800"}`}>
+    <div className={`bg-white rounded-xl overflow-hidden shadow-sm border-l-4 ${dim ? "border-gray-200 opacity-75" : "border-emerald-400"}`}>
+      {/* メイン行（1行・縦列揃え） */}
+      <div className="flex items-center gap-2 px-3 py-2.5 overflow-x-auto">
+        {/* ステータス */}
+        <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap w-[5.5rem] text-center ${STATUS_COLOR[item.status]}`}>
+          {STATUS_LABEL[item.status]}
+        </span>
+        {/* 用具名 */}
+        <span className={`flex-1 min-w-0 text-sm font-medium truncate ${dim ? "text-gray-600" : "text-gray-800"}`}>
           {equipName(item.product_code)}
-        </p>
-        <div className="flex items-center gap-2 shrink-0">
-          {item.rental_price && (
-            <span className="text-sm font-bold text-emerald-600">
-              ¥{item.rental_price.toLocaleString()}<span className="text-xs font-normal">/月</span>
-            </span>
-          )}
-          <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[item.status]}`}>
-            {STATUS_LABEL[item.status]}
+        </span>
+        {/* レンタル価格 */}
+        {item.rental_price && (
+          <span className="shrink-0 text-sm font-bold text-emerald-600 whitespace-nowrap">
+            ¥{item.rental_price.toLocaleString()}<span className="text-xs font-normal">/月</span>
           </span>
-        </div>
+        )}
+        {/* 開始・終了日 */}
+        {(item.rental_start_date || item.rental_end_date) && (
+          <span className="shrink-0 text-xs text-gray-400 whitespace-nowrap">
+            {item.rental_start_date && <span className="mr-3">開始: {item.rental_start_date}</span>}
+            {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
+          </span>
+        )}
+        {/* アクションボタン */}
+        {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
+          <div className="flex gap-1.5 shrink-0">
+            {NEXT_STATUSES[item.status].map((next) => (
+              <button
+                key={next}
+                disabled={updatingId === item.id}
+                onClick={() => handleStatusClick(item, next)}
+                className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
+                  next === "cancelled" || next === "terminated"
+                    ? "border-red-200 text-red-500 hover:bg-red-50"
+                    : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                }`}
+              >
+                {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : `→ ${STATUS_LABEL[next]}`}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-      <div className="text-xs text-gray-400 mt-1 flex gap-3 flex-wrap">
-        {item.rental_start_date && <span>開始: {item.rental_start_date}</span>}
-        {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
-      </div>
-
       {/* 日付入力 */}
       {dateInput?.item.id === item.id && (
-        <div className="mt-2 bg-emerald-50 rounded-xl p-3 space-y-2">
+        <div className="mx-3 mb-2 bg-emerald-50 rounded-xl p-3 space-y-2">
           <p className="text-xs font-medium text-emerald-700">
             {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
           </p>
@@ -1432,26 +1455,6 @@ function ClientDetail({
             </button>
             <button onClick={() => setDateInput(null)} className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
           </div>
-        </div>
-      )}
-
-      {/* ステータス変更ボタン */}
-      {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
-        <div className="flex gap-2 mt-2 overflow-x-auto">
-          {NEXT_STATUSES[item.status].map((next) => (
-            <button
-              key={next}
-              disabled={updatingId === item.id}
-              onClick={() => handleStatusClick(item, next)}
-              className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
-                next === "cancelled" || next === "terminated"
-                  ? "border-red-200 text-red-500 hover:bg-red-50"
-                  : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-              }`}
-            >
-              {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : `→ ${STATUS_LABEL[next]}`}
-            </button>
-          ))}
         </div>
       )}
     </div>
