@@ -430,7 +430,7 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                                   <Fragment key={item.id}>
                                     <tr className="border-b border-gray-50 last:border-0">
                                       {/* ステータス（最左列） */}
-                                      <td className="pl-3 py-2 pr-2 w-[4.5rem]">
+                                      <td className="pl-3 py-2 pr-2 w-[5.5rem] shrink-0">
                                         <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${STATUS_COLOR[item.status]}`}>
                                           {STATUS_LABEL[item.status]}
                                         </span>
