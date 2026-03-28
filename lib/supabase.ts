@@ -1,0 +1,115 @@
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// 利用者（calendar-appと共有）
+export type Client = {
+  id: string;
+  tenant_id: string;
+  user_number: string | null;
+  name: string;
+  furigana: string | null;
+  phone: string | null;
+  mobile: string | null;
+  address: string | null;
+  care_level: string | null;
+  benefit_rate: string | null;
+  care_manager: string | null;
+  care_manager_org: string | null;
+  certification_end_date: string | null;
+  memo: string | null;
+  created_at: string;
+};
+
+// 用具マスタ
+export type Equipment = {
+  id: string;
+  tenant_id: string;
+  product_code: string;
+  tais_code: string | null;
+  name: string;
+  category: string | null;
+  rental_price: number | null;
+  national_avg_price: number | null;
+  price_limit: number | null;
+  selection_reason: string | null;
+  proposal_reason: string | null;
+  comparison_product_codes: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+// 卸会社
+export type Supplier = {
+  id: string;
+  name: string;
+  email: string | null;
+  memo: string | null;
+  created_at: string;
+};
+
+// 仕入れ価格
+export type EquipmentPrice = {
+  id: string;
+  tenant_id: string;
+  product_code: string;
+  supplier_id: string;
+  purchase_price: number;
+  updated_at: string;
+};
+
+// 担当者（calendar-appと共有）
+export type Member = {
+  id: string;
+  tenant_id: string;
+  name: string;
+  color: string;
+  sort_order: number | null;
+  created_at: string;
+};
+
+// 発注
+export type Order = {
+  id: string;
+  tenant_id: string;
+  client_id: string | null;
+  event_id: string | null;
+  ordered_at: string;
+  created_by: string | null;
+  status: "ordered" | "completed" | "cancelled";
+  notes: string | null;
+  payment_type: "介護" | "自費";
+  delivery_date: string | null;
+  delivery_time: string | null;
+  delivery_type: "直納" | "自社納品";
+  attendance_required: boolean;
+  attendee_ids: string[];
+  supplier_id: string | null;
+  email_sent_at: string | null;
+  email_sent_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+// 発注明細
+export type OrderItem = {
+  id: string;
+  order_id: string;
+  tenant_id: string;
+  product_code: string;
+  supplier_id: string | null;
+  purchase_price: number | null;
+  rental_price: number | null;
+  payment_type: "介護" | "自費" | null;
+  status: "ordered" | "delivered" | "trial" | "rental_started" | "cancelled" | "terminated";
+  rental_start_decided_at: string | null;
+  rental_start_date: string | null;
+  rental_end_date: string | null;
+  cancelled_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
