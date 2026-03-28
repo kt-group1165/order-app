@@ -390,12 +390,13 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                     });
                     return (
                       <li key={order.id} className="bg-white">
-                        {/* 発注ヘッダー行（クリックで折りたたみ） */}
-                        <button
-                          onClick={toggleExpand}
-                          className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors"
-                        >
-                          <div className="flex-1 text-left flex items-center gap-2">
+                        {/* 発注ヘッダー行 */}
+                        <div className="px-4 py-2.5 flex items-center gap-2 hover:bg-gray-50 transition-colors">
+                          {/* 折りたたみボタン（大部分） */}
+                          <button
+                            onClick={toggleExpand}
+                            className="flex-1 text-left flex items-center gap-2 min-w-0"
+                          >
                             <span className="text-xs text-gray-500">
                               {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
                             </span>
@@ -403,32 +404,30 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                             {order.notes && (
                               <span className="text-xs text-gray-400 truncate max-w-[100px]">{order.notes}</span>
                             )}
-                          </div>
-                          {isOpen ? (
-                            <ChevronDown size={16} className="text-gray-400 shrink-0" />
-                          ) : (
-                            <ChevronRight size={16} className="text-gray-400 shrink-0" />
-                          )}
-                        </button>
+                            {isOpen ? (
+                              <ChevronDown size={16} className="text-gray-400 shrink-0 ml-1" />
+                            ) : (
+                              <ChevronRight size={16} className="text-gray-400 shrink-0 ml-1" />
+                            )}
+                          </button>
+                          {/* メールアイコン（ツールチップ付き） */}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setPreviewOrder({ order, items: order.items }); }}
+                            title={(order.email_sent_count ?? 0) > 0 ? `メール再送（${order.email_sent_count}回送信済）` : "発注メールを送信・印刷"}
+                            className="shrink-0 p-1.5 rounded-lg text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                          >
+                            <Mail size={15} />
+                          </button>
+                        </div>
 
                         {isOpen && (
                           <div className="px-3 pb-3 bg-gray-50">
-                            {/* メール送信ボタン */}
-                            <button
-                              onClick={() => setPreviewOrder({ order, items: order.items })}
-                              className="w-full flex items-center justify-center gap-2 py-2 mb-2 rounded-xl border border-emerald-200 text-emerald-600 text-xs font-medium hover:bg-emerald-50 transition-colors"
-                            >
-                              <Mail size={14} />
-                              {(order.email_sent_count ?? 0) > 0
-                                ? `メール再送（${order.email_sent_count}回送信済）`
-                                : "発注メールを送信・印刷"}
-                            </button>
                             {/* アイテム一覧（table で縦列を完全に揃える） */}
                             <table className="w-full table-fixed bg-white rounded-xl overflow-hidden text-left">
                               <tbody>
                                 {order.items.map((item) => (
                                   <Fragment key={item.id}>
-                                    <tr className="border-b border-gray-50 last:border-0">
+                                    <tr className="border-b border-dashed border-gray-200 last:border-0">
                                       {/* ステータス（最左列） */}
                                       <td className="pl-3 py-2 pr-2 w-[5.5rem] shrink-0">
                                         <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${STATUS_COLOR[item.status]}`}>
@@ -1389,7 +1388,7 @@ function ClientDetail({
 
   // 用具カード共通（ステータス変更ボタン付き）
   const ItemCard = ({ item, dim = false }: { item: OrderItem; dim?: boolean }) => (
-    <div className={`bg-white rounded-xl overflow-hidden shadow-sm border-l-4 ${dim ? "border-gray-200 opacity-75" : "border-emerald-400"}`}>
+    <div className={`border-l-4 ${dim ? "border-gray-200 opacity-75" : "border-emerald-400"}`}>
       {/* メイン行（1行・縦列揃え） */}
       <div className="flex items-center gap-2 px-3 py-2.5 overflow-x-auto">
         {/* ステータス */}
@@ -1510,19 +1509,19 @@ function ClientDetail({
           {pendingItems.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">進行中</h3>
-              <div className="space-y-2">{pendingItems.map((i) => <ItemCard key={i.id} item={i} />)}</div>
+              <div className="bg-white rounded-xl overflow-hidden shadow-sm divide-y divide-dashed divide-gray-200">{pendingItems.map((i) => <ItemCard key={i.id} item={i} />)}</div>
             </section>
           )}
           {activeItems.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">レンタル中</h3>
-              <div className="space-y-2">{activeItems.map((i) => <ItemCard key={i.id} item={i} />)}</div>
+              <div className="bg-white rounded-xl overflow-hidden shadow-sm divide-y divide-dashed divide-gray-200">{activeItems.map((i) => <ItemCard key={i.id} item={i} />)}</div>
             </section>
           )}
           {historyItems.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">過去のレンタル</h3>
-              <div className="space-y-2">{historyItems.map((i) => <ItemCard key={i.id} item={i} dim />)}</div>
+              <div className="bg-white rounded-xl overflow-hidden shadow-sm divide-y divide-dashed divide-gray-200">{historyItems.map((i) => <ItemCard key={i.id} item={i} dim />)}</div>
             </section>
           )}
           {clientItems.length === 0 && (
