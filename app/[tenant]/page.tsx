@@ -447,6 +447,11 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                                       <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap w-[5.5rem]">
                                         {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
                                       </td>
+                                      {/* 開始・終了日 */}
+                                      <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">
+                                        {item.rental_start_date && <span className="mr-3">開始: {item.rental_start_date}</span>}
+                                        {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
+                                      </td>
                                       {/* アクションボタン */}
                                       <td className="py-2 pr-3 whitespace-nowrap">
                                         {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
@@ -469,19 +474,10 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                                         )}
                                       </td>
                                     </tr>
-                                    {/* 開始・終了日（あれば次行に表示） */}
-                                    {(item.rental_start_date || item.rental_end_date) && (
-                                      <tr className="border-b border-gray-50 last:border-0">
-                                        <td colSpan={5} className="px-3 pb-1.5 text-xs text-gray-400">
-                                          {item.rental_start_date && <span className="mr-4">開始: {item.rental_start_date}</span>}
-                                          {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
-                                        </td>
-                                      </tr>
-                                    )}
                                     {/* 日付入力（レンタル開始・解約時） */}
                                     {dateInput?.item.id === item.id && (
                                       <tr>
-                                        <td colSpan={5} className="px-3 pb-2">
+                                        <td colSpan={6} className="px-3 pb-2">
                                           <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
                                             <p className="text-xs font-medium text-emerald-700">
                                               {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
