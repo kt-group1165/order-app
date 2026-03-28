@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, useCallback } from "react";
+import { useState, useEffect, use, useCallback, Fragment } from "react";
 import {
   Package,
   ClipboardList,
@@ -423,80 +423,98 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                                 ? `メール再送（${order.email_sent_count}回送信済）`
                                 : "発注メールを送信・印刷"}
                             </button>
-                            {/* アイテム一覧（縦列揃え） */}
-                            <div className="bg-white rounded-xl overflow-hidden">
-                              {order.items.map((item) => (
-                                <div key={item.id} className="border-b border-gray-50 last:border-0">
-                                  {/* メイン行：1行で全情報 + ボタン */}
-                                  <div className="flex items-center gap-2 px-3 py-2 overflow-x-auto">
-                                    <span className="w-0 flex-1 min-w-[6rem] text-sm font-medium text-gray-800 truncate">
-                                      {equipName(item.product_code)}
-                                    </span>
-                                    <span className="w-24 shrink-0 text-xs text-gray-400">{item.product_code}</span>
-                                    <span className="w-20 shrink-0 text-xs text-gray-400">
-                                      {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
-                                    </span>
-                                    <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[item.status]}`}>
-                                      {STATUS_LABEL[item.status]}
-                                    </span>
-                                    {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
-                                      <div className="flex gap-1.5 shrink-0">
-                                        {NEXT_STATUSES[item.status].map((next) => (
-                                          <button
-                                            key={next}
-                                            disabled={updatingId === item.id}
-                                            onClick={() => handleStatusClick(item, next)}
-                                            className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
-                                              next === "cancelled" || next === "terminated"
-                                                ? "border-red-200 text-red-500 hover:bg-red-50"
-                                                : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                                            }`}
-                                          >
-                                            {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : `→ ${STATUS_LABEL[next]}`}
-                                          </button>
-                                        ))}
-                                      </div>
+                            {/* アイテム一覧（table で縦列を完全に揃える） */}
+                            <table className="w-full bg-white rounded-xl overflow-hidden text-left">
+                              <tbody>
+                                {order.items.map((item) => (
+                                  <Fragment key={item.id}>
+                                    <tr className="border-b border-gray-50 last:border-0">
+                                      {/* ステータス（最左列） */}
+                                      <td className="pl-3 py-2 pr-2 w-[4.5rem]">
+                                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${STATUS_COLOR[item.status]}`}>
+                                          {STATUS_LABEL[item.status]}
+                                        </span>
+                                      </td>
+                                      {/* 用具名 */}
+                                      <td className="py-2 text-sm font-medium text-gray-800 max-w-0">
+                                        <span className="block truncate">{equipName(item.product_code)}</span>
+                                      </td>
+                                      {/* コード */}
+                                      <td className="py-2 px-3 text-xs text-gray-400 whitespace-nowrap w-[6.5rem]">
+                                        {item.product_code}
+                                      </td>
+                                      {/* レンタル価格 */}
+                                      <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap w-[5.5rem]">
+                                        {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
+                                      </td>
+                                      {/* アクションボタン */}
+                                      <td className="py-2 pr-3 whitespace-nowrap">
+                                        {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
+                                          <div className="flex gap-1.5">
+                                            {NEXT_STATUSES[item.status].map((next) => (
+                                              <button
+                                                key={next}
+                                                disabled={updatingId === item.id}
+                                                onClick={() => handleStatusClick(item, next)}
+                                                className={`text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
+                                                  next === "cancelled" || next === "terminated"
+                                                    ? "border-red-200 text-red-500 hover:bg-red-50"
+                                                    : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                                                }`}
+                                              >
+                                                {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : `→ ${STATUS_LABEL[next]}`}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </td>
+                                    </tr>
+                                    {/* 開始・終了日（あれば次行に表示） */}
+                                    {(item.rental_start_date || item.rental_end_date) && (
+                                      <tr className="border-b border-gray-50 last:border-0">
+                                        <td colSpan={5} className="px-3 pb-1.5 text-xs text-gray-400">
+                                          {item.rental_start_date && <span className="mr-4">開始: {item.rental_start_date}</span>}
+                                          {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
+                                        </td>
+                                      </tr>
                                     )}
-                                  </div>
-                                  {/* 開始・終了日 */}
-                                  {(item.rental_start_date || item.rental_end_date) && (
-                                    <div className="px-3 pb-1.5 flex gap-4 text-xs text-gray-400">
-                                      {item.rental_start_date && <span>開始: {item.rental_start_date}</span>}
-                                      {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
-                                    </div>
-                                  )}
-                                  {/* 日付入力（レンタル開始・解約時） */}
-                                  {dateInput?.item.id === item.id && (
-                                    <div className="mx-3 mb-2 bg-emerald-50 rounded-xl p-3 space-y-2">
-                                      <p className="text-xs font-medium text-emerald-700">
-                                        {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
-                                      </p>
-                                      <input
-                                        type="date"
-                                        value={dateInput.date}
-                                        onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                                        className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
-                                      />
-                                      <div className="flex gap-2">
-                                        <button
-                                          disabled={!dateInput.date || updatingId === item.id}
-                                          onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
-                                          className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
-                                        >
-                                          {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
-                                        </button>
-                                        <button
-                                          onClick={() => setDateInput(null)}
-                                          className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg"
-                                        >
-                                          戻す
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
+                                    {/* 日付入力（レンタル開始・解約時） */}
+                                    {dateInput?.item.id === item.id && (
+                                      <tr>
+                                        <td colSpan={5} className="px-3 pb-2">
+                                          <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
+                                            <p className="text-xs font-medium text-emerald-700">
+                                              {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
+                                            </p>
+                                            <input
+                                              type="date"
+                                              value={dateInput.date}
+                                              onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                                              className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                            />
+                                            <div className="flex gap-2">
+                                              <button
+                                                disabled={!dateInput.date || updatingId === item.id}
+                                                onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
+                                                className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
+                                              >
+                                                {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
+                                              </button>
+                                              <button
+                                                onClick={() => setDateInput(null)}
+                                                className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg"
+                                              >
+                                                戻す
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </li>
