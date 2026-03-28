@@ -424,7 +424,7 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                                 : "発注メールを送信・印刷"}
                             </button>
                             {/* アイテム一覧（table で縦列を完全に揃える） */}
-                            <table className="w-full bg-white rounded-xl overflow-hidden text-left">
+                            <table className="w-full table-fixed bg-white rounded-xl overflow-hidden text-left">
                               <tbody>
                                 {order.items.map((item) => (
                                   <Fragment key={item.id}>
