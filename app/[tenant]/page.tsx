@@ -698,8 +698,8 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
               {equipment.length === 0 ? "用具データがありません。CSVからインポートしてください。" : "該当なし"}
             </p>
           ) : (
-            <table className="w-full table-fixed bg-white divide-y divide-dashed divide-gray-200 text-left">
-              <tbody>
+            <table className="w-full table-fixed bg-white text-left">
+              <tbody className="divide-y divide-dashed divide-gray-200">
                 {filtered.map((item) => (
                   <tr key={item.id} className="hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => setSelectedItem(item)}>
                     {/* 用具名 */}
