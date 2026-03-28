@@ -698,48 +698,43 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
               {equipment.length === 0 ? "用具データがありません。CSVからインポートしてください。" : "該当なし"}
             </p>
           ) : (
-            <ul className="divide-y divide-gray-100 bg-white">
-              {filtered.map((item) => (
-                <li key={item.id}>
-                  <button
-                    onClick={() => setSelectedItem(item)}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">
-                        {item.name}
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <span className="text-xs text-gray-400">
-                          {item.product_code}
+            <table className="w-full table-fixed bg-white divide-y divide-dashed divide-gray-200 text-left">
+              <tbody>
+                {filtered.map((item) => (
+                  <tr key={item.id} className="hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => setSelectedItem(item)}>
+                    {/* 用具名 */}
+                    <td className="pl-4 py-2.5 text-sm font-medium text-gray-800 max-w-0">
+                      <span className="block truncate">{item.name}</span>
+                    </td>
+                    {/* コード */}
+                    <td className="py-2.5 px-3 text-xs text-gray-400 whitespace-nowrap w-[6.5rem]">
+                      {item.product_code}
+                    </td>
+                    {/* TAISコード */}
+                    <td className="py-2.5 pr-3 text-xs text-gray-400 whitespace-nowrap w-[10rem]">
+                      {item.tais_code ? `TAIS: ${item.tais_code}` : ""}
+                    </td>
+                    {/* カテゴリ */}
+                    <td className="py-2.5 pr-3 whitespace-nowrap w-[7rem]">
+                      {item.category && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${catColor(item.category)}`}>
+                          {item.category}
                         </span>
-                        {item.tais_code && (
-                          <span className="text-xs text-gray-400">
-                            TAIS: {item.tais_code}
-                          </span>
-                        )}
-                        {item.category && (
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${catColor(item.category)}`}
-                          >
-                            {item.category}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      {item.rental_price && (
-                        <p className="text-sm font-semibold text-emerald-600">
-                          ¥{item.rental_price.toLocaleString()}
-                        </p>
                       )}
-                      <p className="text-xs text-gray-400">/月</p>
-                    </div>
-                    <ChevronRight size={16} className="text-gray-300 shrink-0" />
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    </td>
+                    {/* レンタル価格 */}
+                    <td className="py-2.5 pr-2 text-sm font-semibold text-emerald-600 whitespace-nowrap w-[5.5rem] text-right">
+                      {item.rental_price ? `¥${item.rental_price.toLocaleString()}` : ""}
+                      <span className="text-xs font-normal text-gray-400">{item.rental_price ? "/月" : ""}</span>
+                    </td>
+                    {/* 矢印 */}
+                    <td className="py-2.5 pr-3 w-6">
+                      <ChevronRight size={16} className="text-gray-300" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}
