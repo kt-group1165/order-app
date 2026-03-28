@@ -179,7 +179,7 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<OrderItem["status"] | "all">("all");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
@@ -208,6 +208,7 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
         }))
       );
       setOrders(withItems);
+      setExpandedIds(new Set(withItems.map((o) => o.id)));
       setClients(clientsData);
       setEquipment(equipData);
       setSuppliers(suppliersData);
@@ -379,31 +380,29 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                 {/* その利用者の発注一覧 */}
                 <ul className="divide-y divide-gray-100">
                   {group.orders.map((order) => {
-                    const isOpen = expandedId === order.id;
+                    const isOpen = expandedIds.has(order.id);
                     const activeItems = order.items.filter((i) => i.status !== "cancelled");
+                    const toggleExpand = () => setExpandedIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(order.id)) next.delete(order.id);
+                      else next.add(order.id);
+                      return next;
+                    });
                     return (
                       <li key={order.id} className="bg-white">
+                        {/* 発注ヘッダー行（クリックで折りたたみ） */}
                         <button
-                          onClick={() => setExpandedId(isOpen ? null : order.id)}
+                          onClick={toggleExpand}
                           className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-gray-50 transition-colors"
                         >
-                          <div className="flex-1 text-left">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-500">
-                                {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
-                              </span>
-                              <span className="text-xs text-gray-400">{activeItems.length}点</span>
-                              {order.notes && (
-                                <span className="text-xs text-gray-400 truncate max-w-[100px]">{order.notes}</span>
-                              )}
-                            </div>
-                            <div className="flex gap-1 overflow-x-auto mt-1">
-                              {Array.from(new Set(activeItems.map((i) => i.status))).map((s) => (
-                                <span key={s} className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${STATUS_COLOR[s]}`}>
-                                  {STATUS_LABEL[s]}
-                                </span>
-                              ))}
-                            </div>
+                          <div className="flex-1 text-left flex items-center gap-2">
+                            <span className="text-xs text-gray-500">
+                              {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
+                            </span>
+                            <span className="text-xs text-gray-400">{activeItems.length}点</span>
+                            {order.notes && (
+                              <span className="text-xs text-gray-400 truncate max-w-[100px]">{order.notes}</span>
+                            )}
                           </div>
                           {isOpen ? (
                             <ChevronDown size={16} className="text-gray-400 shrink-0" />
@@ -413,99 +412,94 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
                         </button>
 
                         {isOpen && (
-                          <div className="bg-gray-50 px-4 pb-3 space-y-2">
+                          <div className="px-3 pb-3 bg-gray-50">
                             {/* メール送信ボタン */}
                             <button
                               onClick={() => setPreviewOrder({ order, items: order.items })}
-                              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-emerald-200 text-emerald-600 text-xs font-medium hover:bg-emerald-50 transition-colors"
+                              className="w-full flex items-center justify-center gap-2 py-2 mb-2 rounded-xl border border-emerald-200 text-emerald-600 text-xs font-medium hover:bg-emerald-50 transition-colors"
                             >
                               <Mail size={14} />
                               {(order.email_sent_count ?? 0) > 0
                                 ? `メール再送（${order.email_sent_count}回送信済）`
                                 : "発注メールを送信・印刷"}
                             </button>
-                      {order.items.map((item) => (
-                        <div
-                          key={item.id}
-                          className="bg-white rounded-xl p-3 shadow-sm"
-                        >
-                          <div className="flex items-center gap-2 overflow-x-auto">
-                            <span className="text-sm font-medium text-gray-800 shrink-0">
-                              {equipName(item.product_code)}
-                            </span>
-                            <span className="text-xs text-gray-400 shrink-0">{item.product_code}</span>
-                            {item.rental_price && (
-                              <span className="text-xs text-gray-400 shrink-0">¥{item.rental_price.toLocaleString()}/月</span>
-                            )}
-                            {item.rental_start_date && (
-                              <span className="text-xs text-gray-400 shrink-0">開始:{item.rental_start_date}</span>
-                            )}
-                            {item.rental_end_date && (
-                              <span className="text-xs text-gray-400 shrink-0">終了:{item.rental_end_date}</span>
-                            )}
-                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_COLOR[item.status]}`}>
-                              {STATUS_LABEL[item.status]}
-                            </span>
-                          </div>
-
-                          {/* 日付入力（レンタル中・解約済への変更時） */}
-                          {dateInput?.item.id === item.id && (
-                            <div className="mt-2 bg-emerald-50 rounded-xl p-3 space-y-2">
-                              <p className="text-xs font-medium text-emerald-700">
-                                {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
-                              </p>
-                              <input
-                                type="date"
-                                value={dateInput.date}
-                                onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                                className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  disabled={!dateInput.date || updatingId === item.id}
-                                  onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
-                                  className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
-                                >
-                                  {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
-                                </button>
-                                <button
-                                  onClick={() => setDateInput(null)}
-                                  className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg"
-                                >
-                                  戻す
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Next status buttons */}
-                          {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
-                            <div className="flex gap-2 mt-2 overflow-x-auto">
-                              {NEXT_STATUSES[item.status].map((next) => (
-                                <button
-                                  key={next}
-                                  disabled={updatingId === item.id}
-                                  onClick={() => handleStatusClick(item, next)}
-                                  className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
-                                    next === "cancelled" || next === "terminated"
-                                      ? "border-red-200 text-red-500 hover:bg-red-50"
-                                      : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                                  }`}
-                                >
-                                  {updatingId === item.id ? (
-                                    <Loader2 size={12} className="animate-spin" />
-                                  ) : (
-                                    `→ ${STATUS_LABEL[next]}`
+                            {/* アイテム一覧（縦列揃え） */}
+                            <div className="bg-white rounded-xl overflow-hidden">
+                              {order.items.map((item) => (
+                                <div key={item.id} className="border-b border-gray-50 last:border-0">
+                                  {/* メイン行：1行で全情報 + ボタン */}
+                                  <div className="flex items-center gap-2 px-3 py-2 overflow-x-auto">
+                                    <span className="w-0 flex-1 min-w-[6rem] text-sm font-medium text-gray-800 truncate">
+                                      {equipName(item.product_code)}
+                                    </span>
+                                    <span className="w-24 shrink-0 text-xs text-gray-400">{item.product_code}</span>
+                                    <span className="w-20 shrink-0 text-xs text-gray-400">
+                                      {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
+                                    </span>
+                                    <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[item.status]}`}>
+                                      {STATUS_LABEL[item.status]}
+                                    </span>
+                                    {NEXT_STATUSES[item.status].length > 0 && dateInput?.item.id !== item.id && (
+                                      <div className="flex gap-1.5 shrink-0">
+                                        {NEXT_STATUSES[item.status].map((next) => (
+                                          <button
+                                            key={next}
+                                            disabled={updatingId === item.id}
+                                            onClick={() => handleStatusClick(item, next)}
+                                            className={`shrink-0 text-xs px-3 py-1 rounded-full border font-medium transition-colors disabled:opacity-50 ${
+                                              next === "cancelled" || next === "terminated"
+                                                ? "border-red-200 text-red-500 hover:bg-red-50"
+                                                : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                                            }`}
+                                          >
+                                            {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : `→ ${STATUS_LABEL[next]}`}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  {/* 開始・終了日 */}
+                                  {(item.rental_start_date || item.rental_end_date) && (
+                                    <div className="px-3 pb-1.5 flex gap-4 text-xs text-gray-400">
+                                      {item.rental_start_date && <span>開始: {item.rental_start_date}</span>}
+                                      {item.rental_end_date && <span>終了: {item.rental_end_date}</span>}
+                                    </div>
                                   )}
-                                </button>
+                                  {/* 日付入力（レンタル開始・解約時） */}
+                                  {dateInput?.item.id === item.id && (
+                                    <div className="mx-3 mb-2 bg-emerald-50 rounded-xl p-3 space-y-2">
+                                      <p className="text-xs font-medium text-emerald-700">
+                                        {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
+                                      </p>
+                                      <input
+                                        type="date"
+                                        value={dateInput.date}
+                                        onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                                        className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          disabled={!dateInput.date || updatingId === item.id}
+                                          onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
+                                          className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
+                                        >
+                                          {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
+                                        </button>
+                                        <button
+                                          onClick={() => setDateInput(null)}
+                                          className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg"
+                                        >
+                                          戻す
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               ))}
                             </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </li>
+                          </div>
+                        )}
+                      </li>
               );
             })}
           </ul>
