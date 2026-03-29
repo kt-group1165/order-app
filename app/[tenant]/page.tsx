@@ -1796,6 +1796,8 @@ function ClientDetail({
   })();
 
   const activeItems = clientItems.filter((i) => i.status === "rental_started");
+  const orderedItems = clientItems.filter((i) => i.status === "ordered");
+  const deliveredItems = clientItems.filter((i) => ["delivered", "trial"].includes(i.status));
   const pendingItems = clientItems.filter((i) =>
     ["ordered", "delivered", "trial"].includes(i.status)
   );
@@ -1958,10 +1960,16 @@ function ClientDetail({
             </div>
           </div>
 
-          {pendingItems.length > 0 && (
+          {orderedItems.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-gray-500 mb-2">進行中</h3>
-              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{pendingItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">発注済み</h3>
+              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{orderedItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
+            </section>
+          )}
+          {deliveredItems.length > 0 && (
+            <section>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">納品済み</h3>
+              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{deliveredItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
             </section>
           )}
           {activeItems.length > 0 && (
