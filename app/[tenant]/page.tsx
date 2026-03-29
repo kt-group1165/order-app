@@ -2053,8 +2053,9 @@ type NewOrderItem = {
   equipment: Equipment;
   rental_price: string;
   notes: string;
-  payment_type: "介護" | "自費" | null; // null = 発注全体に従う
-  supplier_id: string | null; // null = 発注全体に従う
+  payment_type: "介護" | "自費" | null;
+  supplier_id: string | null;
+  quantity: number;
 };
 
 // ─── PostSaveModal ────────────────────────────────────────────────────────────
@@ -2174,7 +2175,7 @@ function NewOrderModal({
   const [showEquipModal, setShowEquipModal] = useState(false);
   const [equipModalSearch, setEquipModalSearch] = useState("");
   const [equipModalCategory, setEquipModalCategory] = useState<string | null>(null);
-  const [equipModalSelected, setEquipModalSelected] = useState<Equipment[]>([]);
+  const [equipModalSelected, setEquipModalSelected] = useState<{ equipment: Equipment; quantity: number }[]>([]);
 
   // 新規フィールド
   const [paymentType, setPaymentType] = useState<"介護" | "自費">("介護");
@@ -2232,6 +2233,7 @@ function NewOrderModal({
         notes: "",
         payment_type: null,
         supplier_id: supplierId || null,
+        quantity: 1,
       },
     ]);
   };
@@ -2240,6 +2242,10 @@ function NewOrderModal({
 
   const updateItem = (idx: number, field: "rental_price" | "notes" | "supplier_id", value: string | null) => {
     setItems(items.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
+  };
+
+  const updateQuantity = (idx: number, delta: number) => {
+    setItems(items.map((item, i) => i === idx ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item));
   };
 
   const toggleItemPaymentType = (idx: number) => {
@@ -2293,6 +2299,7 @@ function NewOrderModal({
           rentalPrice: item.rental_price ? parseFloat(item.rental_price) : undefined,
           notes: item.notes || undefined,
           paymentType: item.payment_type,
+          quantity: item.quantity,
         });
         createdItems.push(oi);
       }
@@ -2555,6 +2562,7 @@ function NewOrderModal({
                   <thead className="bg-gray-50 border-b border-gray-100">
                     <tr>
                       <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
+                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">個数</th>
                       <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[6.5rem]">卸会社</th>
                       <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5.5rem]">価格(円/月)</th>
                       <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">備考</th>
@@ -2571,6 +2579,13 @@ function NewOrderModal({
                           <td className="pl-3 py-2 max-w-0">
                             <p className="text-xs font-semibold text-gray-800 truncate">{item.equipment.name}</p>
                             <p className="text-[10px] text-gray-400">{item.equipment.product_code}</p>
+                          </td>
+                          <td className="py-2 px-1 w-[5rem]">
+                            <div className="flex items-center gap-0.5">
+                              <button onClick={() => updateQuantity(idx, -1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">−</button>
+                              <span className="w-5 text-center text-xs font-semibold text-gray-800">{item.quantity}</span>
+                              <button onClick={() => updateQuantity(idx, 1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">＋</button>
+                            </div>
                           </td>
                           <td className="py-2 px-1 w-[6.5rem]">
                             <select
@@ -2720,17 +2735,17 @@ function NewOrderModal({
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {filteredEquipModal.slice(0, 2000).map((eq) => {
-                      const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
+                      const sel = equipModalSelected.find((s) => s.equipment.product_code === eq.product_code);
                       const isFav = favorites.has(eq.product_code);
                       return (
                         <tr
                           key={eq.product_code}
                           onClick={() => setEquipModalSelected((prev) =>
-                            selected ? prev.filter((s) => s.product_code !== eq.product_code) : [...prev, eq]
+                            sel ? prev.filter((s) => s.equipment.product_code !== eq.product_code) : [...prev, { equipment: eq, quantity: 1 }]
                           )}
-                          className={`cursor-pointer transition-colors ${selected ? "bg-emerald-50" : isFav ? "bg-amber-50/40" : "hover:bg-gray-50"}`}
+                          className={`cursor-pointer transition-colors ${sel ? "bg-emerald-50" : isFav ? "bg-amber-50/40" : "hover:bg-gray-50"}`}
                         >
-                          <td className="w-8 pl-2 py-2.5 text-center">
+                          <td className="w-8 pl-2 py-2 text-center">
                             <button
                               onClick={(e) => toggleFavorite(eq.product_code, e)}
                               className={`text-lg leading-none transition-colors ${isFav ? "text-amber-400" : "text-gray-200 hover:text-amber-300"}`}
@@ -2738,22 +2753,45 @@ function NewOrderModal({
                               ★
                             </button>
                           </td>
-                          <td className="pl-1 py-2.5 w-[5rem]">
+                          <td className="pl-1 py-2 w-[5rem]">
                             {eq.category && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
                                 {eq.category}
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 px-2 max-w-0">
-                            <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
+                          <td className="py-2 px-2 max-w-0">
+                            <p className={`text-sm font-medium truncate ${sel ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
                           </td>
-                          <td className="py-2.5 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
-                          <td className="py-2.5 pr-3 text-sm font-semibold text-emerald-600 w-[5.5rem] text-right whitespace-nowrap">
+                          <td className="py-2 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
+                          <td className="py-2 pr-2 text-sm font-semibold text-emerald-600 w-[5.5rem] text-right whitespace-nowrap">
                             {eq.rental_price ? `¥${eq.rental_price.toLocaleString()}` : ""}
                           </td>
-                          <td className="py-2.5 pr-3 w-8 text-center">
-                            {selected && <CheckCircle2 size={15} className="text-emerald-500 inline" />}
+                          {/* 個数 or チェック */}
+                          <td className="py-2 pr-2 w-[6rem] text-right" onClick={(e) => e.stopPropagation()}>
+                            {sel ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => setEquipModalSelected((prev) =>
+                                    sel.quantity <= 1
+                                      ? prev.filter((s) => s.equipment.product_code !== eq.product_code)
+                                      : prev.map((s) => s.equipment.product_code === eq.product_code ? { ...s, quantity: s.quantity - 1 } : s)
+                                  )}
+                                  className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-sm font-bold flex items-center justify-center hover:bg-emerald-200"
+                                >
+                                  −
+                                </button>
+                                <span className="w-5 text-center text-sm font-semibold text-emerald-700">{sel.quantity}</span>
+                                <button
+                                  onClick={() => setEquipModalSelected((prev) =>
+                                    prev.map((s) => s.equipment.product_code === eq.product_code ? { ...s, quantity: s.quantity + 1 } : s)
+                                  )}
+                                  className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-sm font-bold flex items-center justify-center hover:bg-emerald-200"
+                                >
+                                  ＋
+                                </button>
+                              </div>
+                            ) : null}
                           </td>
                         </tr>
                       );
@@ -2767,7 +2805,7 @@ function NewOrderModal({
             <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0">
               {equipModalSelected.length > 0 && (
                 <p className="text-xs text-emerald-600 font-medium mb-2">
-                  {equipModalSelected.length}件選択中
+                  {equipModalSelected.length}種類（計{equipModalSelected.reduce((s, x) => s + x.quantity, 0)}個）選択中
                 </p>
               )}
               <button
@@ -2776,13 +2814,14 @@ function NewOrderModal({
                   setItems((prev) => [
                     ...prev,
                     ...equipModalSelected
-                      .filter((eq) => !prev.some((it) => it.equipment.product_code === eq.product_code))
-                      .map((eq) => ({
-                        equipment: eq,
-                        rental_price: eq.rental_price != null ? String(eq.rental_price) : "",
+                      .filter((sel) => !prev.some((it) => it.equipment.product_code === sel.equipment.product_code))
+                      .map((sel) => ({
+                        equipment: sel.equipment,
+                        rental_price: sel.equipment.rental_price != null ? String(sel.equipment.rental_price) : "",
                         notes: "",
                         payment_type: null,
                         supplier_id: supplierId || null,
+                        quantity: sel.quantity,
                       })),
                   ]);
                   setShowEquipModal(false);
@@ -2790,7 +2829,9 @@ function NewOrderModal({
                 className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
               >
                 <Plus size={16} />
-                {equipModalSelected.length > 0 ? `${equipModalSelected.length}件を追加する` : "用具を選択してください"}
+                {equipModalSelected.length > 0
+                  ? `${equipModalSelected.length}種類を追加する`
+                  : "用具を選択してください"}
               </button>
             </div>
           </div>

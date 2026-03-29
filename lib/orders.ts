@@ -127,6 +127,7 @@ export async function createOrderItem(params: {
   rentalPrice?: number;
   notes?: string;
   paymentType?: "介護" | "自費" | null;
+  quantity?: number;
 }): Promise<OrderItem> {
   const { data, error } = await supabase
     .from("order_items")
@@ -140,6 +141,7 @@ export async function createOrderItem(params: {
       payment_type: params.paymentType ?? null,
       status: "ordered",
       notes: params.notes ?? null,
+      quantity: params.quantity ?? 1,
     })
     .select()
     .single();

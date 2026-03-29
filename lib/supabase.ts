@@ -106,6 +106,7 @@ export type OrderItem = {
   rental_price: number | null;
   payment_type: "介護" | "自費" | null;
   status: "ordered" | "delivered" | "trial" | "rental_started" | "cancelled" | "terminated";
+  quantity: number;
   rental_start_decided_at: string | null;
   rental_start_date: string | null;
   rental_end_date: string | null;
