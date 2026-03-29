@@ -2474,7 +2474,7 @@ function NewOrderModal({
 
             {/* 立ち会い（直納のみ） */}
             {deliveryType === "直納" && (
-              <div className="flex gap-3 items-end">
+              <div className="flex flex-wrap gap-3 items-center">
                 <div className="shrink-0">
                   <label className="text-xs font-medium text-gray-600 block mb-1.5">立ち会い</label>
                   <div className="flex gap-1.5">
@@ -2493,31 +2493,31 @@ function NewOrderModal({
                     ))}
                   </div>
                 </div>
-              </div>
-            )}
-            {deliveryType === "直納" && attendanceRequired && (
-              <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1.5">立ち会い担当者</label>
-                <div className="flex flex-wrap gap-2">
-                  {members.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => toggleAttendee(m.id)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                        selectedAttendees.includes(m.id)
-                          ? "text-white border-transparent"
-                          : "bg-white text-gray-600 border-gray-200"
-                      }`}
-                      style={selectedAttendees.includes(m.id) ? { backgroundColor: m.color, borderColor: m.color } : {}}
-                    >
-                      {m.name}
-                      {selectedAttendees.includes(m.id) && <CheckCircle2 size={12} />}
-                    </button>
-                  ))}
-                  {members.length === 0 && (
-                    <p className="text-xs text-gray-400">担当者が登録されていません</p>
-                  )}
-                </div>
+                {attendanceRequired && (
+                  <div className="flex-1 min-w-0">
+                    <label className="text-xs font-medium text-gray-600 block mb-1.5">担当者</label>
+                    <div className="flex flex-wrap gap-2">
+                      {members.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => toggleAttendee(m.id)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                            selectedAttendees.includes(m.id)
+                              ? "text-white border-transparent"
+                              : "bg-white text-gray-600 border-gray-200"
+                          }`}
+                          style={selectedAttendees.includes(m.id) ? { backgroundColor: m.color, borderColor: m.color } : {}}
+                        >
+                          {m.name}
+                          {selectedAttendees.includes(m.id) && <CheckCircle2 size={12} />}
+                        </button>
+                      ))}
+                      {members.length === 0 && (
+                        <p className="text-xs text-gray-400">担当者が登録されていません</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>{/* ── 納品情報 セクション終わり ── */}
