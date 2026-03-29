@@ -309,7 +309,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.6</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.7</span>
       </header>
 
       {/* Content */}
@@ -3193,7 +3193,8 @@ function buildOrderContent(
   client: Client | undefined,
   equipment: Equipment[],
   members: Member[],
-  isResend: boolean
+  isResend: boolean,
+  suppliers?: Supplier[]
 ) {
   const clientName = client?.name ?? "（未設定）";
   const clientAddress = client?.address ?? "（未設定）";
@@ -3223,6 +3224,7 @@ function buildOrderContent(
 
   const resendMark = isResend ? "（再送）" : "";
   const subject = `【発注依頼${resendMark}】${clientName} 様`;
+  const supplierName = suppliers?.find((s) => s.id === order.supplier_id)?.name;
 
   /** 確認画面用：シンプルな内容のみ */
   const preview = [
@@ -3241,6 +3243,7 @@ function buildOrderContent(
 
   /** メール・印刷用：フォーマルな文言付き */
   const emailBody = [
+    ...(supplierName ? [`${supplierName}ご担当者様`, ""] : []),
     `【発注依頼${resendMark}】`,
     "",
     "お疲れ様です。",
@@ -3323,7 +3326,7 @@ function OrderEmailPreviewModal({
     }
     setSendingId(groupKey);
     setErrors((prev) => { const n = new Map(prev); n.delete(groupKey); return n; });
-    const { subject, emailBody } = buildOrderContent(order, items, client, equipment, members, isResend);
+    const { subject, emailBody } = buildOrderContent(order, items, client, equipment, members, isResend, suppliers);
     try {
       const res = await fetch("/api/send-order-email", {
         method: "POST",
@@ -3385,7 +3388,7 @@ function OrderEmailPreviewModal({
     if (!win) return;
     const content = groups
       ? groups.map((g) => {
-          const { subject, emailBody } = buildOrderContent(order, g.items, client, equipment, members, isResend);
+          const { subject, emailBody } = buildOrderContent(order, g.items, client, equipment, members, isResend, suppliers);
           return `${subject}\n\n${emailBody}`;
         }).join("\n\n" + "─".repeat(40) + "\n\n")
       : `${scSubject}\n\n${scEmailBody}`;
@@ -3415,7 +3418,7 @@ function OrderEmailPreviewModal({
             /* 卸会社ごとにカード表示 */
             supplierGroups.map((g) => {
               const key = g.supplierId ?? "__none__";
-              const { subject, preview } = buildOrderContent(order, g.items, client, equipment, members, isResend);
+              const { subject, preview } = buildOrderContent(order, g.items, client, equipment, members, isResend, suppliers);
               const isSent = sentSet.has(key);
               const isSending = sendingId === key;
               const err = errors.get(key);
