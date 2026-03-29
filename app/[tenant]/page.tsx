@@ -311,7 +311,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.9</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.0</span>
       </header>
 
       {/* Content */}
@@ -4112,10 +4112,10 @@ function CarePlanModal({
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>個別援助計画書</title><style>
-      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0}
-      @page{size:A4 portrait;margin:10mm 12mm}
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:8.5pt;margin:0;padding:0}
+      @page{size:A4 landscape;margin:8mm 10mm}
       table{border-collapse:collapse;width:100%}
-      td,th{border:1px solid #555;padding:2px 5px;vertical-align:middle}
+      td,th{border:1px solid #555;padding:2px 4px;vertical-align:middle}
     </style></head><body>${el.innerHTML}</body></html>`);
     w.document.close();
     w.focus();
@@ -4171,34 +4171,32 @@ function CarePlanModal({
               {selectableItems.length === 0 ? (
                 <p className="text-sm text-gray-400">対象となる用具がありません</p>
               ) : (
-                <div className="space-y-2">
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
                   {selectableItems.map((item) => {
                     const eq = getEq(item.product_code);
                     const checked = selectedIds.has(item.id);
                     return (
-                      <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-3 space-y-2">
-                        <label className="flex items-start gap-2 cursor-pointer">
-                          <input type="checkbox" checked={checked} onChange={(e) => {
-                            const n = new Set(selectedIds);
-                            e.target.checked ? n.add(item.id) : n.delete(item.id);
-                            setSelectedIds(n);
-                          }} className="mt-0.5 accent-emerald-500" />
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-800">{eq?.name ?? item.product_code}</p>
-                            <p className="text-xs text-gray-400">{eq?.category}{item.rental_price ? ` / ¥${item.rental_price.toLocaleString()}` : ""}</p>
-                          </div>
-                          <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${STATUS_COLOR[item.status]}`}>{STATUS_LABEL[item.status]}</span>
-                        </label>
+                      <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                        <input type="checkbox" checked={checked} onChange={(e) => {
+                          const n = new Set(selectedIds);
+                          e.target.checked ? n.add(item.id) : n.delete(item.id);
+                          setSelectedIds(n);
+                        }} className="accent-emerald-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-gray-800 mr-1.5">{eq?.name ?? item.product_code}</span>
+                          <span className="text-xs text-gray-400">
+                            {eq?.category}{item.rental_price ? ` ¥${item.rental_price.toLocaleString()}` : ""}
+                            {item.rental_start_date ? ` · 開始${item.rental_start_date}` : ""}
+                          </span>
+                        </div>
                         {checked && (
-                          <div className="pl-6">
-                            <label className="text-xs text-gray-500 mr-2">変更区分：</label>
-                            <select value={changeTypes[item.id] ?? "新規納品"}
-                              onChange={(e) => setChangeTypes((p) => ({ ...p, [item.id]: e.target.value }))}
-                              className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none">
-                              {CHANGE_TYPE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-                            </select>
-                          </div>
+                          <select value={changeTypes[item.id] ?? "新規納品"}
+                            onChange={(e) => setChangeTypes((p) => ({ ...p, [item.id]: e.target.value }))}
+                            className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none shrink-0">
+                            {CHANGE_TYPE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                          </select>
                         )}
+                        <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${STATUS_COLOR[item.status]}`}>{STATUS_LABEL[item.status]}</span>
                       </div>
                     );
                   })}
@@ -4260,239 +4258,212 @@ function CarePlanModal({
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto bg-gray-100 p-4">
-            <div id="care-plan-print-content" className="bg-white p-8 max-w-[794px] mx-auto shadow"
-              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "9pt" }}>
+          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+            <div id="care-plan-print-content" className="bg-white shadow mx-auto"
+              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "12px 14px", minWidth: "1000px" }}>
 
-              {/* ===シート1: 基本情報=== */}
-              <div style={{ pageBreakAfter: "always" as const }}>
-                <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>個別援助計画書</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <td style={{ border: "none", width: "50%" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
-                      <td style={{ border: "none", textAlign: "right" as const }}>担当者：{companyInfo.staffName}　</td>
-                    </tr>
-                    <tr>
-                      <td style={{ border: "none" }}>事業所名：{companyInfo.companyName}</td>
-                      <td style={{ border: "none", textAlign: "right" as const }}>事業所番号：{companyInfo.businessNumber}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
-                      <td style={TD} colSpan={2}>{client.name}　様</td>
-                      <th style={{ ...TH, width: "60px" }}>フリガナ</th>
-                      <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>性　別</th>
-                      <td style={{ ...TD, width: "50px" }}>{gender || "　"}</td>
-                      <th style={{ ...TH, width: "70px" }}>生年月日</th>
-                      <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
-                      <th style={{ ...TH, width: "60px" }}>介護度</th>
-                      <td style={{ ...TD, width: "70px" }}>{client.care_level ?? ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>認定期間</th>
-                      <td style={TD} colSpan={3}>
-                        {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date + "T00:00:00")) : "　"}
-                      </td>
-                      <th style={TH}>給付割合</th>
-                      <td style={TD}>{client.benefit_rate ?? ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>住　所</th>
-                      <td style={TD} colSpan={5}>{client.address ?? ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>電話番号</th>
-                      <td style={TD} colSpan={2}>{client.phone ?? client.mobile ?? ""}</td>
-                      <th style={TH}>居宅支援事業所</th>
-                      <td style={TD} colSpan={2}>{client.care_manager_org ?? ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>担当CM</th>
-                      <td style={TD} colSpan={5}>{client.care_manager ?? ""}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <th style={{ ...TH, width: "70px" }}>相談内容</th>
-                      <th style={{ ...TH, width: "60px" }}>相談者</th>
-                      <td style={TD}>{consultantName}</td>
-                      <th style={{ ...TH, width: "40px" }}>続柄</th>
-                      <td style={{ ...TD, width: "70px" }}>{consultantRelation}</td>
-                      <th style={{ ...TH, width: "55px" }}>相談日</th>
-                      <td style={TD}>{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : ""}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【選定した福祉用具】</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <thead>
-                    <tr>
-                      {["No", "種目", "機種（型式）", "単位数", "選定理由", "変更区分"].map((h, i) => (
-                        <th key={h} style={{ ...TH, width: i === 0 ? "28px" : i === 3 ? "44px" : i === 5 ? "65px" : undefined }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedItems.map((item, idx) => {
-                      const eq = getEq(item.product_code);
-                      return (
-                        <tr key={item.id}>
-                          <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
-                          <td style={TD}>{eq?.category ?? ""}</td>
-                          <td style={TD}>{eq?.name ?? item.product_code}</td>
-                          <td style={{ ...TD, textAlign: "center" as const }}>{eq?.rental_price ? Math.round(eq.rental_price / 10) : ""}</td>
-                          <td style={TD}>{eq?.selection_reason ?? ""}</td>
-                          <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? "新規納品"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【ADL・身体状況】（印刷後に✓を記入してください）</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <thead>
-                    <tr>
-                      <th style={TH}>項目</th>
-                      {["自立", "見守り", "一部介助", "全介助"].map((h) => (
-                        <th key={h} style={{ ...TH, width: "60px" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {["起き上がり", "立ち上がり", "移乗", "歩行", "排泄", "入浴", "食事", "整容"].map((adl) => (
-                      <tr key={adl}>
-                        <td style={TD}>{adl}</td>
-                        <td style={{ ...TD, height: "18px" }}></td>
-                        <td style={TD}></td>
-                        <td style={TD}></td>
-                        <td style={TD}></td>
+              {/* タイトル（全幅）*/}
+              <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", marginBottom: "6px" }}>個別援助計画書</p>
+
+              {/* 2カラムレイアウト */}
+              <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+
+                {/* ===左カラム: 基本情報 + 利用目標=== */}
+                <div style={{ width: "46%", flexShrink: 0 }}>
+                  {/* 作成日・事業所 */}
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ border: "none", fontSize: "8pt" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
+                        <td style={{ border: "none", textAlign: "right" as const, fontSize: "8pt" }}>担当者：{companyInfo.staffName}</td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <th style={{ ...TH, width: "110px" }}>モニタリング対象月</th>
-                      <td style={TD}>{monitoringMonths}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【留意点】</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "8px" }}>
-                  <tbody>
-                    {selectedCategories.length === 0 ? (
-                      <tr><td style={{ ...TD, minHeight: "40px" }}></td></tr>
-                    ) : selectedCategories.map((cat) => {
-                      const tmpl = templates.find((t) => t.category === cat);
-                      return (
-                        <tr key={cat}>
-                          <th style={{ ...TH, width: "80px", verticalAlign: "top" as const }}>{cat}</th>
-                          <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.precautions ?? ""}</td>
+                      <tr>
+                        <td style={{ border: "none", fontSize: "8pt" }}>事業所名：{companyInfo.companyName}</td>
+                        <td style={{ border: "none", textAlign: "right" as const, fontSize: "8pt" }}>事業所番号：{companyInfo.businessNumber}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* 利用者情報 */}
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                    <tbody>
+                      <tr>
+                        <th style={{ ...TH, width: "68px" }}>利用者氏名</th>
+                        <td style={TD} colSpan={3}>{client.name}　様</td>
+                        <th style={{ ...TH, width: "52px" }}>フリガナ</th>
+                        <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>性　別</th>
+                        <td style={{ ...TD, width: "36px" }}>{gender || "　"}</td>
+                        <th style={{ ...TH, width: "60px" }}>生年月日</th>
+                        <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
+                        <th style={{ ...TH, width: "52px" }}>介護度</th>
+                        <td style={{ ...TD, width: "60px" }} colSpan={2}>{client.care_level ?? ""}</td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>認定期間</th>
+                        <td style={TD} colSpan={3}>
+                          {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date + "T00:00:00")) : "　"}
+                        </td>
+                        <th style={TH}>給付割合</th>
+                        <td style={TD} colSpan={2}>{client.benefit_rate ?? ""}</td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>住　所</th>
+                        <td style={TD} colSpan={6}>{client.address ?? ""}</td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>電話番号</th>
+                        <td style={TD} colSpan={3}>{client.phone ?? client.mobile ?? ""}</td>
+                        <th style={TH}>居宅支援</th>
+                        <td style={TD} colSpan={2}>{client.care_manager_org ?? ""}</td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>担当CM</th>
+                        <td style={TD} colSpan={6}>{client.care_manager ?? ""}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* 相談内容 */}
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                    <tbody>
+                      <tr>
+                        <th style={{ ...TH, width: "60px" }}>相談内容</th>
+                        <th style={{ ...TH, width: "52px" }}>相談者</th>
+                        <td style={TD}>{consultantName}</td>
+                        <th style={{ ...TH, width: "36px" }}>続柄</th>
+                        <td style={{ ...TD, width: "60px" }}>{consultantRelation}</td>
+                        <th style={{ ...TH, width: "48px" }}>相談日</th>
+                        <td style={TD}>{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : ""}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* ADL */}
+                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【ADL・身体状況】（印刷後に✓記入）</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                    <thead>
+                      <tr>
+                        <th style={TH}>項目</th>
+                        {["自立", "見守り", "一部介助", "全介助"].map((h) => (
+                          <th key={h} style={{ ...TH, width: "48px" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {["起き上がり", "立ち上がり", "移乗", "歩行", "排泄", "入浴", "食事", "整容"].map((adl) => (
+                        <tr key={adl}>
+                          <td style={TD}>{adl}</td>
+                          <td style={{ ...TD, height: "16px" }}></td>
+                          <td style={TD}></td>
+                          <td style={TD}></td>
+                          <td style={TD}></td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "8px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
-                  {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
-                </div>
-              </div>
-
-              {/* ===シート2: 利用計画=== */}
-              <div>
-                <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>個別援助計画書（利用計画）</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
-                      <td style={TD}>{client.name}　様</td>
-                      <th style={{ ...TH, width: "55px" }}>作成日</th>
-                      <td style={TD}>{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : ""}</td>
-                    </tr>
-                    <tr>
-                      <th style={TH}>事業所名</th>
-                      <td style={TD}>{companyInfo.companyName}</td>
-                      <th style={TH}>担当者</th>
-                      <td style={TD}>{companyInfo.staffName}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【選定した福祉用具一覧】</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <thead>
-                    <tr>
-                      {["No", "種目", "機種（型式）", "貸与価格", "変更区分"].map((h, i) => (
-                        <th key={h} style={{ ...TH, width: i === 0 ? "28px" : i === 3 ? "75px" : i === 4 ? "65px" : undefined }}>{h}</th>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedItems.map((item, idx) => {
-                      const eq = getEq(item.product_code);
-                      const price = item.rental_price ?? eq?.rental_price;
-                      return (
-                        <tr key={item.id}>
-                          <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
-                          <td style={TD}>{eq?.category ?? ""}</td>
-                          <td style={TD}>{eq?.name ?? item.product_code}</td>
-                          <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
-                          <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? ""}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【福祉用具利用目標】</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    {selectedCategories.length === 0 ? (
-                      <tr><td style={{ ...TD, minHeight: "40px" }}></td></tr>
-                    ) : selectedCategories.map((cat) => {
-                      const tmpl = templates.find((t) => t.category === cat);
-                      return (
-                        <tr key={cat}>
-                          <th style={{ ...TH, width: "80px", verticalAlign: "top" as const }}>{cat}</th>
-                          <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.goals ?? ""}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <p style={{ fontWeight: "bold", margin: "16px 0 4px" }}>【同意署名欄】</p>
-                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
-                  <tbody>
-                    <tr>
-                      <td style={{ ...TD, width: "40%" }}>
-                        <p style={{ marginBottom: "4px" }}>上記内容について説明を受け、同意します。</p>
-                        <p>　年　月　日</p>
-                        <p style={{ marginTop: "20px" }}>利用者氏名：</p>
-                      </td>
-                      <td style={{ ...TD, width: "30%", height: "80px" }}>
-                        <p style={{ marginBottom: "4px" }}>代理人（続柄：　　　）</p>
-                        <p style={{ marginTop: "30px" }}>署名：</p>
-                      </td>
-                      <td style={{ ...TD, width: "30%" }}>
-                        <p style={{ marginBottom: "4px" }}>福祉用具専門相談員</p>
-                        <p style={{ marginTop: "30px" }}>署名：</p>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-                <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "8px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
-                  {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                    </tbody>
+                  </table>
+                  {/* モニタリング */}
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                    <tbody>
+                      <tr>
+                        <th style={{ ...TH, width: "100px" }}>モニタリング対象月</th>
+                        <td style={TD}>{monitoringMonths}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* 利用目標 */}
+                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%" }}>
+                    <tbody>
+                      {selectedCategories.length === 0 ? (
+                        <tr><td style={{ ...TD, height: "30px" }}></td></tr>
+                      ) : selectedCategories.map((cat) => {
+                        const tmpl = templates.find((t) => t.category === cat);
+                        return (
+                          <tr key={cat}>
+                            <th style={{ ...TH, width: "68px", verticalAlign: "top" as const }}>{cat}</th>
+                            <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.goals ?? ""}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
 
+                {/* ===右カラム: 用具テーブル + 留意点 + 署名欄=== */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* 選定した福祉用具（統合）*/}
+                  <p style={{ fontWeight: "bold", margin: "0 0 3px", fontSize: "8pt" }}>【選定した福祉用具】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
+                    <thead>
+                      <tr>
+                        {["No", "種目", "機種（型式）", "単位数", "選定理由", "変更区分", "貸与価格"].map((h, i) => (
+                          <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 3 ? "38px" : i === 5 ? "56px" : i === 6 ? "62px" : undefined }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedItems.map((item, idx) => {
+                        const eq = getEq(item.product_code);
+                        const price = item.rental_price ?? eq?.rental_price;
+                        return (
+                          <tr key={item.id}>
+                            <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
+                            <td style={TD}>{eq?.category ?? ""}</td>
+                            <td style={TD}>{eq?.name ?? item.product_code}</td>
+                            <td style={{ ...TD, textAlign: "center" as const }}>{eq?.rental_price ? Math.round(eq.rental_price / 10) : ""}</td>
+                            <td style={TD}>{eq?.selection_reason ?? ""}</td>
+                            <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? "新規納品"}</td>
+                            <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {/* 留意点 */}
+                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【留意点】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
+                    <tbody>
+                      {selectedCategories.length === 0 ? (
+                        <tr><td style={{ ...TD, height: "30px" }}></td></tr>
+                      ) : selectedCategories.map((cat) => {
+                        const tmpl = templates.find((t) => t.category === cat);
+                        return (
+                          <tr key={cat}>
+                            <th style={{ ...TH, width: "68px", verticalAlign: "top" as const }}>{cat}</th>
+                            <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.precautions ?? ""}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {/* 同意署名欄 */}
+                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【同意署名欄】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ ...TD, width: "38%" }}>
+                          <p style={{ margin: "0 0 3px" }}>上記内容について説明を受け、同意します。</p>
+                          <p style={{ margin: 0 }}>　年　月　日</p>
+                          <p style={{ margin: "16px 0 0" }}>利用者氏名：</p>
+                        </td>
+                        <td style={{ ...TD, width: "31%", height: "70px" }}>
+                          <p style={{ margin: "0 0 3px" }}>代理人（続柄：　　　）</p>
+                          <p style={{ margin: "26px 0 0" }}>署名：</p>
+                        </td>
+                        <td style={{ ...TD, width: "31%" }}>
+                          <p style={{ margin: "0 0 3px" }}>福祉用具専門相談員</p>
+                          <p style={{ margin: "26px 0 0" }}>署名：</p>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* 法人情報 */}
+                  <div style={{ textAlign: "right" as const, fontSize: "7.5pt", marginTop: "5px", borderTop: "1px solid #ccc", paddingTop: "4px" }}>
+                    {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
         )}
@@ -4598,23 +4569,23 @@ function ProposalModal({
               {selectableItems.length === 0 ? (
                 <p className="text-sm text-gray-400">対象となる用具がありません</p>
               ) : (
-                <div className="space-y-2">
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
                   {selectableItems.map((item) => {
                     const eq = getEq(item.product_code);
                     const checked = selectedIds.has(item.id);
                     return (
-                      <label key={item.id} className="flex items-start gap-2 bg-white rounded-xl border border-gray-100 p-3 cursor-pointer">
+                      <label key={item.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer">
                         <input type="checkbox" checked={checked} onChange={(e) => {
                           const n = new Set(selectedIds);
                           e.target.checked ? n.add(item.id) : n.delete(item.id);
                           setSelectedIds(n);
-                        }} className="mt-0.5 accent-blue-500" />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-gray-800">{eq?.name ?? item.product_code}</p>
-                          <p className="text-xs text-gray-400">
-                            {eq?.category}{item.rental_price ? ` / ¥${item.rental_price.toLocaleString()}` : ""}
-                            {(eq?.comparison_product_codes?.length ?? 0) > 0 ? ` / 比較商品 ${eq!.comparison_product_codes.length}件` : ""}
-                          </p>
+                        }} className="accent-blue-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-gray-800 mr-1.5">{eq?.name ?? item.product_code}</span>
+                          <span className="text-xs text-gray-400">
+                            {eq?.category}{item.rental_price ? ` ¥${item.rental_price.toLocaleString()}` : ""}
+                            {(eq?.comparison_product_codes?.length ?? 0) > 0 ? ` 比較${eq!.comparison_product_codes.length}件` : ""}
+                          </span>
                         </div>
                         <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${STATUS_COLOR[item.status]}`}>{STATUS_LABEL[item.status]}</span>
                       </label>
@@ -4684,8 +4655,8 @@ function ProposalModal({
               <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
                 <thead>
                   <tr>
-                    {["No", "種目名", "商品名", "提案する理由", "採　否", "貸与価格"].map((h, i) => (
-                      <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 1 ? "80px" : i === 4 ? "48px" : i === 5 ? "70px" : undefined }}>{h}</th>
+                    {["No", "種目名・貸与価格", "商品名", "提案する理由", "採　否"].map((h, i) => (
+                      <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 1 ? "90px" : i === 4 ? "48px" : undefined }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -4699,11 +4670,13 @@ function ProposalModal({
                       <Fragment key={item.id}>
                         <tr>
                           <td style={{ ...TD, textAlign: "center" as const }} rowSpan={rowspan}>{idx + 1}</td>
-                          <td style={TD} rowSpan={rowspan}>{eq?.category ?? ""}</td>
+                          <td style={{ ...TD, verticalAlign: "top" as const }} rowSpan={rowspan}>
+                            <p style={{ margin: 0 }}>{eq?.category ?? ""}</p>
+                            {price && <p style={{ margin: "2px 0 0", fontSize: "7.5pt", color: "#555" }}>¥{price.toLocaleString()}/月</p>}
+                          </td>
                           <td style={{ ...TD, fontWeight: "bold" }}>◎ {eq?.name ?? item.product_code}</td>
                           <td style={TD}>{eq?.proposal_reason ?? eq?.selection_reason ?? ""}</td>
                           <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
-                          <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
                         </tr>
                         {compCodes.map((compCode) => {
                           const compEq = equipment.find((e) => e.product_code === compCode);
@@ -4713,7 +4686,6 @@ function ProposalModal({
                               <td style={TD}>{compEq.name}</td>
                               <td style={TD}>{compEq.selection_reason ?? ""}</td>
                               <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
-                              <td style={{ ...TD, textAlign: "right" as const }}>{compEq.rental_price ? `¥${compEq.rental_price.toLocaleString()}` : ""}</td>
                             </tr>
                           );
                         })}
