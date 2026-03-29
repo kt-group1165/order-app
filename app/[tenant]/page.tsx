@@ -772,23 +772,23 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                                             <p className="text-xs font-medium text-emerald-700">
                                               {dateInput.nextStatus === "delivered" ? "納品日（任意）" : dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
                                             </p>
-                                            <input
-                                              type="date"
-                                              value={dateInput.date}
-                                              onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                                              className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
-                                            />
-                                            <div className="flex gap-2">
+                                            <div className="flex gap-2 items-center">
+                                              <input
+                                                type="date"
+                                                value={dateInput.date}
+                                                onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                                                className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                              />
                                               <button
                                                 disabled={dateInput.nextStatus !== "delivered" && !dateInput.date}
                                                 onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date || undefined)}
-                                                className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
+                                                className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
                                               >
                                                 確定
                                               </button>
                                               <button
                                                 onClick={() => setDateInput(null)}
-                                                className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg"
+                                                className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg"
                                               >
                                                 戻す
                                               </button>
@@ -1869,21 +1869,21 @@ function ClientDetail({
               <p className="text-xs font-medium text-emerald-700">
                 {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
               </p>
-              <input
-                type="date"
-                value={dateInput.date}
-                onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                className="w-full border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
-              />
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <input
+                  type="date"
+                  value={dateInput.date}
+                  onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                  className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                />
                 <button
                   disabled={!dateInput.date || updatingId === item.id}
                   onClick={() => execStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
-                  className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
+                  className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
                 >
                   {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
                 </button>
-                <button onClick={() => setDateInput(null)} className="px-3 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
+                <button onClick={() => setDateInput(null)} className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
               </div>
             </div>
           </td>
