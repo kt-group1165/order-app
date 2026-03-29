@@ -40,6 +40,7 @@ export type Equipment = {
   comparison_product_codes: string[];
   created_at: string;
   updated_at: string;
+  sort_order: number | null;
 };
 
 // 卸会社

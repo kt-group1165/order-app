@@ -9,7 +9,8 @@ export async function getEquipment(tenantId: string): Promise<Equipment[]> {
       .from("equipment_master")
       .select("*")
       .eq("tenant_id", tenantId)
-      .order("name", { ascending: true })
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
@@ -71,6 +72,15 @@ export async function createEquipmentItem(
     : 0;
   const productCode = `EQ-${String(maxNum + 1).padStart(6, "0")}`;
 
+  // 新規登録時は最大sort_orderの次の値を設定
+  const { data: maxSortData } = await supabase
+    .from("equipment_master")
+    .select("sort_order")
+    .eq("tenant_id", tenantId)
+    .order("sort_order", { ascending: false, nullsFirst: false })
+    .limit(1);
+  const newSortOrder = ((maxSortData?.[0]?.sort_order ?? 0) as number) + 10;
+
   const { data, error } = await supabase
     .from("equipment_master")
     .insert({
@@ -84,6 +94,7 @@ export async function createEquipmentItem(
       price_limit: input.price_limit ?? null,
       selection_reason: input.selection_reason ?? null,
       proposal_reason: input.proposal_reason ?? null,
+      sort_order: newSortOrder,
     })
     .select()
     .single();
@@ -194,6 +205,16 @@ export async function importEquipment(
     : 0;
   let nextCodeNum = maxNum + 1;
 
+  // 現在の最大sort_orderを取得（新規行には sort_order を連番で振る）
+  const { data: maxSortData } = await supabase
+    .from("equipment_master")
+    .select("sort_order")
+    .eq("tenant_id", tenantId)
+    .order("sort_order", { ascending: false, nullsFirst: false })
+    .limit(1);
+  const baseSortOrder = (maxSortData?.[0]?.sort_order ?? 0) as number;
+  let nextSortOrder = baseSortOrder + 10;
+
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row.name?.trim()) {
@@ -277,10 +298,12 @@ export async function importEquipment(
             price_limit: row.price_limit ?? null,
             selection_reason: row.selection_reason ?? null,
             comparison_product_codes: [],
+            sort_order: nextSortOrder,
           });
           if (!error) {
             result.inserted++;
             inserted = true;
+            nextSortOrder += 10;
           } else if (error.code === "23505" || error.message?.includes("duplicate key")) {
             // 重複コード → nextCodeNum を進めてリトライ
             nextCodeNum++;
@@ -352,6 +375,19 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
     });
   }
   return rows;
+}
+
+/** sort_order を一括更新（並び替え保存用） */
+export async function updateEquipmentSortOrders(
+  updates: Array<{ id: string; sort_order: number }>
+): Promise<void> {
+  for (const u of updates) {
+    const { error } = await supabase
+      .from("equipment_master")
+      .update({ sort_order: u.sort_order })
+      .eq("id", u.id);
+    if (error) throw error;
+  }
 }
 
 function parseCsvLine(line: string): string[] {
