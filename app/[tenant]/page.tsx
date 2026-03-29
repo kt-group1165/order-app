@@ -2190,10 +2190,29 @@ function NewOrderModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const FAVORITES_KEY = `equip_favorites_${tenantId}`;
+  const [favorites, setFavorites] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? "[]")); } catch { return new Set(); }
+  });
+  const toggleFavorite = (code: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      next.has(code) ? next.delete(code) : next.add(code);
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
   const equipCategories = Array.from(new Set(equipment.map((e) => e.category).filter(Boolean))) as string[];
-  const filteredEquipModal = equipment.filter((e) =>
-    matchEquipment(e, equipModalSearch) && (equipModalCategory === null || e.category === equipModalCategory)
-  );
+  const filteredEquipModal = (() => {
+    const base = equipment.filter((e) =>
+      matchEquipment(e, equipModalSearch) && (equipModalCategory === null || e.category === equipModalCategory)
+    );
+    const favs = base.filter((e) => favorites.has(e.product_code));
+    const rest = base.filter((e) => !favorites.has(e.product_code));
+    return [...favs, ...rest];
+  })();
 
   // 戻るボタンでモーダルを閉じる
   useEffect(() => {
@@ -2631,7 +2650,7 @@ function NewOrderModal({
       {/* ── 用具選択モーダル ── */}
       {showEquipModal && (
         <div className="fixed inset-0 bg-black/60 flex items-end z-[60]">
-          <div className="bg-white w-full rounded-t-2xl max-h-[80vh] flex flex-col">
+          <div className="bg-white w-full rounded-t-2xl h-screen flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
               <h3 className="font-semibold text-gray-800">用具を選択</h3>
               <button onClick={() => setShowEquipModal(false)}><X size={20} className="text-gray-400" /></button>
@@ -2691,7 +2710,8 @@ function NewOrderModal({
                 <table className="w-full table-fixed text-left">
                   <thead className="bg-gray-50 border-y border-gray-100 sticky top-0">
                     <tr>
-                      <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
+                      <th className="w-8"></th>
+                      <th className="pl-1 py-1.5 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
                       <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400">用具名</th>
                       <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[6rem]">コード</th>
                       <th className="py-1.5 pr-3 text-[10px] font-semibold text-gray-400 w-[5.5rem] text-right">価格/月</th>
@@ -2701,15 +2721,24 @@ function NewOrderModal({
                   <tbody className="divide-y divide-gray-100">
                     {filteredEquipModal.slice(0, 2000).map((eq) => {
                       const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
+                      const isFav = favorites.has(eq.product_code);
                       return (
                         <tr
                           key={eq.product_code}
                           onClick={() => setEquipModalSelected((prev) =>
                             selected ? prev.filter((s) => s.product_code !== eq.product_code) : [...prev, eq]
                           )}
-                          className={`cursor-pointer transition-colors ${selected ? "bg-emerald-50" : "hover:bg-gray-50"}`}
+                          className={`cursor-pointer transition-colors ${selected ? "bg-emerald-50" : isFav ? "bg-amber-50/40" : "hover:bg-gray-50"}`}
                         >
-                          <td className="pl-3 py-2.5 w-[5rem]">
+                          <td className="w-8 pl-2 py-2.5 text-center">
+                            <button
+                              onClick={(e) => toggleFavorite(eq.product_code, e)}
+                              className={`text-lg leading-none transition-colors ${isFav ? "text-amber-400" : "text-gray-200 hover:text-amber-300"}`}
+                            >
+                              ★
+                            </button>
+                          </td>
+                          <td className="pl-1 py-2.5 w-[5rem]">
                             {eq.category && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
                                 {eq.category}
