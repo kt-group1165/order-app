@@ -82,6 +82,17 @@ export type Member = {
   created_at: string;
 };
 
+// 利用者書類履歴
+export type ClientDocument = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  type: string; // 'rental_report' など
+  title: string;
+  params: Record<string, unknown>;
+  created_at: string;
+};
+
 // 発注
 export type Order = {
   id: string;

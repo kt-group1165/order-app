@@ -26,7 +26,8 @@ import {
   FileText,
   Lock,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument } from "@/lib/supabase";
+import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
@@ -101,12 +102,13 @@ function toJapaneseEraYM(year: number, month: number): string {
  * ・1〜15日のいずれかに利用あり → 半月分単位数
  * ・16〜末日のいずれかに利用あり → 半月分単位数
  */
-function calcMonthUnits(item: OrderItem, year: number, month: number): number | null {
-  if (!item.rental_price) return null;
+function calcMonthUnits(item: OrderItem, year: number, month: number, priceOverride?: number): number | null {
+  const price = priceOverride ?? item.rental_price;
+  if (!price) return null;
   if (item.status === "ordered" || item.status === "delivered" || item.status === "trial") return null;
   if (item.status === "cancelled") return 0;
 
-  const fullUnits = Math.round(item.rental_price / 10);
+  const fullUnits = Math.round(price / 10);
   const halfUnits = Math.floor(fullUnits / 2);
   const remUnits  = fullUnits - halfUnits; // ceil(fullUnits / 2)
 
@@ -1737,8 +1739,10 @@ function ClientDetail({
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
+  const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"current" | "monthly">("current");
+  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs">("current");
+  const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -1784,13 +1788,17 @@ function ClientDetail({
           .in("order_id", orderIds);
         const loaded = items ?? [];
         setClientItems(loaded);
-        // 価格履歴をロード
         const codes = [...new Set(loaded.map((i) => i.product_code))];
-        const history = await getPriceHistory(tenantId, codes);
+        const [history, docs] = await Promise.all([
+          getPriceHistory(tenantId, codes),
+          getClientDocuments(tenantId, client.id),
+        ]);
         setPriceHistory(history);
+        setDocuments(docs);
       } else {
         setClientItems([]);
         setPriceHistory([]);
+        setDocuments([]);
       }
     } finally {
       setLoading(false);
@@ -1968,30 +1976,36 @@ function ClientDetail({
       </div>
 
       {/* 貸与報告書モーダル */}
-      {showReport && (
+      {(showReport || regenDoc) && (
         <RentalReportModal
           client={client}
           items={clientItems}
           equipment={equipment}
           companyInfo={companyInfo}
           priceHistory={priceHistory}
-          onClose={() => setShowReport(false)}
+          tenantId={tenantId}
+          initialParams={regenDoc ? (regenDoc.params as { targetMonth: string; visitDate: string; memo: string; selectedUsage: string[] }) : undefined}
+          onClose={() => { setShowReport(false); setRegenDoc(null); }}
+          onSaved={async () => {
+            const docs = await getClientDocuments(tenantId, client.id);
+            setDocuments(docs);
+          }}
         />
       )}
 
       {/* View toggle */}
       <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-2 shrink-0">
-        <button
-          onClick={() => setViewMode("current")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
-        >
+        <button onClick={() => setViewMode("current")}
+          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
           現在の状況
         </button>
-        <button
-          onClick={() => setViewMode("monthly")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
-        >
+        <button onClick={() => setViewMode("monthly")}
+          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
           月別レンタル
+        </button>
+        <button onClick={() => setViewMode("docs")}
+          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+          書類{documents.length > 0 && <span className="ml-1 opacity-70">({documents.length})</span>}
         </button>
       </div>
 
@@ -2041,7 +2055,7 @@ function ClientDetail({
             <p className="text-sm text-gray-400 text-center py-8">発注データがありません</p>
           )}
         </div>
-      ) : (
+      ) : viewMode === "monthly" ? (
         /* 月別ビュー */
         <div className="flex flex-col h-full">
           {/* 年月切り替え */}
@@ -2113,7 +2127,39 @@ function ClientDetail({
             })()}
           </div>
         </div>
-      )}
+      ) : viewMode === "docs" ? (
+        /* 書類タブ */
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {documents.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-8">保存済みの書類はありません<br /><span className="text-xs">報告書を開いて「履歴に保存」を押すと記録されます</span></p>
+          ) : (
+            documents.map((doc) => (
+              <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 shadow-sm">
+                <FileText size={16} className="text-emerald-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
+                  <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
+                </div>
+                <button
+                  onClick={() => setRegenDoc(doc)}
+                  className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                >
+                  再生成
+                </button>
+                <button
+                  onClick={async () => {
+                    await deleteClientDocument(doc.id);
+                    setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+                  }}
+                  className="shrink-0 text-xs text-red-400 border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-50"
+                >
+                  削除
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3466,26 +3512,36 @@ function RentalReportModal({
   equipment,
   companyInfo,
   priceHistory,
+  tenantId,
+  initialParams,
   onClose,
+  onSaved,
 }: {
   client: Client;
   items: OrderItem[];
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   priceHistory: EquipmentPriceHistory[];
+  tenantId: string;
+  initialParams?: { targetMonth: string; visitDate: string; memo: string; selectedUsage: string[] };
   onClose: () => void;
+  onSaved?: () => void;
 }) {
   const today = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
 
   const [targetMonth, setTargetMonth] = useState(
-    `${today.getFullYear()}-${pad(today.getMonth() + 1)}`
+    initialParams?.targetMonth ?? `${today.getFullYear()}-${pad(today.getMonth() + 1)}`
   );
   const [visitDate, setVisitDate] = useState(
-    `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+    initialParams?.visitDate ?? `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
   );
-  const [selectedUsage, setSelectedUsage] = useState<Set<UsageType>>(new Set<UsageType>());
-  const [memo, setMemo] = useState("");
+  const [selectedUsage, setSelectedUsage] = useState<Set<UsageType>>(
+    new Set<UsageType>((initialParams?.selectedUsage ?? []) as UsageType[])
+  );
+  const [memo, setMemo] = useState(initialParams?.memo ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [checkedReqs, setCheckedReqs] = useState<Set<number>>(new Set());
 
   const m1Year  = parseInt(targetMonth.split("-")[0]);
@@ -3493,8 +3549,32 @@ function RentalReportModal({
   const m2next  = new Date(m1Year, m1Month, 1);
   const m2Year  = m2next.getFullYear();
   const m2Month = m2next.getMonth() + 1;
+  const m2YM    = `${m2Year}-${String(m2Month).padStart(2, "0")}`;
 
   const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+  const histPrice = (code: string, ym: string) =>
+    getPriceForMonth(priceHistory, code, ym) ?? undefined;
+
+  const handleSaveDoc = async () => {
+    setSaving(true);
+    try {
+      const [y, m] = targetMonth.split("-").map(Number);
+      const m2n = new Date(y, m, 1);
+      const titleM2 = `${m2n.getFullYear()}年${m2n.getMonth() + 1}月`;
+      const title = `貸与報告書 ${y}年${m}月・${titleM2}分`;
+      await saveClientDocument({
+        tenant_id: tenantId,
+        client_id: client.id,
+        type: "rental_report",
+        title,
+        params: { targetMonth, visitDate, memo, selectedUsage: Array.from(selectedUsage) },
+      });
+      setSaved(true);
+      onSaved?.();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const reportItems = items
     .filter((i) =>
@@ -3512,8 +3592,8 @@ function RentalReportModal({
   const careItems    = reportItems.filter((i) => i.payment_type !== "自費");
   const selfPayItems = reportItems.filter((i) => i.payment_type === "自費");
 
-  const m1Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m1Year, m1Month) ?? 0), 0);
-  const m2Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m2Year, m2Month) ?? 0), 0);
+  const m1Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m1Year, m1Month, histPrice(i.product_code, targetMonth)) ?? 0), 0);
+  const m2Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m2Year, m2Month, histPrice(i.product_code, m2YM)) ?? 0), 0);
 
   // 貸与利用項目・訪問日は通常の和暦、表セル内は短縮形式
   const fmtDateFull  = (d: string | null) => d ? toJapaneseEra(new Date(d + "T00:00:00")) : "";
@@ -3614,6 +3694,10 @@ function RentalReportModal({
         <label className="text-xs text-gray-500">訪問日</label>
         <input type="date" value={visitDate} onChange={(e) => setVisitDate(e.target.value)}
           className="border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none" />
+        <button onClick={handleSaveDoc} disabled={saving || saved}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${saved ? "bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-emerald-600 border-emerald-300 hover:bg-emerald-50"}`}>
+          {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? "✓ 保存済" : "履歴に保存"}
+        </button>
         <button onClick={() => window.print()}
           className="flex items-center gap-1.5 bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
           <Printer size={14} /> 印刷
@@ -3736,9 +3820,9 @@ function RentalReportModal({
             <tbody>
               {careItems.map((item) => {
                 const eq = getEq(item.product_code);
-                const u1 = calcMonthUnits(item, m1Year, m1Month);
-                const u2 = calcMonthUnits(item, m2Year, m2Month);
                 const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
+                const u1 = calcMonthUnits(item, m1Year, m1Month, histPrice(item.product_code, targetMonth));
+                const u2 = calcMonthUnits(item, m2Year, m2Month, histPrice(item.product_code, m2YM));
                 return (
                   <tr key={item.id}>
                     <td style={RPT_TD}>{eq?.category ?? ""}</td>
