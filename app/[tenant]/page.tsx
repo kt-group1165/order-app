@@ -210,6 +210,8 @@ export default function TenantPage({
   const { tenant: tenantId } = use(params);
   const [activeTab, setActiveTab] = useState<Tab>("orders");
   const [tenantName, setTenantName] = useState(tenantId);
+  const [ordersDirty, setOrdersDirty] = useState(false);
+  const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [pinVerified, setPinVerified] = useState(false);
   const [pinChecked, setPinChecked] = useState(false);
   const [pin, setPin] = useState("");
@@ -309,7 +311,7 @@ export default function TenantPage({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "orders" && <OrdersTab tenantId={tenantId} />}
+        {activeTab === "orders" && <OrdersTab tenantId={tenantId} onDirtyChange={setOrdersDirty} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
@@ -327,7 +329,13 @@ export default function TenantPage({
         ).map(({ id, icon: Icon, label }) => (
           <button
             key={id}
-            onClick={() => setActiveTab(id)}
+            onClick={() => {
+              if (id !== activeTab && activeTab === "orders" && ordersDirty) {
+                setPendingTabChange(id);
+              } else {
+                setActiveTab(id);
+              }
+            }}
             className={`flex-1 flex flex-col items-center py-2 gap-0.5 text-xs transition-colors ${
               activeTab === id
                 ? "text-emerald-600"
@@ -339,13 +347,42 @@ export default function TenantPage({
           </button>
         ))}
       </nav>
+
+      {/* 未保存確認ダイアログ */}
+      {pendingTabChange && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs space-y-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={20} className="text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-gray-800 text-sm">保存されていない変更があります</p>
+                <p className="text-xs text-gray-500 mt-1">ステータス変更が保存されていません。このまま移動しますか？</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingTabChange(null)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 font-medium"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => { setActiveTab(pendingTabChange); setPendingTabChange(null); setOrdersDirty(false); }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium"
+              >
+                移動する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Orders Tab ─────────────────────────────────────────────────────────────
 
-function OrdersTab({ tenantId }: { tenantId: string }) {
+function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChange: (dirty: boolean) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -410,6 +447,11 @@ function OrdersTab({ tenantId }: { tenantId: string }) {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [pendingChanges]);
+
+  // タブ切り替え警告用にdirty状態を親に通知
+  useEffect(() => {
+    onDirtyChange(pendingChanges.size > 0);
+  }, [pendingChanges, onDirtyChange]);
 
   const clientName = (id: string | null) =>
     id ? (clients.find((c) => c.id === id)?.name ?? id) : "（利用者未設定）";
