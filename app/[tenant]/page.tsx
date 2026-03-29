@@ -1191,7 +1191,8 @@ function EquipmentDetail({
   const [priceLimit, setPriceLimit] = useState(item?.price_limit ? String(item.price_limit) : "");
   const [selectionReason, setSelectionReason] = useState(item?.selection_reason ?? "");
   const [proposalReason, setProposalReason] = useState(item?.proposal_reason ?? "");
-  const [priceEffectiveDate, setPriceEffectiveDate] = useState(new Date().toISOString().split("T")[0]);
+  const todayYM = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const [priceEffectiveMonth, setPriceEffectiveMonth] = useState(todayYM);
 
   const handleSave = async () => {
     if (!name.trim()) { setError("用具名は必須です"); return; }
@@ -1212,11 +1213,11 @@ function EquipmentDetail({
       const saved = isNew
         ? await createEquipmentItem(tenantId, payload)
         : await updateEquipment(item!.id, payload);
-      // 価格が変更された場合（または新規）、履歴を記録
-      if (newRentalPrice && priceEffectiveDate) {
+      // 価格が変更された場合（または新規）、履歴を記録（月初日で登録）
+      if (newRentalPrice && priceEffectiveMonth) {
         const oldPrice = item?.rental_price ?? null;
         if (isNew || newRentalPrice !== oldPrice) {
-          await addPriceHistory(tenantId, saved.product_code, newRentalPrice, priceEffectiveDate);
+          await addPriceHistory(tenantId, saved.product_code, newRentalPrice, `${priceEffectiveMonth}-01`);
         }
       }
       onSave(saved);
@@ -1239,7 +1240,7 @@ function EquipmentDetail({
     setPriceLimit(item!.price_limit ? String(item!.price_limit) : "");
     setSelectionReason(item!.selection_reason ?? "");
     setProposalReason(item!.proposal_reason ?? "");
-    setPriceEffectiveDate(new Date().toISOString().split("T")[0]);
+    setPriceEffectiveMonth(new Date().toISOString().slice(0, 7));
     setIsEditing(false);
     setError("");
   };
@@ -1304,11 +1305,11 @@ function EquipmentDetail({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">価格の適用開始日</label>
+              <label className="text-xs font-medium text-gray-600 block mb-1">価格の適用開始月</label>
               <input
-                type="date"
-                value={priceEffectiveDate}
-                onChange={(e) => setPriceEffectiveDate(e.target.value)}
+                type="month"
+                value={priceEffectiveMonth}
+                onChange={(e) => setPriceEffectiveMonth(e.target.value)}
                 className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
               />
               <p className="text-[11px] text-gray-400 mt-1">価格を変更した場合のみ履歴に記録されます</p>
@@ -1972,6 +1973,7 @@ function ClientDetail({
           items={clientItems}
           equipment={equipment}
           companyInfo={companyInfo}
+          priceHistory={priceHistory}
           onClose={() => setShowReport(false)}
         />
       )}
@@ -3462,12 +3464,14 @@ function RentalReportModal({
   items,
   equipment,
   companyInfo,
+  priceHistory,
   onClose,
 }: {
   client: Client;
   items: OrderItem[];
   equipment: Equipment[];
   companyInfo: CompanyInfo;
+  priceHistory: EquipmentPriceHistory[];
   onClose: () => void;
 }) {
   const today = new Date();
@@ -3733,13 +3737,14 @@ function RentalReportModal({
                 const eq = getEq(item.product_code);
                 const u1 = calcMonthUnits(item, m1Year, m1Month);
                 const u2 = calcMonthUnits(item, m2Year, m2Month);
+                const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
                 return (
                   <tr key={item.id}>
                     <td style={RPT_TD}>{eq?.category ?? ""}</td>
                     <td style={RPT_TD}>{eq?.tais_code ?? ""}</td>
                     <td style={{ ...RPT_TD, color: "#0000cc" }}>{eq?.name ?? item.product_code}</td>
                     <td style={{ ...RPT_TD, textAlign: "center" }}>1</td>
-                    <td style={{ ...RPT_TD, textAlign: "right" }}>¥{(item.rental_price ?? 0).toLocaleString()}</td>
+                    <td style={{ ...RPT_TD, textAlign: "right" }}>¥{price.toLocaleString()}</td>
                     <td style={{ ...RPT_TD, fontSize: "8.5pt", textAlign: "center", whiteSpace: "nowrap" }}>
                       {item.rental_start_date && <div>{fmtDate(item.rental_start_date)}&nbsp;契約</div>}
                       {item.rental_end_date   && <div>{fmtDate(item.rental_end_date)}&nbsp;解約</div>}
@@ -3777,6 +3782,7 @@ function RentalReportModal({
             <tbody>
               {selfPayItems.map((item) => {
                 const eq = getEq(item.product_code);
+                const selfPrice = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
                 return (
                   <tr key={item.id}>
                     <td style={RPT_TD}>{eq?.category ?? ""}</td>
@@ -3786,7 +3792,7 @@ function RentalReportModal({
                       {item.rental_start_date && <div>{fmtDate(item.rental_start_date)} 契約</div>}
                       {item.rental_end_date   && <div>{fmtDate(item.rental_end_date)} 解約</div>}
                     </td>
-                    <td style={{ ...RPT_TD, textAlign: "right" }}>¥{(item.rental_price ?? 0).toLocaleString()}</td>
+                    <td style={{ ...RPT_TD, textAlign: "right" }}>¥{selfPrice.toLocaleString()}</td>
                   </tr>
                 );
               })}

@@ -410,6 +410,7 @@ export async function addPriceHistory(
 
 /**
  * 指定月（yearMonth = "YYYY-MM"）時点での有効価格を返す。
+ * 価格改定は必ず月初（YYYY-MM-01）単位で行われる前提。
  * 履歴がない場合は null。
  */
 export function getPriceForMonth(
@@ -417,11 +418,9 @@ export function getPriceForMonth(
   productCode: string,
   yearMonth: string
 ): number | null {
-  const [y, m] = yearMonth.split("-").map(Number);
-  const lastDay = new Date(y, m, 0).getDate();
-  const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+  const monthStart = `${yearMonth}-01`;
   const records = history
-    .filter((h) => h.product_code === productCode && h.valid_from <= monthEnd)
+    .filter((h) => h.product_code === productCode && h.valid_from <= monthStart)
     .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
   return records[0]?.rental_price ?? null;
 }
