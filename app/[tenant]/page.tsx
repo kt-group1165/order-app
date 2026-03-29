@@ -406,6 +406,14 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
   const [pendingChanges, setPendingChanges] = useState<Map<string, PendingChange>>(new Map());
   // 保存後メールモーダル用
   const [postSaveChanges, setPostSaveChanges] = useState<PendingChange[] | null>(null);
+  const [supplierSentIds, setSupplierSentIds] = useState<Set<string>>(new Set());
+  const [careSentIds, setCareSentIds] = useState<Set<string>>(new Set());
+  const [careManagerModal, setCareManagerModal] = useState<{
+    client: Client;
+    items: OrderItem[];
+    companyInfo: CompanyInfo;
+    priceHistory: EquipmentPriceHistory[];
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -832,18 +840,56 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
         />
       )}
 
-      {/* 保存後ケアマネメールモーダル */}
+      {/* ケアマネ報告書モーダル（PostSaveModalの上に重なる） */}
+      {careManagerModal && (
+        <RentalReportModal
+          client={careManagerModal.client}
+          items={careManagerModal.items}
+          equipment={equipment}
+          companyInfo={careManagerModal.companyInfo}
+          priceHistory={careManagerModal.priceHistory}
+          tenantId={tenantId}
+          onClose={() => setCareManagerModal(null)}
+          onSaved={() => setCareManagerModal(null)}
+        />
+      )}
+
+      {/* 保存後メールモーダル */}
       {postSaveChanges && (
         <PostSaveModal
           changes={postSaveChanges}
           clients={clients}
           equipment={equipment}
           orders={orders}
+          supplierSentIds={supplierSentIds}
+          careSentIds={careSentIds}
           onSendEmail={(order) => {
-            setPostSaveChanges(null);
+            setSupplierSentIds((prev) => new Set([...prev, order.id]));
             setPreviewOrder({ order, items: order.items, emailType: "rental_started" });
           }}
-          onClose={() => setPostSaveChanges(null)}
+          onCareManagerEmail={async (order) => {
+            const client = clients.find((c) => c.id === order.client_id);
+            if (!client) return;
+            const allItems = orders
+              .filter((o) => o.client_id === order.client_id)
+              .flatMap((o) => o.items);
+            const codes = [...new Set(allItems.map((i) => i.product_code))];
+            const [history, tenant] = await Promise.all([
+              getPriceHistory(tenantId, codes),
+              getTenantById(tenantId),
+            ]);
+            const companyInfo: CompanyInfo = tenant ? {
+              businessNumber: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
+              companyName:    tenant.company_name    ?? COMPANY_INFO_DEFAULTS.companyName,
+              companyAddress: tenant.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
+              tel:            tenant.company_tel     ?? COMPANY_INFO_DEFAULTS.tel,
+              fax:            tenant.company_fax     ?? COMPANY_INFO_DEFAULTS.fax,
+              staffName:      tenant.staff_name      ?? COMPANY_INFO_DEFAULTS.staffName,
+            } : COMPANY_INFO_DEFAULTS;
+            setCareSentIds((prev) => new Set([...prev, order.id]));
+            setCareManagerModal({ client, items: allItems, companyInfo, priceHistory: history });
+          }}
+          onClose={() => { setPostSaveChanges(null); setSupplierSentIds(new Set()); setCareSentIds(new Set()); }}
         />
       )}
 
@@ -2182,14 +2228,20 @@ function PostSaveModal({
   clients,
   equipment,
   orders,
+  supplierSentIds,
+  careSentIds,
   onSendEmail,
+  onCareManagerEmail,
   onClose,
 }: {
   changes: PendingChange[];
   clients: Client[];
   equipment: Equipment[];
   orders: OrderWithItems[];
+  supplierSentIds: Set<string>;
+  careSentIds: Set<string>;
   onSendEmail: (order: OrderWithItems) => void;
+  onCareManagerEmail: (order: OrderWithItems) => void;
   onClose: () => void;
 }) {
   const clientName = (id: string | null) =>
@@ -2222,20 +2274,36 @@ function PostSaveModal({
           <button onClick={onClose} className="ml-auto"><X size={18} className="text-gray-400" /></button>
         </div>
         <div className="px-4 py-3 max-h-[60vh] overflow-y-auto space-y-3">
-          <p className="text-xs text-gray-500">以下の変更が保存されました。ケアマネにメールで通知できます。</p>
+          <p className="text-xs text-gray-500">以下の変更が保存されました。卸会社・ケアマネへのメール送信ができます。</p>
           {grouped.map((g, gi) => {
             const order = getOrder(g.changes[0].item.id);
             return (
               <div key={gi} className="bg-gray-50 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-bold text-gray-800">{clientName(g.clientId)}</span>
                   {order && (
-                    <button
-                      onClick={() => onSendEmail(order)}
-                      className="flex items-center gap-1 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-xl hover:bg-emerald-50"
-                    >
-                      <Mail size={12} /> ケアマネにメール
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => onSendEmail(order)}
+                        className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
+                          supplierSentIds.has(order.id)
+                            ? "opacity-30 text-blue-500 border-blue-200"
+                            : "text-blue-600 border-blue-200 hover:bg-blue-50"
+                        }`}
+                      >
+                        <Mail size={12} /> 卸会社にメール
+                      </button>
+                      <button
+                        onClick={() => onCareManagerEmail(order)}
+                        className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
+                          careSentIds.has(order.id)
+                            ? "opacity-30 text-emerald-500 border-emerald-200"
+                            : "text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                        }`}
+                      >
+                        <Mail size={12} /> ケアマネにメール
+                      </button>
+                    </div>
                   )}
                 </div>
                 <ul className="space-y-1">
@@ -2307,6 +2375,7 @@ function NewOrderModal({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const FAVORITES_KEY = `equip_favorites_${tenantId}`;
   const [favorites, setFavorites] = useState<Set<string>>(() => {
@@ -2382,7 +2451,7 @@ function NewOrderModal({
     );
   };
 
-  const handleSubmit = async () => {
+  const handleConfirm = () => {
     if (!clientId) {
       setError("利用者を選択してください");
       return;
@@ -2391,6 +2460,11 @@ function NewOrderModal({
       setError("用具を1つ以上選択してください");
       return;
     }
+    setError("");
+    setShowConfirm(true);
+  };
+
+  const handleSubmit = async () => {
     setLoading(true);
     setError("");
     try {
@@ -2765,12 +2839,12 @@ function NewOrderModal({
 
         <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0">
           <button
-            onClick={handleSubmit}
-            disabled={loading || items.length === 0}
+            onClick={handleConfirm}
+            disabled={items.length === 0}
             className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
           >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-            発注を登録する
+            <CheckCircle2 size={16} />
+            確認画面へ
           </button>
         </div>
       </div>
@@ -2839,11 +2913,10 @@ function NewOrderModal({
                   <thead className="bg-gray-50 border-y border-gray-100 sticky top-0">
                     <tr>
                       <th className="w-8"></th>
-                      <th className="pl-1 py-1.5 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
-                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400">用具名</th>
-                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[6rem]">コード</th>
-                      <th className="py-1.5 pr-3 text-[10px] font-semibold text-gray-400 w-[5.5rem] text-right">価格/月</th>
-                      <th className="w-8"></th>
+                      <th className="pl-1 py-1.5 text-[10px] font-semibold text-gray-400 w-[4.5rem]">種目</th>
+                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400">用具名・価格</th>
+                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[5.5rem]">コード</th>
+                      <th className="w-[7.5rem]"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -2866,7 +2939,7 @@ function NewOrderModal({
                               ★
                             </button>
                           </td>
-                          <td className="pl-1 py-2 w-[5rem]">
+                          <td className="pl-1 py-2 w-[4.5rem]">
                             {eq.category && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
                                 {eq.category}
@@ -2875,13 +2948,13 @@ function NewOrderModal({
                           </td>
                           <td className="py-2 px-2 max-w-0">
                             <p className={`text-sm font-medium truncate ${sel ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
+                            {eq.rental_price ? (
+                              <p className="text-[11px] text-emerald-600 font-semibold">¥{eq.rental_price.toLocaleString()}/月</p>
+                            ) : null}
                           </td>
-                          <td className="py-2 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
-                          <td className="py-2 pr-2 text-sm font-semibold text-emerald-600 w-[5.5rem] text-right whitespace-nowrap">
-                            {eq.rental_price ? `¥${eq.rental_price.toLocaleString()}` : ""}
-                          </td>
+                          <td className="py-2 px-2 text-[11px] text-gray-400 w-[5.5rem] whitespace-nowrap">{eq.product_code}</td>
                           {/* 個数 or チェック */}
-                          <td className="py-2 pr-2 w-[6rem] text-right" onClick={(e) => e.stopPropagation()}>
+                          <td className="py-2 pr-2 w-[7.5rem] text-right" onClick={(e) => e.stopPropagation()}>
                             {sel ? (
                               <div className="flex items-center justify-end gap-1">
                                 <button
@@ -2950,6 +3023,108 @@ function NewOrderModal({
           </div>
         </div>
       )}
+
+      {/* ── 確認画面 ── */}
+      {showConfirm && (() => {
+        const clientObj = clients.find((c) => c.id === clientId);
+        const supplierObj = suppliers.find((s) => s.id === supplierId);
+        const warnings: string[] = [];
+        if (!deliveryDate) warnings.push("納品予定日が未入力です");
+        if (!deliveryTime) warnings.push("納品時間が未入力です");
+        if (!supplierId) warnings.push("卸会社が未選択です");
+        const noPriceItems = items.filter((i) => !i.rental_price || parseFloat(i.rental_price) === 0);
+        if (noPriceItems.length > 0)
+          warnings.push(`価格未入力の用具があります：${noPriceItems.map((i) => i.equipment.name).join("、")}`);
+
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-end z-[70]">
+            <div className="bg-white w-full rounded-t-2xl max-h-[88vh] flex flex-col">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+                <h3 className="font-semibold text-gray-800">発注内容の確認</h3>
+                <button onClick={() => setShowConfirm(false)}><X size={20} className="text-gray-400" /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {/* 警告 */}
+                {warnings.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1">
+                    <p className="text-xs font-semibold text-amber-700 flex items-center gap-1">
+                      <AlertCircle size={13} /> 未入力の項目があります（登録は可能です）
+                    </p>
+                    {warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-600 pl-4">・{w}</p>
+                    ))}
+                  </div>
+                )}
+
+                {/* 基本情報 */}
+                <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">基本情報</p>
+                  <Row label="利用者" value={clientObj?.name ?? "—"} />
+                  <Row label="種別" value={paymentType} />
+                  <Row label="卸会社" value={supplierObj?.name ?? "未選択"} warn={!supplierId} />
+                  <Row label="納品方法" value={deliveryType} />
+                  <Row label="納品予定日" value={deliveryDate ? new Date(deliveryDate).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" }) : "未入力"} warn={!deliveryDate} />
+                  <Row label="納品時間" value={deliveryTime || "未入力"} warn={!deliveryTime} />
+                  {deliveryType === "直納" && (
+                    <Row label="立ち会い" value={attendanceRequired ? `あり（${selectedAttendees.map((id) => members.find((m) => m.id === id)?.name ?? id).join("・")}）` : "なし"} />
+                  )}
+                  {notes && <Row label="備考" value={notes} />}
+                </div>
+
+                {/* 用具 */}
+                <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">発注用具（{items.length}件）</p>
+                  {items.map((item, i) => {
+                    const price = item.rental_price ? parseFloat(item.rental_price) : null;
+                    const itemSupplier = suppliers.find((s) => s.id === item.supplier_id);
+                    return (
+                      <div key={i} className="flex items-start justify-between gap-2 py-1 border-b border-gray-100 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{item.equipment.name}</p>
+                          <p className="text-[10px] text-gray-400">{item.equipment.product_code}{itemSupplier ? `　${itemSupplier.name}` : ""}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className={`text-sm font-semibold ${price ? "text-emerald-600" : "text-amber-500"}`}>
+                            {price ? `¥${price.toLocaleString()}/月` : "価格未入力"}
+                          </p>
+                          <p className="text-[10px] text-gray-400">{item.quantity > 1 ? `×${item.quantity}` : ""}{item.payment_type ? `　${item.payment_type}` : ""}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0 flex gap-2">
+                <button
+                  onClick={() => setShowConfirm(false)}
+                  className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm"
+                >
+                  修正する
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={loading}
+                  className="flex-1 py-3 bg-emerald-500 text-white rounded-xl font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
+                >
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  登録する
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function Row({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-xs text-gray-500 shrink-0">{label}</span>
+      <span className={`text-xs font-medium text-right ${warn ? "text-amber-500" : "text-gray-800"}`}>{value}</span>
     </div>
   );
 }
