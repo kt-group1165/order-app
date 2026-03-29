@@ -2007,6 +2007,7 @@ type NewOrderItem = {
   rental_price: string;
   notes: string;
   payment_type: "介護" | "自費" | null; // null = 発注全体に従う
+  supplier_id: string | null; // null = 発注全体に従う
 };
 
 // ─── PostSaveModal ────────────────────────────────────────────────────────────
@@ -2160,13 +2161,14 @@ function NewOrderModal({
         rental_price: eq.rental_price ? String(eq.rental_price) : "",
         notes: "",
         payment_type: null,
+        supplier_id: supplierId || null,
       },
     ]);
   };
 
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
 
-  const updateItem = (idx: number, field: "rental_price" | "notes", value: string) => {
+  const updateItem = (idx: number, field: "rental_price" | "notes" | "supplier_id", value: string | null) => {
     setItems(items.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
   };
 
@@ -2217,6 +2219,7 @@ function NewOrderModal({
           orderId: order.id,
           tenantId,
           productCode: item.equipment.product_code,
+          supplierId: item.supplier_id || undefined,
           rentalPrice: item.rental_price ? parseFloat(item.rental_price) : undefined,
           notes: item.notes || undefined,
           paymentType: item.payment_type,
@@ -2473,61 +2476,68 @@ function NewOrderModal({
 
             {/* 選択済み用具 */}
             {items.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
+              <div className="bg-white border border-emerald-200 rounded-xl overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-emerald-100 bg-emerald-50">
                   <span className="text-xs font-semibold text-emerald-700">✓ 選択中の用具</span>
                   <span className="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{items.length}件</span>
                 </div>
-                {items.map((item, idx) => {
-                  const effectiveType = item.payment_type ?? paymentType;
-                  const isOverridden = item.payment_type !== null;
-                  return (
-                    <div key={idx} className="bg-white border border-emerald-200 rounded-xl p-3 space-y-2">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-emerald-900">{item.equipment.name}</p>
-                          <p className="text-xs text-emerald-600">{item.equipment.product_code}</p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                <div className="divide-y divide-gray-100">
+                  {items.map((item, idx) => {
+                    const effectiveType = item.payment_type ?? paymentType;
+                    const isTypeOverridden = item.payment_type !== null;
+                    const effectiveSupplier = item.supplier_id;
+                    return (
+                      <div key={idx} className="px-3 py-2 space-y-1.5">
+                        {/* 1行目：用具名・コード・種別・削除 */}
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-semibold text-gray-800 truncate block">{item.equipment.name}</span>
+                            <span className="text-[11px] text-gray-400">{item.equipment.product_code}</span>
+                          </div>
                           <button
                             onClick={() => toggleItemPaymentType(idx)}
-                            className={`text-[10px] px-2 py-0.5 rounded-full font-medium border transition-colors ${
-                              isOverridden
+                            className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border transition-colors ${
+                              isTypeOverridden
                                 ? "bg-amber-100 text-amber-700 border-amber-200"
                                 : "bg-emerald-100 text-emerald-700 border-emerald-200"
                             }`}
                           >
-                            {effectiveType}{isOverridden ? "（個別）" : ""}
+                            {effectiveType}
                           </button>
-                          <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-400 transition-colors">
-                            <X size={16} />
+                          <button onClick={() => removeItem(idx)} className="shrink-0 text-gray-300 hover:text-red-400 transition-colors">
+                            <X size={15} />
                           </button>
                         </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <div className="flex-1">
-                          <label className="text-[10px] text-gray-500">レンタル価格（円/月）</label>
+                        {/* 2行目：卸会社・価格・備考 */}
+                        <div className="flex gap-1.5">
+                          <select
+                            value={effectiveSupplier ?? ""}
+                            onChange={(e) => updateItem(idx, "supplier_id", e.target.value || null)}
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white text-gray-600 w-[7rem] shrink-0"
+                          >
+                            <option value="">卸会社なし</option>
+                            {suppliers.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
                           <input
                             value={item.rental_price}
                             onChange={(e) => updateItem(idx, "rental_price", e.target.value)}
-                            placeholder="15000"
+                            placeholder="価格(円/月)"
                             type="number"
-                            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white w-[6rem] shrink-0"
                           />
-                        </div>
-                        <div className="flex-1">
-                          <label className="text-[10px] text-gray-500">備考</label>
                           <input
                             value={item.notes}
                             onChange={(e) => updateItem(idx, "notes", e.target.value)}
-                            placeholder="サイズ等"
-                            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                            placeholder="備考"
+                            className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white min-w-0"
                           />
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>{/* ── 発注用具 セクション終わり ── */}
@@ -2637,6 +2647,7 @@ function NewOrderModal({
                         rental_price: eq.rental_price != null ? String(eq.rental_price) : "",
                         notes: "",
                         payment_type: null,
+                        supplier_id: supplierId || null,
                       })),
                   ]);
                   setShowEquipModal(false);
