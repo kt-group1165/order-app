@@ -2523,63 +2523,78 @@ function NewOrderModal({
                   <span className="text-xs font-semibold text-emerald-700">✓ 選択中の用具</span>
                   <span className="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{items.length}件</span>
                 </div>
-                <div className="divide-y divide-gray-100">
-                  {items.map((item, idx) => {
-                    const effectiveType = item.payment_type ?? paymentType;
-                    const isTypeOverridden = item.payment_type !== null;
-                    const effectiveSupplier = item.supplier_id;
-                    return (
-                      <div key={idx} className="px-3 py-2 space-y-1.5">
-                        {/* 1行目：用具名・コード・種別・削除 */}
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 min-w-0">
-                            <span className="text-sm font-semibold text-gray-800 truncate block">{item.equipment.name}</span>
-                            <span className="text-[11px] text-gray-400">{item.equipment.product_code}</span>
-                          </div>
-                          <button
-                            onClick={() => toggleItemPaymentType(idx)}
-                            className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border transition-colors ${
-                              isTypeOverridden
-                                ? "bg-amber-100 text-amber-700 border-amber-200"
-                                : "bg-emerald-100 text-emerald-700 border-emerald-200"
-                            }`}
-                          >
-                            {effectiveType}
-                          </button>
-                          <button onClick={() => removeItem(idx)} className="shrink-0 text-gray-300 hover:text-red-400 transition-colors">
-                            <X size={15} />
-                          </button>
-                        </div>
-                        {/* 2行目：卸会社・価格・備考 */}
-                        <div className="flex gap-1.5">
-                          <select
-                            value={effectiveSupplier ?? ""}
-                            onChange={(e) => updateItem(idx, "supplier_id", e.target.value || null)}
-                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white text-gray-600 w-[7rem] shrink-0"
-                          >
-                            <option value="">卸会社なし</option>
-                            {suppliers.map((s) => (
-                              <option key={s.id} value={s.id}>{s.name}</option>
-                            ))}
-                          </select>
-                          <input
-                            value={item.rental_price}
-                            onChange={(e) => updateItem(idx, "rental_price", e.target.value)}
-                            placeholder="価格(円/月)"
-                            type="number"
-                            className="border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white w-[6rem] shrink-0"
-                          />
-                          <input
-                            value={item.notes}
-                            onChange={(e) => updateItem(idx, "notes", e.target.value)}
-                            placeholder="備考"
-                            className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs outline-none focus:border-emerald-400 bg-white min-w-0"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <table className="w-full table-fixed text-left">
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
+                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[6.5rem]">卸会社</th>
+                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5.5rem]">価格(円/月)</th>
+                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">備考</th>
+                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[3rem]">種別</th>
+                      <th className="w-7"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {items.map((item, idx) => {
+                      const effectiveType = item.payment_type ?? paymentType;
+                      const isTypeOverridden = item.payment_type !== null;
+                      return (
+                        <tr key={idx}>
+                          <td className="pl-3 py-2 max-w-0">
+                            <p className="text-xs font-semibold text-gray-800 truncate">{item.equipment.name}</p>
+                            <p className="text-[10px] text-gray-400">{item.equipment.product_code}</p>
+                          </td>
+                          <td className="py-2 px-1 w-[6.5rem]">
+                            <select
+                              value={item.supplier_id ?? ""}
+                              onChange={(e) => updateItem(idx, "supplier_id", e.target.value || null)}
+                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white text-gray-600"
+                            >
+                              <option value="">なし</option>
+                              {suppliers.map((s) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="py-2 px-1 w-[5.5rem]">
+                            <input
+                              value={item.rental_price}
+                              onChange={(e) => updateItem(idx, "rental_price", e.target.value)}
+                              placeholder="—"
+                              type="number"
+                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
+                            />
+                          </td>
+                          <td className="py-2 px-1 w-[5rem]">
+                            <input
+                              value={item.notes}
+                              onChange={(e) => updateItem(idx, "notes", e.target.value)}
+                              placeholder="—"
+                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
+                            />
+                          </td>
+                          <td className="py-2 px-1 w-[3rem]">
+                            <button
+                              onClick={() => toggleItemPaymentType(idx)}
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium border transition-colors whitespace-nowrap ${
+                                isTypeOverridden
+                                  ? "bg-amber-100 text-amber-700 border-amber-200"
+                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                              }`}
+                            >
+                              {effectiveType}
+                            </button>
+                          </td>
+                          <td className="py-2 pr-2 w-7 text-right">
+                            <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-400 transition-colors">
+                              <X size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>{/* ── 発注用具 セクション終わり ── */}
