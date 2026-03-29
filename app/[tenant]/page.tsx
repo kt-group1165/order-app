@@ -33,6 +33,8 @@ import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateE
 import { getClients } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { verifyPin } from "@/lib/settings";
+import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
+import { CarePlanTemplate } from "@/lib/supabase";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -309,7 +311,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.8</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.9</span>
       </header>
 
       {/* Content */}
@@ -1869,6 +1871,8 @@ function ClientDetail({
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs">("current");
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
+  const [showCarePlan, setShowCarePlan] = useState(false);
+  const [showProposal, setShowProposal] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -2119,6 +2123,40 @@ function ClientDetail({
         />
       )}
 
+      {/* 個別援助計画書モーダル */}
+      {showCarePlan && (
+        <CarePlanModal
+          client={client}
+          clientItems={clientItems}
+          equipment={equipment}
+          companyInfo={companyInfo}
+          tenantId={tenantId}
+          onClose={() => setShowCarePlan(false)}
+          onSaved={async () => {
+            const docs = await getClientDocuments(tenantId, client.id);
+            setDocuments(docs);
+            setShowCarePlan(false);
+          }}
+        />
+      )}
+
+      {/* 選定提案書モーダル */}
+      {showProposal && (
+        <ProposalModal
+          client={client}
+          clientItems={clientItems}
+          equipment={equipment}
+          companyInfo={companyInfo}
+          tenantId={tenantId}
+          onClose={() => setShowProposal(false)}
+          onSaved={async () => {
+            const docs = await getClientDocuments(tenantId, client.id);
+            setDocuments(docs);
+            setShowProposal(false);
+          }}
+        />
+      )}
+
       {/* View toggle */}
       <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-2 shrink-0">
         <button onClick={() => setViewMode("current")}
@@ -2256,22 +2294,40 @@ function ClientDetail({
       ) : viewMode === "docs" ? (
         /* 書類タブ */
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* 作成ボタン */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowCarePlan(true)}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium rounded-xl hover:bg-emerald-100"
+            >
+              <Plus size={13} /> 個別援助計画書
+            </button>
+            <button
+              onClick={() => setShowProposal(true)}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-xl hover:bg-blue-100"
+            >
+              <Plus size={13} /> 選定提案書
+            </button>
+          </div>
+
           {documents.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-8">保存済みの書類はありません<br /><span className="text-xs">報告書を開いて「履歴に保存」を押すと記録されます</span></p>
           ) : (
             documents.map((doc) => (
               <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 shadow-sm">
-                <FileText size={16} className="text-emerald-400 shrink-0" />
+                <FileText size={16} className={doc.type === "supplier_email" ? "text-blue-400" : doc.type === "care_plan" ? "text-purple-400" : doc.type === "proposal" ? "text-amber-400" : "text-emerald-400"} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
                   <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
                 </div>
-                <button
-                  onClick={() => setRegenDoc(doc)}
-                  className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
-                >
-                  再生成
-                </button>
+                {doc.type === "rental_report" && (
+                  <button
+                    onClick={() => setRegenDoc(doc)}
+                    className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                  >
+                    再生成
+                  </button>
+                )}
                 <button
                   onClick={async () => {
                     await deleteClientDocument(doc.id);
@@ -3825,6 +3881,853 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
             ))}
           </div>
         </div>
+
+        {/* ── 個別援助計画書テンプレート ── */}
+        <CarePlanTemplateSection tenantId={tenantId} />
+
+      </div>
+    </div>
+  );
+}
+
+function CarePlanTemplateSection({ tenantId }: { tenantId: string }) {
+  const [templates, setTemplates] = useState<CarePlanTemplate[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [editing, setEditing] = useState<string | null>(null); // category being edited
+  const [newCategory, setNewCategory] = useState("");
+  const [form, setForm] = useState<Record<string, { goals: string; precautions: string }>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([getCarePlanTemplates(tenantId), getEquipment(tenantId)]).then(([tmpl, eq]) => {
+      setTemplates(tmpl);
+      setEquipment(eq);
+      const f: Record<string, { goals: string; precautions: string }> = {};
+      tmpl.forEach((t) => { f[t.category] = { goals: t.goals, precautions: t.precautions }; });
+      setForm(f);
+    });
+  }, [tenantId]);
+
+  // 用具マスタにある種目一覧
+  const categories = Array.from(new Set(equipment.map((e) => e.category).filter(Boolean))) as string[];
+  // テンプレートにある種目（用具マスタにないものも含む）
+  const allCategories = Array.from(new Set([...categories, ...templates.map((t) => t.category)])).sort();
+
+  const handleSave = async (category: string) => {
+    setSaving(category);
+    try {
+      const { goals, precautions } = form[category] ?? { goals: "", precautions: "" };
+      const saved = await upsertCarePlanTemplate(tenantId, category, goals, precautions);
+      setTemplates((prev) => {
+        const exists = prev.find((t) => t.category === category);
+        return exists ? prev.map((t) => t.category === category ? saved : t) : [...prev, saved];
+      });
+      setEditing(null);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleDelete = async (id: string, category: string) => {
+    await deleteCarePlanTemplate(id);
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    setForm((prev) => { const n = { ...prev }; delete n[category]; return n; });
+  };
+
+  const handleAddNew = () => {
+    if (!newCategory.trim()) return;
+    setForm((prev) => ({ ...prev, [newCategory]: { goals: "", precautions: "" } }));
+    setEditing(newCategory);
+    setNewCategory("");
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h3 className="font-semibold text-gray-800 text-sm">個別援助計画書テンプレート</h3>
+        <p className="text-xs text-gray-400 mt-0.5">種目ごとの利用目標・留意点の例文を設定します</p>
+      </div>
+      <div className="p-4 space-y-3">
+        {allCategories.length === 0 && (
+          <p className="text-xs text-gray-400">用具マスタに種目データがありません</p>
+        )}
+        {allCategories.map((cat) => {
+          const tmpl = templates.find((t) => t.category === cat);
+          const isEditing = editing === cat;
+          const vals = form[cat] ?? { goals: "", precautions: "" };
+          return (
+            <div key={cat} className="border border-gray-100 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-gray-50">
+                <span className="text-xs font-semibold text-gray-700">{cat}</span>
+                <div className="flex gap-2">
+                  {!isEditing && (
+                    <button
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, [cat]: { goals: tmpl?.goals ?? "", precautions: tmpl?.precautions ?? "" } }));
+                        setEditing(cat);
+                      }}
+                      className="text-xs text-emerald-600 hover:underline"
+                    >編集</button>
+                  )}
+                  {tmpl && !isEditing && (
+                    <button onClick={() => handleDelete(tmpl.id, cat)} className="text-xs text-red-400 hover:underline">削除</button>
+                  )}
+                </div>
+              </div>
+              {isEditing ? (
+                <div className="p-3 space-y-2">
+                  <div>
+                    <label className="text-[11px] font-medium text-gray-500 block mb-1">利用目標</label>
+                    <textarea
+                      value={vals.goals}
+                      onChange={(e) => setForm((prev) => ({ ...prev, [cat]: { ...prev[cat], goals: e.target.value } }))}
+                      rows={3}
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 resize-none"
+                      placeholder="例：安全に起居動作を行うことができる"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-medium text-gray-500 block mb-1">留意点</label>
+                    <textarea
+                      value={vals.precautions}
+                      onChange={(e) => setForm((prev) => ({ ...prev, [cat]: { ...prev[cat], precautions: e.target.value } }))}
+                      rows={3}
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 resize-none"
+                      placeholder="例：ベッドご使用の際はサイドレール等の隙間に注意してください"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleSave(cat)}
+                      disabled={saving === cat}
+                      className="flex-1 py-1.5 bg-emerald-500 text-white text-xs font-medium rounded-lg disabled:opacity-50"
+                    >
+                      {saving === cat ? "保存中..." : "保存"}
+                    </button>
+                    <button onClick={() => setEditing(null)} className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs rounded-lg">
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              ) : tmpl ? (
+                <div className="p-3 space-y-1.5">
+                  <p className="text-[11px] text-gray-400 font-medium">目標</p>
+                  <p className="text-xs text-gray-700 whitespace-pre-wrap">{tmpl.goals || "—"}</p>
+                  <p className="text-[11px] text-gray-400 font-medium mt-1">留意点</p>
+                  <p className="text-xs text-gray-700 whitespace-pre-wrap">{tmpl.precautions || "—"}</p>
+                </div>
+              ) : (
+                <div className="px-3 py-2">
+                  <p className="text-xs text-gray-400">テンプレート未設定</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* 新規カテゴリ追加（用具マスタにない種目用） */}
+        <div className="flex gap-2 pt-1">
+          <input
+            value={newCategory}
+            onChange={(e) => setNewCategory(e.target.value)}
+            placeholder="種目名を入力して追加"
+            className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-emerald-400"
+          />
+          <button
+            onClick={handleAddNew}
+            disabled={!newCategory.trim()}
+            className="px-3 py-2 bg-emerald-500 text-white text-xs rounded-xl disabled:opacity-40"
+          >追加</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Care Plan Modal ─────────────────────────────────────────────────────────
+
+const CHANGE_TYPE_OPTIONS = ["新規納品", "追加納品", "回収", "プラン更新", "プラン変更", "その他"] as const;
+
+function calcAge(birthDateStr: string): number {
+  const birth = new Date(birthDateStr + "T00:00:00");
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  if (now.getMonth() < birth.getMonth() || (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate())) age--;
+  return age;
+}
+
+function CarePlanModal({
+  client,
+  clientItems,
+  equipment,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [step, setStep] = useState<1 | 2>(1);
+  const [templates, setTemplates] = useState<CarePlanTemplate[]>([]);
+
+  const selectableItems = clientItems.filter((i) => !["ordered", "cancelled"].includes(i.status));
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() =>
+    new Set(selectableItems.filter((i) => i.status === "rental_started").map((i) => i.id))
+  );
+  const [changeTypes, setChangeTypes] = useState<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    selectableItems.forEach((i) => { m[i.id] = i.status === "terminated" ? "回収" : "新規納品"; });
+    return m;
+  });
+
+  const [creationDate, setCreationDate] = useState(todayStr);
+  const [gender, setGender] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [certStartDate, setCertStartDate] = useState("");
+  const [consultantName, setConsultantName] = useState("");
+  const [consultantRelation, setConsultantRelation] = useState("");
+  const [consultationDate, setConsultationDate] = useState(todayStr);
+  const [monitoringMonths, setMonitoringMonths] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { getCarePlanTemplates(tenantId).then(setTemplates); }, [tenantId]);
+
+  const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
+  const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+  const selectedCategories = [...new Set(
+    selectedItems.map((i) => getEq(i.product_code)?.category).filter(Boolean) as string[]
+  )];
+
+  const handlePrint = () => {
+    const el = document.getElementById("care-plan-print-content");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>個別援助計画書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:10mm 12mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 5px;vertical-align:middle}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveClientDocument({
+        tenant_id: tenantId, client_id: client.id, type: "care_plan",
+        title: `個別援助計画書 ${creationDate}`,
+        params: { creationDate, selectedIds: [...selectedIds], changeTypes, gender, birthDate, certStartDate, consultantName, consultantRelation, consultationDate, monitoringMonths },
+      });
+      onSaved?.();
+    } finally { setSaving(false); }
+  };
+
+  const TD: React.CSSProperties = { border: "1px solid #555", padding: "3px 6px", verticalAlign: "middle" as const };
+  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "3px 6px", textAlign: "center" as const, whiteSpace: "nowrap" as const, verticalAlign: "middle" as const };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">個別援助計画書</h2>
+          {step === 1 && (
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => setStep(2)}
+              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40"
+            >プレビュー →</button>
+          )}
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {step === 1 ? (
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">書類に含める用具を選択</h3>
+              {selectableItems.length === 0 ? (
+                <p className="text-sm text-gray-400">対象となる用具がありません</p>
+              ) : (
+                <div className="space-y-2">
+                  {selectableItems.map((item) => {
+                    const eq = getEq(item.product_code);
+                    const checked = selectedIds.has(item.id);
+                    return (
+                      <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-3 space-y-2">
+                        <label className="flex items-start gap-2 cursor-pointer">
+                          <input type="checkbox" checked={checked} onChange={(e) => {
+                            const n = new Set(selectedIds);
+                            e.target.checked ? n.add(item.id) : n.delete(item.id);
+                            setSelectedIds(n);
+                          }} className="mt-0.5 accent-emerald-500" />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-800">{eq?.name ?? item.product_code}</p>
+                            <p className="text-xs text-gray-400">{eq?.category}{item.rental_price ? ` / ¥${item.rental_price.toLocaleString()}` : ""}</p>
+                          </div>
+                          <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${STATUS_COLOR[item.status]}`}>{STATUS_LABEL[item.status]}</span>
+                        </label>
+                        {checked && (
+                          <div className="pl-6">
+                            <label className="text-xs text-gray-500 mr-2">変更区分：</label>
+                            <select value={changeTypes[item.id] ?? "新規納品"}
+                              onChange={(e) => setChangeTypes((p) => ({ ...p, [item.id]: e.target.value }))}
+                              className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none">
+                              {CHANGE_TYPE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold text-gray-500">基本情報</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">作成日</label>
+                  <input type="date" value={creationDate} onChange={(e) => setCreationDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">相談日</label>
+                  <input type="date" value={consultationDate} onChange={(e) => setConsultationDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">性別</label>
+                  <select value={gender} onChange={(e) => setGender(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400">
+                    <option value="">未選択</option>
+                    <option value="男">男</option>
+                    <option value="女">女</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">生年月日</label>
+                  <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">認定期間（開始日）</label>
+                <input type="date" value={certStartDate} onChange={(e) => setCertStartDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">相談者氏名</label>
+                  <input value={consultantName} onChange={(e) => setConsultantName(e.target.value)} placeholder="山田花子"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">続柄</label>
+                  <input value={consultantRelation} onChange={(e) => setConsultantRelation(e.target.value)} placeholder="長女"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">モニタリング対象月</label>
+                <input value={monitoringMonths} onChange={(e) => setMonitoringMonths(e.target.value)} placeholder="例：3月、6月、9月、12月"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto bg-gray-100 p-4">
+            <div id="care-plan-print-content" className="bg-white p-8 max-w-[794px] mx-auto shadow"
+              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "9pt" }}>
+
+              {/* ===シート1: 基本情報=== */}
+              <div style={{ pageBreakAfter: "always" as const }}>
+                <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>個別援助計画書</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ border: "none", width: "50%" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
+                      <td style={{ border: "none", textAlign: "right" as const }}>担当者：{companyInfo.staffName}　</td>
+                    </tr>
+                    <tr>
+                      <td style={{ border: "none" }}>事業所名：{companyInfo.companyName}</td>
+                      <td style={{ border: "none", textAlign: "right" as const }}>事業所番号：{companyInfo.businessNumber}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
+                      <td style={TD} colSpan={2}>{client.name}　様</td>
+                      <th style={{ ...TH, width: "60px" }}>フリガナ</th>
+                      <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>性　別</th>
+                      <td style={{ ...TD, width: "50px" }}>{gender || "　"}</td>
+                      <th style={{ ...TH, width: "70px" }}>生年月日</th>
+                      <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
+                      <th style={{ ...TH, width: "60px" }}>介護度</th>
+                      <td style={{ ...TD, width: "70px" }}>{client.care_level ?? ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>認定期間</th>
+                      <td style={TD} colSpan={3}>
+                        {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date + "T00:00:00")) : "　"}
+                      </td>
+                      <th style={TH}>給付割合</th>
+                      <td style={TD}>{client.benefit_rate ?? ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>住　所</th>
+                      <td style={TD} colSpan={5}>{client.address ?? ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>電話番号</th>
+                      <td style={TD} colSpan={2}>{client.phone ?? client.mobile ?? ""}</td>
+                      <th style={TH}>居宅支援事業所</th>
+                      <td style={TD} colSpan={2}>{client.care_manager_org ?? ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>担当CM</th>
+                      <td style={TD} colSpan={5}>{client.care_manager ?? ""}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <th style={{ ...TH, width: "70px" }}>相談内容</th>
+                      <th style={{ ...TH, width: "60px" }}>相談者</th>
+                      <td style={TD}>{consultantName}</td>
+                      <th style={{ ...TH, width: "40px" }}>続柄</th>
+                      <td style={{ ...TD, width: "70px" }}>{consultantRelation}</td>
+                      <th style={{ ...TH, width: "55px" }}>相談日</th>
+                      <td style={TD}>{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : ""}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【選定した福祉用具】</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <thead>
+                    <tr>
+                      {["No", "種目", "機種（型式）", "単位数", "選定理由", "変更区分"].map((h, i) => (
+                        <th key={h} style={{ ...TH, width: i === 0 ? "28px" : i === 3 ? "44px" : i === 5 ? "65px" : undefined }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedItems.map((item, idx) => {
+                      const eq = getEq(item.product_code);
+                      return (
+                        <tr key={item.id}>
+                          <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
+                          <td style={TD}>{eq?.category ?? ""}</td>
+                          <td style={TD}>{eq?.name ?? item.product_code}</td>
+                          <td style={{ ...TD, textAlign: "center" as const }}>{eq?.rental_price ? Math.round(eq.rental_price / 10) : ""}</td>
+                          <td style={TD}>{eq?.selection_reason ?? ""}</td>
+                          <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? "新規納品"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【ADL・身体状況】（印刷後に✓を記入してください）</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>項目</th>
+                      {["自立", "見守り", "一部介助", "全介助"].map((h) => (
+                        <th key={h} style={{ ...TH, width: "60px" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {["起き上がり", "立ち上がり", "移乗", "歩行", "排泄", "入浴", "食事", "整容"].map((adl) => (
+                      <tr key={adl}>
+                        <td style={TD}>{adl}</td>
+                        <td style={{ ...TD, height: "18px" }}></td>
+                        <td style={TD}></td>
+                        <td style={TD}></td>
+                        <td style={TD}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <th style={{ ...TH, width: "110px" }}>モニタリング対象月</th>
+                      <td style={TD}>{monitoringMonths}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【留意点】</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "8px" }}>
+                  <tbody>
+                    {selectedCategories.length === 0 ? (
+                      <tr><td style={{ ...TD, minHeight: "40px" }}></td></tr>
+                    ) : selectedCategories.map((cat) => {
+                      const tmpl = templates.find((t) => t.category === cat);
+                      return (
+                        <tr key={cat}>
+                          <th style={{ ...TH, width: "80px", verticalAlign: "top" as const }}>{cat}</th>
+                          <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.precautions ?? ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "8px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
+                  {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                </div>
+              </div>
+
+              {/* ===シート2: 利用計画=== */}
+              <div>
+                <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>個別援助計画書（利用計画）</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
+                      <td style={TD}>{client.name}　様</td>
+                      <th style={{ ...TH, width: "55px" }}>作成日</th>
+                      <td style={TD}>{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : ""}</td>
+                    </tr>
+                    <tr>
+                      <th style={TH}>事業所名</th>
+                      <td style={TD}>{companyInfo.companyName}</td>
+                      <th style={TH}>担当者</th>
+                      <td style={TD}>{companyInfo.staffName}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【選定した福祉用具一覧】</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <thead>
+                    <tr>
+                      {["No", "種目", "機種（型式）", "貸与価格", "変更区分"].map((h, i) => (
+                        <th key={h} style={{ ...TH, width: i === 0 ? "28px" : i === 3 ? "75px" : i === 4 ? "65px" : undefined }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedItems.map((item, idx) => {
+                      const eq = getEq(item.product_code);
+                      const price = item.rental_price ?? eq?.rental_price;
+                      return (
+                        <tr key={item.id}>
+                          <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
+                          <td style={TD}>{eq?.category ?? ""}</td>
+                          <td style={TD}>{eq?.name ?? item.product_code}</td>
+                          <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
+                          <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【福祉用具利用目標】</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    {selectedCategories.length === 0 ? (
+                      <tr><td style={{ ...TD, minHeight: "40px" }}></td></tr>
+                    ) : selectedCategories.map((cat) => {
+                      const tmpl = templates.find((t) => t.category === cat);
+                      return (
+                        <tr key={cat}>
+                          <th style={{ ...TH, width: "80px", verticalAlign: "top" as const }}>{cat}</th>
+                          <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.goals ?? ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "16px 0 4px" }}>【同意署名欄】</p>
+                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ ...TD, width: "40%" }}>
+                        <p style={{ marginBottom: "4px" }}>上記内容について説明を受け、同意します。</p>
+                        <p>　年　月　日</p>
+                        <p style={{ marginTop: "20px" }}>利用者氏名：</p>
+                      </td>
+                      <td style={{ ...TD, width: "30%", height: "80px" }}>
+                        <p style={{ marginBottom: "4px" }}>代理人（続柄：　　　）</p>
+                        <p style={{ marginTop: "30px" }}>署名：</p>
+                      </td>
+                      <td style={{ ...TD, width: "30%" }}>
+                        <p style={{ marginBottom: "4px" }}>福祉用具専門相談員</p>
+                        <p style={{ marginTop: "30px" }}>署名：</p>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "8px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
+                  {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Proposal Modal ──────────────────────────────────────────────────────────
+
+function ProposalModal({
+  client,
+  clientItems,
+  equipment,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [step, setStep] = useState<1 | 2>(1);
+  const selectableItems = clientItems.filter((i) =>
+    ["ordered", "delivered", "trial", "rental_started"].includes(i.status)
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(selectableItems.map((i) => i.id)));
+  const [creationDate, setCreationDate] = useState(todayStr);
+  const [height, setHeight] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
+  const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+
+  const handlePrint = () => {
+    const el = document.getElementById("proposal-print-content");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>選定提案書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:10mm 12mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 5px;vertical-align:middle}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveClientDocument({
+        tenant_id: tenantId, client_id: client.id, type: "proposal",
+        title: `選定提案書 ${creationDate}`,
+        params: { creationDate, selectedIds: [...selectedIds], height },
+      });
+      onSaved?.();
+    } finally { setSaving(false); }
+  };
+
+  const TD: React.CSSProperties = { border: "1px solid #555", padding: "3px 6px", verticalAlign: "middle" as const };
+  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "3px 6px", textAlign: "center" as const, whiteSpace: "nowrap" as const, verticalAlign: "middle" as const };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">選定提案書</h2>
+          {step === 1 && (
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => setStep(2)}
+              className="px-4 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40"
+            >プレビュー →</button>
+          )}
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {step === 1 ? (
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">提案する用具を選択</h3>
+              {selectableItems.length === 0 ? (
+                <p className="text-sm text-gray-400">対象となる用具がありません</p>
+              ) : (
+                <div className="space-y-2">
+                  {selectableItems.map((item) => {
+                    const eq = getEq(item.product_code);
+                    const checked = selectedIds.has(item.id);
+                    return (
+                      <label key={item.id} className="flex items-start gap-2 bg-white rounded-xl border border-gray-100 p-3 cursor-pointer">
+                        <input type="checkbox" checked={checked} onChange={(e) => {
+                          const n = new Set(selectedIds);
+                          e.target.checked ? n.add(item.id) : n.delete(item.id);
+                          setSelectedIds(n);
+                        }} className="mt-0.5 accent-blue-500" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-gray-800">{eq?.name ?? item.product_code}</p>
+                          <p className="text-xs text-gray-400">
+                            {eq?.category}{item.rental_price ? ` / ¥${item.rental_price.toLocaleString()}` : ""}
+                            {(eq?.comparison_product_codes?.length ?? 0) > 0 ? ` / 比較商品 ${eq!.comparison_product_codes.length}件` : ""}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full ${STATUS_COLOR[item.status]}`}>{STATUS_LABEL[item.status]}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold text-gray-500">基本情報</h3>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">作成日</label>
+                <input type="date" value={creationDate} onChange={(e) => setCreationDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">身長（cm）</label>
+                <input value={height} onChange={(e) => setHeight(e.target.value)} placeholder="例：155"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto bg-gray-100 p-4">
+            <div id="proposal-print-content" className="bg-white p-8 max-w-[794px] mx-auto shadow"
+              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "9pt" }}>
+              <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>選定提案書</p>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                <tbody>
+                  <tr>
+                    <td style={{ border: "none", width: "50%" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
+                    <td style={{ border: "none", textAlign: "right" as const }}>担当者：{companyInfo.staffName}　</td>
+                  </tr>
+                  <tr>
+                    <td style={{ border: "none" }}>事業所名：{companyInfo.companyName}</td>
+                    <td style={{ border: "none", textAlign: "right" as const }}>事業所番号：{companyInfo.businessNumber}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                <tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
+                    <td style={TD}>{client.name}　様</td>
+                    <th style={{ ...TH, width: "60px" }}>フリガナ</th>
+                    <td style={TD}>{client.furigana ?? ""}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>介護度</th>
+                    <td style={{ ...TD, width: "80px" }}>{client.care_level ?? ""}</td>
+                    <th style={TH}>身長</th>
+                    <td style={TD}>{height ? `${height} cm` : ""}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>担当者</th>
+                    <td style={TD}>{companyInfo.staffName}</td>
+                    <th style={TH}>居宅支援事業所</th>
+                    <td style={TD}>{client.care_manager_org ?? ""}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>担当CM</th>
+                    <td style={TD} colSpan={3}>{client.care_manager ?? ""}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【貸与を提案する福祉用具】</p>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+                <thead>
+                  <tr>
+                    {["No", "種目名", "商品名", "提案する理由", "採　否", "貸与価格"].map((h, i) => (
+                      <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 1 ? "80px" : i === 4 ? "48px" : i === 5 ? "70px" : undefined }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedItems.map((item, idx) => {
+                    const eq = getEq(item.product_code);
+                    const price = item.rental_price ?? eq?.rental_price;
+                    const compCodes = (eq?.comparison_product_codes ?? []).filter((c) => equipment.find((e) => e.product_code === c));
+                    const rowspan = 1 + compCodes.length;
+                    return (
+                      <Fragment key={item.id}>
+                        <tr>
+                          <td style={{ ...TD, textAlign: "center" as const }} rowSpan={rowspan}>{idx + 1}</td>
+                          <td style={TD} rowSpan={rowspan}>{eq?.category ?? ""}</td>
+                          <td style={{ ...TD, fontWeight: "bold" }}>◎ {eq?.name ?? item.product_code}</td>
+                          <td style={TD}>{eq?.proposal_reason ?? eq?.selection_reason ?? ""}</td>
+                          <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
+                          <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
+                        </tr>
+                        {compCodes.map((compCode) => {
+                          const compEq = equipment.find((e) => e.product_code === compCode);
+                          if (!compEq) return null;
+                          return (
+                            <tr key={compCode}>
+                              <td style={TD}>{compEq.name}</td>
+                              <td style={TD}>{compEq.selection_reason ?? ""}</td>
+                              <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
+                              <td style={{ ...TD, textAlign: "right" as const }}>{compEq.rental_price ? `¥${compEq.rental_price.toLocaleString()}` : ""}</td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "12px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
+                {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

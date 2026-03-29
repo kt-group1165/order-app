@@ -82,6 +82,17 @@ export type Member = {
   created_at: string;
 };
 
+// 個別援助計画書テンプレート（種目別）
+export type CarePlanTemplate = {
+  id: string;
+  tenant_id: string;
+  category: string;
+  goals: string;
+  precautions: string;
+  created_at: string;
+  updated_at: string;
+};
+
 // 利用者書類履歴
 export type ClientDocument = {
   id: string;
