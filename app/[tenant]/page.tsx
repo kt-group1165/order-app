@@ -493,12 +493,11 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
   const today = new Date().toISOString().split("T")[0];
 
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"], parentOrder?: OrderWithItems) => {
-    // レンタル中・解約済は日付入力が必要
-    if (nextStatus === "rental_started" || nextStatus === "terminated") {
-      // デフォルト日付: レンタル開始→納品日 or 発注日、解約→今日
+    // 納品済・レンタル中・解約済は日付入力
+    if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
       let defaultDate = today;
       if (nextStatus === "rental_started" && parentOrder) {
-        defaultDate = parentOrder.delivery_date ?? parentOrder.ordered_at?.split("T")[0] ?? today;
+        defaultDate = parentOrder.delivery_date ?? item.delivered_at ?? parentOrder.ordered_at?.split("T")[0] ?? today;
       }
       setDateInput({ item, nextStatus, date: defaultDate });
     } else {
@@ -530,6 +529,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
     try {
       for (const [, change] of pendingChanges) {
         const extra: Record<string, string> = {};
+        if (change.newStatus === "delivered" && change.date) extra.delivered_at = change.date;
         if (change.newStatus === "rental_started" && change.date) extra.rental_start_date = change.date;
         if (change.newStatus === "terminated" && change.date) extra.rental_end_date = change.date;
         await updateOrderItemStatus(
@@ -717,10 +717,15 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                                       <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap w-[5.5rem]">
                                         {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
                                       </td>
-                                      {/* 開始・終了日（未保存分も仮表示） */}
+                                      {/* 納品日・開始・終了日（未保存分も仮表示） */}
                                       <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">
+                                        {(pending?.newStatus === "delivered" ? displayDate : item.delivered_at) && (
+                                          <span className={`mr-2 ${pending?.newStatus === "delivered" ? "text-amber-600" : ""}`}>
+                                            納品: {pending?.newStatus === "delivered" ? displayDate : item.delivered_at}
+                                          </span>
+                                        )}
                                         {(pending?.newStatus === "rental_started" ? displayDate : item.rental_start_date) && (
-                                          <span className={`mr-3 ${pending?.newStatus === "rental_started" ? "text-amber-600" : ""}`}>
+                                          <span className={`mr-2 ${pending?.newStatus === "rental_started" ? "text-amber-600" : ""}`}>
                                             開始: {pending?.newStatus === "rental_started" ? displayDate : item.rental_start_date}
                                           </span>
                                         )}
@@ -765,7 +770,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                                         <td colSpan={6} className="px-3 pb-2">
                                           <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
                                             <p className="text-xs font-medium text-emerald-700">
-                                              {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
+                                              {dateInput.nextStatus === "delivered" ? "納品日（任意）" : dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
                                             </p>
                                             <input
                                               type="date"
@@ -775,8 +780,8 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                                             />
                                             <div className="flex gap-2">
                                               <button
-                                                disabled={!dateInput.date}
-                                                onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
+                                                disabled={dateInput.nextStatus !== "delivered" && !dateInput.date}
+                                                onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date || undefined)}
                                                 className="flex-1 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
                                               >
                                                 確定
@@ -2646,42 +2651,55 @@ function NewOrderModal({
             </div>
 
             {/* 候補リスト */}
-            <div className="flex-1 overflow-y-auto px-4 pb-2">
+            <div className="flex-1 overflow-y-auto pb-2">
               {filteredEquipModal.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-6">
                   {equipModalSearch ? "該当する用具がありません" : "用具マスタにデータがありません"}
                 </p>
               ) : (
-                <div className="space-y-1.5">
-                  {filteredEquipModal.slice(0, 50).map((eq) => {
-                    const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
-                    return (
-                      <button
-                        key={eq.product_code}
-                        onClick={() => {
-                          setEquipModalSelected((prev) =>
-                            selected
-                              ? prev.filter((s) => s.product_code !== eq.product_code)
-                              : [...prev, eq]
-                          );
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-left transition-colors ${
-                          selected
-                            ? "bg-emerald-50 border-emerald-300"
-                            : "bg-white border-gray-100 hover:bg-gray-50"
-                        }`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>
-                            {eq.name}
-                          </p>
-                          <p className="text-[11px] text-gray-400">{eq.product_code}</p>
-                        </div>
-                        {selected && <CheckCircle2 size={16} className="text-emerald-500 shrink-0 ml-2" />}
-                      </button>
-                    );
-                  })}
-                </div>
+                <table className="w-full table-fixed text-left">
+                  <thead className="bg-gray-50 border-y border-gray-100 sticky top-0">
+                    <tr>
+                      <th className="pl-4 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
+                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[6rem]">コード</th>
+                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
+                      <th className="py-1.5 pr-3 text-[10px] font-semibold text-gray-400 w-[5.5rem] text-right">価格/月</th>
+                      <th className="w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredEquipModal.slice(0, 50).map((eq) => {
+                      const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
+                      return (
+                        <tr
+                          key={eq.product_code}
+                          onClick={() => setEquipModalSelected((prev) =>
+                            selected ? prev.filter((s) => s.product_code !== eq.product_code) : [...prev, eq]
+                          )}
+                          className={`cursor-pointer transition-colors ${selected ? "bg-emerald-50" : "hover:bg-gray-50"}`}
+                        >
+                          <td className="pl-4 py-2.5 max-w-0">
+                            <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
+                          </td>
+                          <td className="py-2.5 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
+                          <td className="py-2.5 px-2 w-[5rem]">
+                            {eq.category && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
+                                {eq.category}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 pr-3 text-sm font-semibold text-emerald-600 w-[5.5rem] text-right whitespace-nowrap">
+                            {eq.rental_price ? `¥${eq.rental_price.toLocaleString()}` : ""}
+                          </td>
+                          <td className="py-2.5 pr-3 w-8 text-center">
+                            {selected && <CheckCircle2 size={15} className="text-emerald-500 inline" />}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
 

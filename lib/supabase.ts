@@ -109,6 +109,7 @@ export type OrderItem = {
   rental_start_decided_at: string | null;
   rental_start_date: string | null;
   rental_end_date: string | null;
+  delivered_at: string | null;
   cancelled_at: string | null;
   notes: string | null;
   created_at: string;

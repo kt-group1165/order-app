@@ -59,6 +59,7 @@ export async function updateOrderItemStatus(
     rental_start_date?: string;
     rental_end_date?: string;
     rental_start_decided_at?: string;
+    delivered_at?: string;
   }
 ): Promise<void> {
   const updates: Record<string, string> = {
