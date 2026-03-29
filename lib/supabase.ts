@@ -62,6 +62,16 @@ export type EquipmentPrice = {
   updated_at: string;
 };
 
+// 価格改定履歴
+export type EquipmentPriceHistory = {
+  id: string;
+  tenant_id: string;
+  product_code: string;
+  rental_price: number;
+  valid_from: string; // DATE "YYYY-MM-DD"
+  created_at: string;
+};
+
 // 担当者（calendar-appと共有）
 export type Member = {
   id: string;

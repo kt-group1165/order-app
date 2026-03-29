@@ -1,4 +1,4 @@
-import { supabase, Equipment, Supplier, EquipmentPrice } from "./supabase";
+import { supabase, Equipment, Supplier, EquipmentPrice, EquipmentPriceHistory } from "./supabase";
 
 export async function getEquipment(tenantId: string): Promise<Equipment[]> {
   const all: Equipment[] = [];
@@ -375,6 +375,55 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
     });
   }
   return rows;
+}
+
+// ─── 価格改定履歴 ─────────────────────────────────────────────────────────────
+
+/** 指定テナント・用具コードの価格履歴を取得 */
+export async function getPriceHistory(
+  tenantId: string,
+  productCodes: string[]
+): Promise<EquipmentPriceHistory[]> {
+  if (productCodes.length === 0) return [];
+  const { data, error } = await supabase
+    .from("equipment_price_history")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .in("product_code", productCodes)
+    .order("valid_from", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** 価格改定を記録する */
+export async function addPriceHistory(
+  tenantId: string,
+  productCode: string,
+  rentalPrice: number,
+  validFrom: string // "YYYY-MM-DD"
+): Promise<void> {
+  const { error } = await supabase
+    .from("equipment_price_history")
+    .insert({ tenant_id: tenantId, product_code: productCode, rental_price: rentalPrice, valid_from: validFrom });
+  if (error) throw error;
+}
+
+/**
+ * 指定月（yearMonth = "YYYY-MM"）時点での有効価格を返す。
+ * 履歴がない場合は null。
+ */
+export function getPriceForMonth(
+  history: EquipmentPriceHistory[],
+  productCode: string,
+  yearMonth: string
+): number | null {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+  const records = history
+    .filter((h) => h.product_code === productCode && h.valid_from <= monthEnd)
+    .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
+  return records[0]?.rental_price ?? null;
 }
 
 /** sort_order を一括更新（並び替え保存用） */

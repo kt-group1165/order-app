@@ -26,9 +26,9 @@ import {
   FileText,
   Lock,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory } from "@/lib/supabase";
 import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, type ImportResult } from "@/lib/equipment";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { verifyPin } from "@/lib/settings";
@@ -1191,17 +1191,19 @@ function EquipmentDetail({
   const [priceLimit, setPriceLimit] = useState(item?.price_limit ? String(item.price_limit) : "");
   const [selectionReason, setSelectionReason] = useState(item?.selection_reason ?? "");
   const [proposalReason, setProposalReason] = useState(item?.proposal_reason ?? "");
+  const [priceEffectiveDate, setPriceEffectiveDate] = useState(new Date().toISOString().split("T")[0]);
 
   const handleSave = async () => {
     if (!name.trim()) { setError("用具名は必須です"); return; }
     setSaving(true);
     setError("");
     try {
+      const newRentalPrice = rentalPrice ? parseFloat(rentalPrice) : null;
       const payload = {
         name: name.trim(),
         tais_code: taisCode.trim() || null,
         category: category.trim() || null,
-        rental_price: rentalPrice ? parseFloat(rentalPrice) : null,
+        rental_price: newRentalPrice,
         national_avg_price: nationalAvg ? parseFloat(nationalAvg) : null,
         price_limit: priceLimit ? parseFloat(priceLimit) : null,
         selection_reason: selectionReason.trim() || null,
@@ -1210,6 +1212,13 @@ function EquipmentDetail({
       const saved = isNew
         ? await createEquipmentItem(tenantId, payload)
         : await updateEquipment(item!.id, payload);
+      // 価格が変更された場合（または新規）、履歴を記録
+      if (newRentalPrice && priceEffectiveDate) {
+        const oldPrice = item?.rental_price ?? null;
+        if (isNew || newRentalPrice !== oldPrice) {
+          await addPriceHistory(tenantId, saved.product_code, newRentalPrice, priceEffectiveDate);
+        }
+      }
       onSave(saved);
       setIsEditing(false);
     } catch {
@@ -1230,6 +1239,7 @@ function EquipmentDetail({
     setPriceLimit(item!.price_limit ? String(item!.price_limit) : "");
     setSelectionReason(item!.selection_reason ?? "");
     setProposalReason(item!.proposal_reason ?? "");
+    setPriceEffectiveDate(new Date().toISOString().split("T")[0]);
     setIsEditing(false);
     setError("");
   };
@@ -1270,7 +1280,40 @@ function EquipmentDetail({
               { label: "用具名 *", value: name, setter: setName, placeholder: "例：電動ベッド", type: "text" },
               { label: "TAISコード", value: taisCode, setter: setTaisCode, placeholder: "例：07-0001-01", type: "text" },
               { label: "カテゴリ", value: category, setter: setCategory, placeholder: "例：ベッド", type: "text" },
-              { label: "レンタル価格（円/月）", value: rentalPrice, setter: setRentalPrice, placeholder: "例：15000", type: "number" },
+            ].map(({ label, value, setter, placeholder, type }) => (
+              <div key={label}>
+                <label className="text-xs font-medium text-gray-600 block mb-1">{label}</label>
+                <input
+                  value={value}
+                  onChange={(e) => setter(e.target.value)}
+                  placeholder={placeholder}
+                  type={type}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+                />
+              </div>
+            ))}
+            {/* レンタル価格 + 改定日 */}
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">レンタル価格（円/月）</label>
+              <input
+                value={rentalPrice}
+                onChange={(e) => setRentalPrice(e.target.value)}
+                placeholder="例：15000"
+                type="number"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">価格の適用開始日</label>
+              <input
+                type="date"
+                value={priceEffectiveDate}
+                onChange={(e) => setPriceEffectiveDate(e.target.value)}
+                className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">価格を変更した場合のみ履歴に記録されます</p>
+            </div>
+            {[
               { label: "全国平均価格（円）", value: nationalAvg, setter: setNationalAvg, placeholder: "例：12000", type: "number" },
               { label: "限度額（円）", value: priceLimit, setter: setPriceLimit, placeholder: "例：18000", type: "number" },
             ].map(({ label, value, setter, placeholder, type }) => (
@@ -1691,6 +1734,7 @@ function ClientDetail({
   onBack: () => void;
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
+  const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"current" | "monthly">("current");
   const [yearMonth, setYearMonth] = useState(() => {
@@ -1736,9 +1780,15 @@ function ClientDetail({
           .from("order_items")
           .select("*")
           .in("order_id", orderIds);
-        setClientItems(items ?? []);
+        const loaded = items ?? [];
+        setClientItems(loaded);
+        // 価格履歴をロード
+        const codes = [...new Set(loaded.map((i) => i.product_code))];
+        const history = await getPriceHistory(tenantId, codes);
+        setPriceHistory(history);
       } else {
         setClientItems([]);
+        setPriceHistory([]);
       }
     } finally {
       setLoading(false);
@@ -1813,7 +1863,7 @@ function ClientDetail({
   };
 
   // 用具行共通（ステータス変更ボタン付き）- table行として使用
-  const ItemCard = ({ item, dim = false }: { item: OrderItem; dim?: boolean }) => (
+  const ItemCard = ({ item, dim = false, priceOverride }: { item: OrderItem; dim?: boolean; priceOverride?: number }) => (
     <Fragment>
       <tr className={dim ? "opacity-75" : ""}>
         {/* ステータス（左ボーダー付き） */}
@@ -1830,11 +1880,11 @@ function ClientDetail({
         </td>
         {/* レンタル価格 */}
         <td className="py-2 pr-3 w-[6rem] whitespace-nowrap">
-          {item.rental_price ? (
+          {(() => { const p = priceOverride ?? item.rental_price; return p ? (
             <span className="text-sm font-bold text-emerald-600">
-              ¥{item.rental_price.toLocaleString()}<span className="text-xs font-normal">/月</span>
+              ¥{p.toLocaleString()}<span className="text-xs font-normal">/月</span>
             </span>
-          ) : null}
+          ) : null; })()}
         </td>
         {/* 開始・終了日 */}
         <td className="py-2 pr-2 w-[15rem] text-xs text-gray-400 whitespace-nowrap">
@@ -2013,7 +2063,9 @@ function ClientDetail({
             ) : (() => {
               const activeMonthly = monthlyItems.filter((i) => i.status !== "terminated");
               const terminatedMonthly = monthlyItems.filter((i) => i.status === "terminated");
-              const activeTotal = activeMonthly.reduce((s, i) => s + (i.rental_price ?? 0), 0);
+              const getHistoricalPrice = (item: OrderItem) =>
+                getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? item.rental_price ?? 0;
+              const activeTotal = activeMonthly.reduce((s, i) => s + getHistoricalPrice(i), 0);
               return (
                 <>
                   {/* レンタル中 */}
@@ -2022,7 +2074,11 @@ function ClientDetail({
                       <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5 px-1">レンタル中</p>
                       <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left">
                         <tbody className="divide-y divide-dashed divide-gray-200">
-                          {activeMonthly.map((item) => <ItemCard key={item.id} item={item} />)}
+                          {activeMonthly.map((item) => (
+                            <ItemCard key={item.id} item={item}
+                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? undefined}
+                            />
+                          ))}
                         </tbody>
                       </table>
                       {/* 月額合計 */}
@@ -2040,7 +2096,11 @@ function ClientDetail({
                       <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5 px-1">解約済</p>
                       <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left">
                         <tbody className="divide-y divide-dashed divide-gray-200">
-                          {terminatedMonthly.map((item) => <ItemCard key={item.id} item={item} dim />)}
+                          {terminatedMonthly.map((item) => (
+                            <ItemCard key={item.id} item={item} dim
+                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? undefined}
+                            />
+                          ))}
                         </tbody>
                       </table>
                     </div>
