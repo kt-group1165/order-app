@@ -2173,6 +2173,7 @@ function NewOrderModal({
   const [items, setItems] = useState<NewOrderItem[]>([]);
   const [showEquipModal, setShowEquipModal] = useState(false);
   const [equipModalSearch, setEquipModalSearch] = useState("");
+  const [equipModalCategory, setEquipModalCategory] = useState<string | null>(null);
   const [equipModalSelected, setEquipModalSelected] = useState<Equipment[]>([]);
 
   // 新規フィールド
@@ -2189,7 +2190,10 @@ function NewOrderModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const filteredEquipModal = equipment.filter((e) => matchEquipment(e, equipModalSearch));
+  const equipCategories = Array.from(new Set(equipment.map((e) => e.category).filter(Boolean))) as string[];
+  const filteredEquipModal = equipment.filter((e) =>
+    matchEquipment(e, equipModalSearch) && (equipModalCategory === null || e.category === equipModalCategory)
+  );
 
   // 戻るボタンでモーダルを閉じる
   useEffect(() => {
@@ -2510,7 +2514,7 @@ function NewOrderModal({
             {/* 用具追加ボタン */}
             <div>
               <button
-                onClick={() => { setShowEquipModal(true); setEquipModalSearch(""); setEquipModalSelected([]); }}
+                onClick={() => { setShowEquipModal(true); setEquipModalSearch(""); setEquipModalCategory(null); setEquipModalSelected([]); }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-300 text-emerald-700 text-sm font-medium bg-emerald-50 hover:bg-emerald-100 transition-colors"
               >
                 <Plus size={15} />
@@ -2633,8 +2637,8 @@ function NewOrderModal({
               <button onClick={() => setShowEquipModal(false)}><X size={20} className="text-gray-400" /></button>
             </div>
 
-            {/* 検索 */}
-            <div className="px-4 pt-3 pb-2 shrink-0">
+            {/* 検索 + 種目フィルター */}
+            <div className="px-4 pt-3 pb-2 shrink-0 space-y-2">
               <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
                 <Search size={14} className="text-gray-400 shrink-0" />
                 <input
@@ -2648,6 +2652,33 @@ function NewOrderModal({
                   <button onClick={() => setEquipModalSearch("")}><X size={14} className="text-gray-400" /></button>
                 )}
               </div>
+              {equipCategories.length > 0 && (
+                <div className="flex gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => setEquipModalCategory(null)}
+                    className={`text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors ${
+                      equipModalCategory === null
+                        ? "bg-emerald-500 text-white border-emerald-500"
+                        : "bg-white text-gray-500 border-gray-200"
+                    }`}
+                  >
+                    全種目
+                  </button>
+                  {equipCategories.map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setEquipModalCategory(equipModalCategory === cat ? null : cat)}
+                      className={`text-[11px] px-2.5 py-1 rounded-full border font-medium transition-colors ${
+                        equipModalCategory === cat
+                          ? "bg-emerald-500 text-white border-emerald-500"
+                          : "bg-white text-gray-500 border-gray-200"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 候補リスト */}
@@ -2660,15 +2691,15 @@ function NewOrderModal({
                 <table className="w-full table-fixed text-left">
                   <thead className="bg-gray-50 border-y border-gray-100 sticky top-0">
                     <tr>
-                      <th className="pl-4 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
+                      <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
+                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400">用具名</th>
                       <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[6rem]">コード</th>
-                      <th className="py-1.5 px-2 text-[10px] font-semibold text-gray-400 w-[5rem]">種目</th>
                       <th className="py-1.5 pr-3 text-[10px] font-semibold text-gray-400 w-[5.5rem] text-right">価格/月</th>
                       <th className="w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredEquipModal.slice(0, 50).map((eq) => {
+                    {filteredEquipModal.slice(0, 2000).map((eq) => {
                       const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
                       return (
                         <tr
@@ -2678,17 +2709,17 @@ function NewOrderModal({
                           )}
                           className={`cursor-pointer transition-colors ${selected ? "bg-emerald-50" : "hover:bg-gray-50"}`}
                         >
-                          <td className="pl-4 py-2.5 max-w-0">
-                            <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
-                          </td>
-                          <td className="py-2.5 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
-                          <td className="py-2.5 px-2 w-[5rem]">
+                          <td className="pl-3 py-2.5 w-[5rem]">
                             {eq.category && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
                                 {eq.category}
                               </span>
                             )}
                           </td>
+                          <td className="py-2.5 px-2 max-w-0">
+                            <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>{eq.name}</p>
+                          </td>
+                          <td className="py-2.5 px-2 text-[11px] text-gray-400 w-[6rem] whitespace-nowrap">{eq.product_code}</td>
                           <td className="py-2.5 pr-3 text-sm font-semibold text-emerald-600 w-[5.5rem] text-right whitespace-nowrap">
                             {eq.rental_price ? `¥${eq.rental_price.toLocaleString()}` : ""}
                           </td>
@@ -2901,17 +2932,72 @@ function OrderEmailPreviewModal({
 }) {
   const isResend = (order.email_sent_count ?? 0) > 0;
   const client = clients.find((c) => c.id === order.client_id);
-  const supplier = suppliers.find((s) => s.id === order.supplier_id);
-  const { subject, preview, emailBody } =
-    emailType === "new_order"
-      ? buildOrderContent(order, orderItems, client, equipment, members, isResend)
-      : buildStatusChangeContent(emailType, order, orderItems, client, equipment, isResend);
 
-  const [sending, setSending] = useState(false);
+  // 卸会社ごとにアイテムをグループ化（new_order のみ）
+  const supplierGroups: { supplierId: string | null; supplier: Supplier | undefined; items: OrderItem[] }[] = [];
+  if (emailType === "new_order") {
+    const activeItems = orderItems.filter((i) => i.status !== "cancelled");
+    const groupMap = new Map<string, OrderItem[]>();
+    for (const item of activeItems) {
+      const key = item.supplier_id ?? order.supplier_id ?? "__none__";
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(item);
+    }
+    for (const [key, items] of groupMap) {
+      const supplierId = key === "__none__" ? null : key;
+      supplierGroups.push({ supplierId, supplier: suppliers.find((s) => s.id === supplierId), items });
+    }
+  }
+
+  // 送信状態を卸会社IDごとに管理
+  const [sentSet, setSentSet] = useState<Set<string>>(new Set());
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  // ステータス変更メール用（単一）
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSendEmail = async () => {
+  const sendToSupplier = async (groupKey: string, supplierObj: Supplier | undefined, items: OrderItem[]) => {
+    if (!supplierObj?.email) {
+      setErrors((prev) => new Map(prev).set(groupKey, "メールアドレスが設定されていません"));
+      return;
+    }
+    setSendingId(groupKey);
+    setErrors((prev) => { const n = new Map(prev); n.delete(groupKey); return n; });
+    const { subject, emailBody } = buildOrderContent(order, items, client, equipment, members, isResend);
+    try {
+      const res = await fetch("/api/send-order-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: supplierObj.email, subject, body: emailBody }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error);
+      await recordEmailSent(order.id);
+      setSentSet((prev) => new Set(prev).add(groupKey));
+    } catch (e: unknown) {
+      setErrors((prev) => new Map(prev).set(groupKey, e instanceof Error ? e.message : "送信に失敗しました"));
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const sendAll = async () => {
+    for (const g of supplierGroups) {
+      const key = g.supplierId ?? "__none__";
+      if (!sentSet.has(key)) await sendToSupplier(key, g.supplier, g.items);
+    }
+  };
+
+  // ステータス変更メール送信（単一）
+  const { subject: scSubject, preview: scPreview, emailBody: scEmailBody } =
+    emailType !== "new_order"
+      ? buildStatusChangeContent(emailType, order, orderItems, client, equipment, isResend)
+      : { subject: "", preview: "", emailBody: "" };
+
+  const handleSendStatusEmail = async () => {
+    const supplier = suppliers.find((s) => s.id === order.supplier_id);
     if (!supplier?.email) {
       setError("卸会社のメールアドレスが設定されていません。設定タブで登録してください。");
       return;
@@ -2922,7 +3008,7 @@ function OrderEmailPreviewModal({
       const res = await fetch("/api/send-order-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: supplier.email, subject, body: emailBody }),
+        body: JSON.stringify({ to: supplier.email, subject: scSubject, body: scEmailBody }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
@@ -2936,88 +3022,134 @@ function OrderEmailPreviewModal({
   };
 
   const handlePrint = () => {
+    const groups = emailType === "new_order" ? supplierGroups : null;
     const win = window.open("", "_blank", "width=700,height=800");
     if (!win) return;
-    win.document.write(`
-      <html><head><title>発注書</title>
+    const content = groups
+      ? groups.map((g) => {
+          const { subject, emailBody } = buildOrderContent(order, g.items, client, equipment, members, isResend);
+          return `${subject}\n\n${emailBody}`;
+        }).join("\n\n" + "─".repeat(40) + "\n\n")
+      : `${scSubject}\n\n${scEmailBody}`;
+    win.document.write(`<html><head><title>発注書</title>
       <style>body{font-family:sans-serif;padding:32px;white-space:pre-wrap;font-size:14px;line-height:1.7;}</style>
-      </head><body>${subject}\n\n${emailBody}</body></html>
-    `);
+      </head><body>${content}</body></html>`);
     win.document.close();
     win.print();
   };
+
+  const allSent = emailType === "new_order"
+    ? supplierGroups.every((g) => sentSet.has(g.supplierId ?? "__none__"))
+    : sent;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end z-50">
       <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-          <div>
-            <h3 className="font-semibold text-gray-800">
-              発注内容確認{isResend && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">再送</span>}
-            </h3>
-            <p className="text-xs text-gray-400 mt-0.5">
-              送信先：{supplier ? `${supplier.name}${supplier.email ? `（${supplier.email}）` : "（メール未設定）"}` : "卸会社未選択"}
-            </p>
-          </div>
+          <h3 className="font-semibold text-gray-800">
+            発注内容確認{isResend && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">再送</span>}
+          </h3>
           <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
         </div>
 
-        {/* 確認内容（シンプル表示） */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="bg-gray-50 rounded-xl p-4">
-            <pre className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{preview}</pre>
-          </div>
-
-          {error && (
-            <div className="mt-3 flex items-start gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              {error}
-            </div>
-          )}
-
-          {sent && (
-            <div className="mt-3 flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 rounded-xl p-3">
-              <CheckCircle2 size={14} />
-              メールを送信しました
-            </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {emailType === "new_order" ? (
+            /* 卸会社ごとにカード表示 */
+            supplierGroups.map((g) => {
+              const key = g.supplierId ?? "__none__";
+              const { subject, preview } = buildOrderContent(order, g.items, client, equipment, members, isResend);
+              const isSent = sentSet.has(key);
+              const isSending = sendingId === key;
+              const err = errors.get(key);
+              return (
+                <div key={key} className={`border rounded-xl overflow-hidden ${isSent ? "border-emerald-200 bg-emerald-50/30" : "border-gray-200"}`}>
+                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">
+                        {g.supplier?.name ?? "卸会社未設定"}
+                      </p>
+                      <p className="text-[11px] text-gray-400">
+                        {g.supplier?.email ?? "メールアドレス未設定"} · {g.items.length}品目
+                      </p>
+                    </div>
+                    {isSent ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                        <CheckCircle2 size={14} />送信済
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => sendToSupplier(key, g.supplier, g.items)}
+                        disabled={isSending || sendingId !== null}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white text-xs font-medium rounded-lg disabled:opacity-40"
+                      >
+                        {isSending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                        送信
+                      </button>
+                    )}
+                  </div>
+                  <div className="px-3 py-2">
+                    <pre className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{preview}</pre>
+                  </div>
+                  {err && (
+                    <div className="flex items-center gap-1.5 text-xs text-red-500 bg-red-50 px-3 py-2 border-t border-red-100">
+                      <AlertCircle size={12} className="shrink-0" />{err}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            /* ステータス変更メール（単一） */
+            <>
+              <div className="bg-gray-50 rounded-xl p-4">
+                <pre className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{scPreview}</pre>
+              </div>
+              {error && (
+                <div className="flex items-start gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" />{error}
+                </div>
+              )}
+              {sent && (
+                <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 rounded-xl p-3">
+                  <CheckCircle2 size={14} />メールを送信しました
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        {/* ボタン */}
         <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0 space-y-2">
-          {sent ? (
-            <button
-              onClick={onDone}
-              className="w-full py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 size={16} />
-              閉じる
+          {allSent ? (
+            <button onClick={onDone} className="w-full py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium flex items-center justify-center gap-2">
+              <CheckCircle2 size={16} />閉じる
             </button>
+          ) : emailType === "new_order" ? (
+            <>
+              {supplierGroups.length > 1 && (
+                <button
+                  onClick={sendAll}
+                  disabled={sendingId !== null}
+                  className="w-full py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium disabled:opacity-40 flex items-center justify-center gap-2"
+                >
+                  {sendingId !== null ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                  全卸会社に一括送信
+                </button>
+              )}
+              <button onClick={handlePrint} className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium flex items-center justify-center gap-2">
+                <Printer size={16} />印刷（FAX用）
+              </button>
+              {onBack && <button onClick={onBack} className="w-full py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">← 戻る</button>}
+            </>
           ) : (
             <>
-              <button
-                onClick={handleSendEmail}
-                disabled={sending}
-                className="w-full py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium disabled:opacity-40 flex items-center justify-center gap-2"
-              >
+              <button onClick={handleSendStatusEmail} disabled={sending} className="w-full py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium disabled:opacity-40 flex items-center justify-center gap-2">
                 {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                 {isResend ? "再送信する" : "メール送信"}
               </button>
-              <button
-                onClick={handlePrint}
-                className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium flex items-center justify-center gap-2"
-              >
-                <Printer size={16} />
-                印刷（FAX用）
+              <button onClick={handlePrint} className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium flex items-center justify-center gap-2">
+                <Printer size={16} />印刷（FAX用）
               </button>
-              {onBack && (
-                <button
-                  onClick={onBack}
-                  className="w-full py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  ← 戻る
-                </button>
-              )}
+              {onBack && <button onClick={onBack} className="w-full py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">← 戻る</button>}
             </>
           )}
         </div>
