@@ -106,6 +106,7 @@ export type Order = {
   payment_type: "介護" | "自費";
   delivery_date: string | null;
   delivery_time: string | null;
+  delivery_address: string | null;
   delivery_type: "直納" | "自社納品";
   attendance_required: boolean;
   attendee_ids: string[];

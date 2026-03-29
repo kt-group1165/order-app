@@ -309,7 +309,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.7</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v2.8</span>
       </header>
 
       {/* Content */}
@@ -571,6 +571,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
         suppliers={suppliers}
         members={members}
         emailType={previewOrder.emailType ?? "new_order"}
+        tenantId={tenantId}
         onClose={() => { setPreviewOrder(null); load(); }}
         onBack={() => setPreviewOrder(null)}
         onDone={() => { setPreviewOrder(null); load(); }}
@@ -1635,24 +1636,28 @@ const KANA_ROWS = [
 function ClientsTab({ tenantId }: { tenantId: string }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [kanaFilter, setKanaFilter] = useState("");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "history">("list");
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq] = await Promise.all([
+        const [c, items, eq, ords] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
+          getOrders(tenantId),
         ]);
         setClients(c);
         setOrderItems(items);
         setEquipment(eq);
+        setOrders(ords);
       } finally {
         setLoading(false);
       }
@@ -1702,24 +1707,98 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
     );
   }
 
+  // 変更履歴を生成
+  const changeHistory = (() => {
+    type ChangeEvent = { date: string; clientId: string; equipName: string; label: string; color: string };
+    const events: ChangeEvent[] = [];
+    for (const item of orderItems) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order?.client_id) continue;
+      const eq = equipment.find((e) => e.product_code === item.product_code);
+      const name = eq?.name ?? item.product_code;
+      if (item.delivered_at) events.push({ date: item.delivered_at.slice(0, 10), clientId: order.client_id, equipName: name, label: "納品", color: "text-blue-600 bg-blue-50" });
+      if (item.rental_start_date) events.push({ date: item.rental_start_date, clientId: order.client_id, equipName: name, label: "レンタル開始", color: "text-emerald-600 bg-emerald-50" });
+      if (item.rental_end_date) events.push({ date: item.rental_end_date, clientId: order.client_id, equipName: name, label: "解約", color: "text-red-500 bg-red-50" });
+      if (item.cancelled_at) events.push({ date: item.cancelled_at.slice(0, 10), clientId: order.client_id, equipName: name, label: "キャンセル", color: "text-gray-500 bg-gray-100" });
+    }
+    events.sort((a, b) => b.date.localeCompare(a.date));
+    // 利用者ごとにグループ化
+    const map = new Map<string, ChangeEvent[]>();
+    for (const e of events) {
+      if (!map.has(e.clientId)) map.set(e.clientId, []);
+      map.get(e.clientId)!.push(e);
+    }
+    return Array.from(map.entries())
+      .map(([clientId, evts]) => ({ client: clients.find((c) => c.id === clientId), events: evts }))
+      .filter((g) => g.client)
+      .sort((a, b) => (b.events[0]?.date ?? "").localeCompare(a.events[0]?.date ?? ""));
+  })();
+
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
-        <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
-          <Search size={14} className="text-gray-400 shrink-0" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="名前・かな・カナで検索"
-            className="flex-1 bg-transparent text-sm outline-none"
-          />
-          {search && (
-            <button onClick={() => setSearch("")}>
-              <X size={14} className="text-gray-400" />
+        {viewMode === "list" && (
+          <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
+            <Search size={14} className="text-gray-400 shrink-0" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="名前・かな・カナで検索"
+              className="flex-1 bg-transparent text-sm outline-none"
+            />
+            {search && (
+              <button onClick={() => setSearch("")}>
+                <X size={14} className="text-gray-400" />
+              </button>
+            )}
+          </div>
+        )}
+        {viewMode === "history" && <div className="flex-1" />}
+        <div className="flex gap-1 shrink-0">
+          {(["list", "history"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setViewMode(m)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === m ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+            >
+              {m === "list" ? "利用者一覧" : "変更履歴"}
             </button>
-          )}
+          ))}
         </div>
       </div>
+
+      {/* 変更履歴ビュー */}
+      {viewMode === "history" && (
+        <div className="flex-1 overflow-y-auto bg-white p-3 space-y-3">
+          {changeHistory.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-16">変更履歴がありません</p>
+          ) : (
+            changeHistory.map((g, gi) => (
+              <div key={gi} className="bg-gray-50 rounded-xl p-3">
+                <button
+                  onClick={() => setSelectedClient(g.client!)}
+                  className="text-sm font-bold text-gray-800 mb-2 flex items-center gap-1 hover:text-emerald-600"
+                >
+                  {g.client!.name}
+                  <ChevronRight size={13} className="text-gray-400" />
+                </button>
+                <div className="space-y-1">
+                  {g.events.slice(0, 5).map((ev, ei) => (
+                    <div key={ei} className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-400 w-20 shrink-0">{ev.date.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3")}</span>
+                      <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-medium shrink-0 ${ev.color}`}>{ev.label}</span>
+                      <span className="text-gray-700 truncate">{ev.equipName}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* 利用者一覧ビュー */}
+      {viewMode === "list" && <>
       {/* ア行・カ行フィルター */}
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-1.5 overflow-x-auto shrink-0">
         <button
@@ -1764,6 +1843,7 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
           </ul>
         )}
       </div>
+      </>}
     </div>
   );
 }
@@ -2368,10 +2448,29 @@ function NewOrderModal({
   const [deliveryHour, setDeliveryHour] = useState("");
   const [deliveryMinute, setDeliveryMinute] = useState("");
   const deliveryTime = deliveryHour && deliveryMinute ? `${deliveryHour}:${deliveryMinute}` : "";
-  const [deliveryType, setDeliveryType] = useState<"直納" | "自社納品">("自社納品");
+  const [deliveryType, setDeliveryType] = useState<"直納" | "自社納品">("直納");
   const [attendanceRequired, setAttendanceRequired] = useState(false);
   const [selectedAttendees, setSelectedAttendees] = useState<string[]>([]);
   const [supplierId, setSupplierId] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+
+  // 卸会社デフォルト：日本ケアサプライ
+  useEffect(() => {
+    if (suppliers.length > 0 && !supplierId) {
+      const def = suppliers.find((s) => s.name.includes("日本ケアサプライ"));
+      if (def) setSupplierId(def.id);
+    }
+  }, [suppliers]);
+
+  // 利用者選択時に住所を自動入力
+  useEffect(() => {
+    if (clientId) {
+      const c = clients.find((cl) => cl.id === clientId);
+      setDeliveryAddress(c?.address ?? "");
+    } else {
+      setDeliveryAddress("");
+    }
+  }, [clientId, clients]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -2475,6 +2574,7 @@ function NewOrderModal({
         paymentType,
         deliveryDate: deliveryDate || undefined,
         deliveryTime: deliveryTime || undefined,
+        deliveryAddress: deliveryAddress || undefined,
         deliveryType,
         attendanceRequired,
         attendeeIds: selectedAttendees,
@@ -2672,6 +2772,30 @@ function NewOrderModal({
           {/* ── 納品情報 ── */}
           <div className="bg-gray-50 rounded-2xl p-3 space-y-3">
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">納品情報</p>
+
+            {/* 納品先住所 */}
+            {clientId && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-gray-600">納品先住所</label>
+                  <button
+                    onClick={() => {
+                      const c = clients.find((cl) => cl.id === clientId);
+                      setDeliveryAddress(c?.address ?? "");
+                    }}
+                    className="text-[11px] text-emerald-600 hover:underline"
+                  >
+                    利用者住所に戻す
+                  </button>
+                </div>
+                <input
+                  value={deliveryAddress}
+                  onChange={(e) => setDeliveryAddress(e.target.value)}
+                  placeholder="納品先住所"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400 bg-white"
+                />
+              </div>
+            )}
 
             {/* 納品予定日・時間 */}
             <div>
@@ -3064,6 +3188,7 @@ function NewOrderModal({
                   <Row label="種別" value={paymentType} />
                   <Row label="卸会社" value={supplierObj?.name ?? "未選択"} warn={!supplierId} />
                   <Row label="納品方法" value={deliveryType} />
+                  {deliveryAddress && <Row label="納品先住所" value={deliveryAddress} />}
                   <Row label="納品予定日" value={deliveryDate ? new Date(deliveryDate).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" }) : "未入力"} warn={!deliveryDate} />
                   <Row label="納品時間" value={deliveryTime || "未入力"} warn={!deliveryTime} />
                   {deliveryType === "直納" && (
@@ -3093,6 +3218,18 @@ function NewOrderModal({
                       </div>
                     );
                   })}
+                  {(() => {
+                    const total = items.reduce((sum, item) => {
+                      const p = item.rental_price ? parseFloat(item.rental_price) : 0;
+                      return sum + p * item.quantity;
+                    }, 0);
+                    return total > 0 ? (
+                      <div className="flex justify-between items-center pt-2 mt-1 border-t border-emerald-200">
+                        <span className="text-xs font-semibold text-gray-600">月額合計</span>
+                        <span className="text-base font-bold text-emerald-600">¥{total.toLocaleString()}/月</span>
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
               </div>
 
@@ -3197,7 +3334,7 @@ function buildOrderContent(
   suppliers?: Supplier[]
 ) {
   const clientName = client?.name ?? "（未設定）";
-  const clientAddress = client?.address ?? "（未設定）";
+  const clientAddress = order.delivery_address ?? client?.address ?? "（未設定）";
   const activeItems = orderItems.filter((i) => i.status !== "cancelled");
   const itemLines = activeItems.map((i, idx) => {
     const eq = equipment.find((e) => e.product_code === i.product_code);
@@ -3276,6 +3413,7 @@ function OrderEmailPreviewModal({
   suppliers,
   members,
   emailType = "new_order",
+  tenantId,
   onClose,
   onBack,
   onDone,
@@ -3287,6 +3425,7 @@ function OrderEmailPreviewModal({
   suppliers: Supplier[];
   members: Member[];
   emailType?: "new_order" | "rental_started" | "terminated";
+  tenantId?: string;
   onClose: () => void;
   onBack?: () => void;
   onDone: () => void;
@@ -3337,6 +3476,16 @@ function OrderEmailPreviewModal({
       if (!res.ok) throw new Error(json.error);
       await recordEmailSent(order.id);
       setSentSet((prev) => new Set(prev).add(groupKey));
+      if (tenantId && order.client_id) {
+        const emailLabel = supplierObj.name ? `${supplierObj.name}への発注メール` : "発注メール";
+        await saveClientDocument({
+          tenant_id: tenantId,
+          client_id: order.client_id,
+          type: "supplier_email",
+          title: `${emailLabel}（${subject}）`,
+          params: { emailType: "new_order", orderId: order.id, supplierName: supplierObj.name, subject, body: emailBody },
+        }).catch(() => {});
+      }
     } catch (e: unknown) {
       setErrors((prev) => new Map(prev).set(groupKey, e instanceof Error ? e.message : "送信に失敗しました"));
     } finally {
@@ -3375,6 +3524,16 @@ function OrderEmailPreviewModal({
       if (!res.ok) throw new Error(json.error);
       await recordEmailSent(order.id);
       setSent(true);
+      if (tenantId && order.client_id) {
+        const typeLabel = emailType === "rental_started" ? "レンタル開始通知" : "解約・返却通知";
+        await saveClientDocument({
+          tenant_id: tenantId,
+          client_id: order.client_id,
+          type: "supplier_email",
+          title: `${typeLabel}（${scSubject}）`,
+          params: { emailType, orderId: order.id, subject: scSubject, body: scEmailBody },
+        }).catch(() => {});
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {

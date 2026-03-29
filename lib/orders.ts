@@ -89,6 +89,7 @@ export async function createOrder(params: {
   paymentType?: "介護" | "自費";
   deliveryDate?: string;
   deliveryTime?: string;
+  deliveryAddress?: string;
   deliveryType?: "直納" | "自社納品";
   attendanceRequired?: boolean;
   attendeeIds?: string[];
@@ -107,6 +108,7 @@ export async function createOrder(params: {
       payment_type: params.paymentType ?? "介護",
       delivery_date: params.deliveryDate ?? null,
       delivery_time: params.deliveryTime ?? null,
+      delivery_address: params.deliveryAddress ?? null,
       delivery_type: params.deliveryType ?? "自社納品",
       attendance_required: params.attendanceRequired ?? false,
       attendee_ids: params.attendeeIds ?? [],
