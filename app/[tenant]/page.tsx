@@ -2493,10 +2493,10 @@ function NewOrderModal({
               </div>
             </div>
 
-            {/* 立ち会い担当者（直納かつ立ち会いありのみ） */}
+            {/* 立ち合い者（直納かつ立ち会いありのみ） */}
             {deliveryType === "直納" && attendanceRequired && (
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1.5">担当者</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">立ち合い者</label>
                 <div className="flex flex-wrap gap-2">
                   {members.map((m) => (
                     <button
@@ -2514,7 +2514,7 @@ function NewOrderModal({
                     </button>
                   ))}
                   {members.length === 0 && (
-                    <p className="text-xs text-gray-400">担当者が登録されていません</p>
+                    <p className="text-xs text-gray-400">立ち合い者が登録されていません</p>
                   )}
                 </div>
               </div>
