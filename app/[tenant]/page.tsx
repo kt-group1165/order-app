@@ -24,12 +24,14 @@ import {
   Printer,
   Send,
   FileText,
+  Lock,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member } from "@/lib/supabase";
 import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, type ImportResult } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
+import { verifyPin } from "@/lib/settings";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -198,6 +200,8 @@ type PendingChange = {
 
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
+const PIN_AUTH_KEY = (tenantId: string) => `order_pin_verified_${tenantId}`;
+
 export default function TenantPage({
   params,
 }: {
@@ -206,6 +210,11 @@ export default function TenantPage({
   const { tenant: tenantId } = use(params);
   const [activeTab, setActiveTab] = useState<Tab>("orders");
   const [tenantName, setTenantName] = useState(tenantId);
+  const [pinVerified, setPinVerified] = useState(false);
+  const [pinChecked, setPinChecked] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState(false);
+  const [pinLoading, setPinLoading] = useState(false);
 
   useEffect(() => {
     getTenants().then((list) => {
@@ -213,6 +222,81 @@ export default function TenantPage({
       if (found) setTenantName(found.name);
     });
   }, [tenantId]);
+
+  // localStorageで認証済みか確認
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (localStorage.getItem(PIN_AUTH_KEY(tenantId)) === "true") {
+        setPinVerified(true);
+      }
+      setPinChecked(true);
+    }
+  }, [tenantId]);
+
+  async function handlePinSubmit() {
+    if (!pin.trim()) return;
+    setPinLoading(true);
+    setPinError(false);
+    try {
+      const ok = await verifyPin(pin.trim(), tenantId);
+      if (ok) {
+        localStorage.setItem(PIN_AUTH_KEY(tenantId), "true");
+        setPinVerified(true);
+      } else {
+        setPinError(true);
+        setPin("");
+      }
+    } finally {
+      setPinLoading(false);
+    }
+  }
+
+  // 初期チェック前はブランク
+  if (!pinChecked) return null;
+
+  // PIN未認証→ログイン画面
+  if (!pinVerified) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-white flex items-center justify-center p-6">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6 space-y-5">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center">
+              <Lock size={26} className="text-emerald-600" />
+            </div>
+            <div className="text-center">
+              <h1 className="text-lg font-bold text-gray-800">用具・発注管理</h1>
+              <p className="text-sm text-gray-400 mt-0.5">PINを入力してください</p>
+            </div>
+          </div>
+
+          <div>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="PIN"
+              value={pin}
+              onChange={(e) => { setPin(e.target.value); setPinError(false); }}
+              onKeyDown={(e) => e.key === "Enter" && handlePinSubmit()}
+              autoFocus
+              className={`w-full text-center text-xl tracking-widest border-2 rounded-xl px-4 py-3 focus:outline-none transition-colors ${
+                pinError ? "border-red-400 bg-red-50" : "border-gray-200 focus:border-emerald-400"
+              }`}
+            />
+            {pinError && <p className="text-xs text-red-500 mt-1.5 text-center">PINが正しくありません</p>}
+          </div>
+
+          <button
+            onClick={handlePinSubmit}
+            disabled={pinLoading || !pin.trim()}
+            className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+          >
+            {pinLoading && <Loader2 size={16} className="animate-spin" />}
+            ログイン
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -2039,7 +2123,9 @@ function NewOrderModal({
   const [showClientList, setShowClientList] = useState(false);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<NewOrderItem[]>([]);
-  const [equipSearch, setEquipSearch] = useState("");
+  const [showEquipModal, setShowEquipModal] = useState(false);
+  const [equipModalSearch, setEquipModalSearch] = useState("");
+  const [equipModalSelected, setEquipModalSelected] = useState<Equipment[]>([]);
 
   // 新規フィールド
   const [paymentType, setPaymentType] = useState<"介護" | "自費">("介護");
@@ -2055,7 +2141,15 @@ function NewOrderModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const filteredEquip = equipment.filter((e) => matchEquipment(e, equipSearch));
+  const filteredEquipModal = equipment.filter((e) => matchEquipment(e, equipModalSearch));
+
+  // 戻るボタンでモーダルを閉じる
+  useEffect(() => {
+    history.pushState(null, "", location.href);
+    const handlePop = () => onClose();
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
 
   const addItem = (eq: Equipment) => {
     if (items.find((i) => i.equipment.id === eq.id)) return;
@@ -2068,7 +2162,6 @@ function NewOrderModal({
         payment_type: null,
       },
     ]);
-    setEquipSearch("");
   };
 
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
@@ -2152,9 +2245,9 @@ function NewOrderModal({
           <div className="bg-gray-50 rounded-2xl p-3 space-y-3">
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">基本情報</p>
 
-            {/* 種別 + 卸会社 横並び */}
-            <div className="flex gap-3 items-end">
-              {/* 自費 / 介護 */}
+            {/* 種別 + 卸会社 + 納品方法 横並び */}
+            <div className="flex gap-2 items-end flex-wrap">
+              {/* 介護 / 自費 */}
               <div className="shrink-0">
                 <label className="text-xs font-medium text-gray-600 block mb-1.5">種別</label>
                 <div className="flex gap-1.5">
@@ -2174,18 +2267,37 @@ function NewOrderModal({
                 </div>
               </div>
               {/* 卸会社 */}
-              <div className="flex-1 min-w-0">
+              <div className="shrink-0">
                 <label className="text-xs font-medium text-gray-600 block mb-1.5">卸会社</label>
                 <select
                   value={supplierId}
                   onChange={(e) => setSupplierId(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400 bg-white"
+                  className="border border-gray-200 rounded-xl px-3 py-2 text-sm font-medium outline-none focus:border-emerald-400 bg-white text-gray-600 h-[38px]"
                 >
                   <option value="">選択しない</option>
                   {suppliers.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
+              </div>
+              {/* 納品方法 */}
+              <div className="shrink-0">
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">納品方法</label>
+                <div className="flex gap-1.5">
+                  {(["自社納品", "直納"] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => { setDeliveryType(t); if (t === "自社納品") { setAttendanceRequired(false); setSelectedAttendees([]); } }}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
+                        deliveryType === t
+                          ? "bg-emerald-500 text-white border-emerald-500"
+                          : "bg-white text-gray-600 border-gray-200"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -2280,29 +2392,9 @@ function NewOrderModal({
               </div>
             </div>
 
-            {/* 納品方法 + 立ち会い 横並び */}
-            <div className="flex gap-3 items-end">
-              {/* 直納 / 自社納品 */}
-              <div className="shrink-0">
-                <label className="text-xs font-medium text-gray-600 block mb-1.5">納品方法</label>
-                <div className="flex gap-1.5">
-                  {(["自社納品", "直納"] as const).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => { setDeliveryType(t); if (t === "自社納品") { setAttendanceRequired(false); setSelectedAttendees([]); } }}
-                      className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
-                        deliveryType === t
-                          ? "bg-emerald-500 text-white border-emerald-500"
-                          : "bg-white text-gray-600 border-gray-200"
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {/* 立ち会い（直納のみ） */}
-              {deliveryType === "直納" && (
+            {/* 立ち会い（直納のみ） */}
+            {deliveryType === "直納" && (
+              <div className="flex gap-3 items-end">
                 <div className="shrink-0">
                   <label className="text-xs font-medium text-gray-600 block mb-1.5">立ち会い</label>
                   <div className="flex gap-1.5">
@@ -2321,8 +2413,8 @@ function NewOrderModal({
                     ))}
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
             {deliveryType === "直納" && attendanceRequired && (
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1.5">立ち会い担当者</label>
@@ -2365,46 +2457,19 @@ function NewOrderModal({
               />
             </div>
 
-            {/* 用具検索 */}
+            {/* 用具追加ボタン */}
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1.5">用具を追加</label>
-              <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2 bg-white">
-                <Search size={14} className="text-gray-400 shrink-0" />
-                <input
-                  value={equipSearch}
-                  onChange={(e) => setEquipSearch(e.target.value)}
-                  placeholder="用具名・コードで検索して追加"
-                  className="flex-1 text-sm outline-none bg-transparent"
-                />
-                {equipSearch && (
-                  <button onClick={() => setEquipSearch("")}>
-                    <X size={14} className="text-gray-400" />
-                  </button>
-                )}
-              </div>
-              {/* 検索入力時のみ候補リストを表示 */}
-              {equipSearch && filteredEquip.length > 0 ? (
-                <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden max-h-44 overflow-y-auto bg-white">
-                  {filteredEquip.map((eq) => (
-                    <button
-                      key={eq.id}
-                      onClick={() => { addItem(eq); setEquipSearch(""); }}
-                      className="w-full px-3 py-2.5 text-left hover:bg-emerald-50 transition-colors border-b border-gray-50 last:border-0"
-                    >
-                      <p className="text-sm font-medium text-gray-800">{eq.name}</p>
-                      <p className="text-xs text-gray-400">
-                        {eq.product_code}
-                        {eq.rental_price && ` ・ ¥${eq.rental_price.toLocaleString()}/月`}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              ) : equipSearch ? (
-                <p className="text-xs text-gray-400 mt-2 px-1">「{equipSearch}」に一致する用具が見つかりません</p>
-              ) : equipment.length === 0 ? (
+              <button
+                onClick={() => { setShowEquipModal(true); setEquipModalSearch(""); setEquipModalSelected([]); }}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-300 text-emerald-700 text-sm font-medium bg-emerald-50 hover:bg-emerald-100 transition-colors"
+              >
+                <Plus size={15} />
+                用具を追加
+              </button>
+              {equipment.length === 0 && (
                 <p className="text-xs text-amber-500 mt-2 px-1">用具マスタにデータがありません。先にCSVインポートしてください。</p>
-              ) : null}
-            </div>{/* 用具検索 div 終わり */}
+              )}
+            </div>
 
             {/* 選択済み用具 */}
             {items.length > 0 && (
@@ -2486,6 +2551,105 @@ function NewOrderModal({
           </button>
         </div>
       </div>
+
+      {/* ── 用具選択モーダル ── */}
+      {showEquipModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-end z-[60]">
+          <div className="bg-white w-full rounded-t-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+              <h3 className="font-semibold text-gray-800">用具を選択</h3>
+              <button onClick={() => setShowEquipModal(false)}><X size={20} className="text-gray-400" /></button>
+            </div>
+
+            {/* 検索 */}
+            <div className="px-4 pt-3 pb-2 shrink-0">
+              <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2 bg-gray-50">
+                <Search size={14} className="text-gray-400 shrink-0" />
+                <input
+                  autoFocus
+                  value={equipModalSearch}
+                  onChange={(e) => setEquipModalSearch(e.target.value)}
+                  placeholder="商品名・商品コードで検索"
+                  className="flex-1 text-sm outline-none bg-transparent"
+                />
+                {equipModalSearch && (
+                  <button onClick={() => setEquipModalSearch("")}><X size={14} className="text-gray-400" /></button>
+                )}
+              </div>
+            </div>
+
+            {/* 候補リスト */}
+            <div className="flex-1 overflow-y-auto px-4 pb-2">
+              {filteredEquipModal.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-6">
+                  {equipModalSearch ? "該当する用具がありません" : "用具マスタにデータがありません"}
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {filteredEquipModal.slice(0, 50).map((eq) => {
+                    const selected = equipModalSelected.some((s) => s.product_code === eq.product_code);
+                    return (
+                      <button
+                        key={eq.product_code}
+                        onClick={() => {
+                          setEquipModalSelected((prev) =>
+                            selected
+                              ? prev.filter((s) => s.product_code !== eq.product_code)
+                              : [...prev, eq]
+                          );
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border text-left transition-colors ${
+                          selected
+                            ? "bg-emerald-50 border-emerald-300"
+                            : "bg-white border-gray-100 hover:bg-gray-50"
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium truncate ${selected ? "text-emerald-800" : "text-gray-800"}`}>
+                            {eq.name}
+                          </p>
+                          <p className="text-[11px] text-gray-400">{eq.product_code}</p>
+                        </div>
+                        {selected && <CheckCircle2 size={16} className="text-emerald-500 shrink-0 ml-2" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 追加ボタン */}
+            <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0">
+              {equipModalSelected.length > 0 && (
+                <p className="text-xs text-emerald-600 font-medium mb-2">
+                  {equipModalSelected.length}件選択中
+                </p>
+              )}
+              <button
+                disabled={equipModalSelected.length === 0}
+                onClick={() => {
+                  setItems((prev) => [
+                    ...prev,
+                    ...equipModalSelected
+                      .filter((eq) => !prev.some((it) => it.equipment.product_code === eq.product_code))
+                      .map((eq) => ({
+                        equipment: eq,
+                        rental_price: eq.rental_price != null ? String(eq.rental_price) : "",
+                        notes: "",
+                        payment_type: null,
+                      })),
+                  ]);
+                  setShowEquipModal(false);
+                }}
+                className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                <Plus size={16} />
+                {equipModalSelected.length > 0 ? `${equipModalSelected.length}件を追加する` : "用具を選択してください"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
