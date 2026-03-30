@@ -4303,7 +4303,7 @@ function CarePlanPages({
   const ADLNONE: React.CSSProperties = { border: "none", padding: "0 3px", width: "6px" };
 
   const renderLeftCol = () => (
-    <div style={{ width: "46%", flexShrink: 0, display: "flex", flexDirection: "column" }}>
+    <div style={{ width: "46%", flexShrink: 0, verticalAlign: "top" }}>
       <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>個別援助計画書（基本情報）</p>
       <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
         <tbody>
@@ -4429,10 +4429,10 @@ function CarePlanPages({
         </tbody>
       </table>
       <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
-      <table style={{ borderCollapse: "collapse", width: "100%", flex: 1 }}>
-        <tbody style={{ height: "100%" }}>
-          <tr style={{ height: "100%" }}>
-            <td style={{ ...TD, whiteSpace: "pre-wrap", verticalAlign: "top", minHeight: "60px" }}>{goalsText}</td>
+      <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <tbody>
+          <tr>
+            <td style={{ ...TD, whiteSpace: "pre-wrap", verticalAlign: "top", height: "60px" }}>{goalsText}</td>
           </tr>
         </tbody>
       </table>
@@ -4446,10 +4446,10 @@ function CarePlanPages({
         const globalOffset = pageIdx * ITEMS_PER_PAGE;
         return (
           <div key={pageIdx} className={!isLastPage ? "page-break" : ""}
-            style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", display: "flex", flexDirection: "column" }}>
-            <div style={{ display: "flex", gap: "10px", alignItems: "stretch", flex: 1 }}>
+            style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", minHeight: "190mm" }}>
+            <div style={{ display: "flex", gap: "10px" }}>
               {renderLeftCol()}
-              <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>選定福祉用具（レンタル・販売）</p>
                 <p style={{ fontWeight: "bold", margin: "0 0 2px", fontSize: "8pt" }}>【選定した福祉用具】</p>
                 <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
