@@ -4290,29 +4290,43 @@ function CarePlanPages({
   TD: React.CSSProperties;
   TH: React.CSSProperties;
 }) {
-  // 選定理由の文字数から行数を推定し、高さベースでページ分割
-  const CHARS_PER_LINE = 28;   // 選定理由列の1行あたり文字数（日本語全角換算）
-  const REASON_LINE_H = 14;    // px/行（8.5pt相当）
-  const ITEM_FIXED_H = 32;     // 種目+機種行の固定高さ
-  const PAGE_ITEMS_H = 480;    // 1ページあたり用具テーブルに使える最大高さ(px)
+  // 同一商品をグループ化（product_code単位）
+  type GItem = { item: OrderItem; count: number };
+  const groupedItems: GItem[] = (() => {
+    const map = new Map<string, GItem>();
+    for (const item of selectedItems) {
+      if (map.has(item.product_code)) {
+        map.get(item.product_code)!.count += 1;
+      } else {
+        map.set(item.product_code, { item, count: 1 });
+      }
+    }
+    return Array.from(map.values());
+  })();
 
-  const estimateItemH = (item: OrderItem) => {
-    const reason = getEq(item.product_code)?.selection_reason ?? "";
+  // 選定理由の文字数から行数を推定し、高さベースでページ分割
+  const CHARS_PER_LINE = 28;
+  const REASON_LINE_H = 14;
+  const ITEM_FIXED_H = 32;
+  const PAGE_ITEMS_H = 480;
+
+  const estimateItemH = (gi: GItem) => {
+    const reason = getEq(gi.item.product_code)?.selection_reason ?? "";
     const lines = Math.max(1, Math.ceil(reason.length / CHARS_PER_LINE));
     return ITEM_FIXED_H + lines * REASON_LINE_H;
   };
 
-  const pages: OrderItem[][] = [];
-  let cur: OrderItem[] = [];
+  const pages: GItem[][] = [];
+  let cur: GItem[] = [];
   let curH = 0;
-  for (const item of selectedItems) {
-    const h = estimateItemH(item);
+  for (const gi of groupedItems) {
+    const h = estimateItemH(gi);
     if (cur.length > 0 && curH + h > PAGE_ITEMS_H) {
       pages.push(cur);
       cur = [];
       curH = 0;
     }
-    cur.push(item);
+    cur.push(gi);
     curH += h;
   }
   pages.push(cur.length > 0 ? cur : []);
@@ -4493,18 +4507,21 @@ function CarePlanPages({
                     </tr>
                   </thead>
                   <tbody>
-                    {pageItems.map((item, idx) => {
+                    {pageItems.map((gi, idx) => {
+                      const { item, count } = gi;
                       const eq = getEq(item.product_code);
-                      const units = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
+                      const unitBase = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
+                      const unitsDisplay = unitBase === "" ? "" : count > 1 ? `${unitBase}×${count}` : String(unitBase);
+                      const nameDisplay = count > 1 ? `${eq?.name ?? item.product_code}　×${count}` : (eq?.name ?? item.product_code);
                       return (
                         <tr key={item.id}>
                           <td style={{ ...TD, textAlign: "center" }}>{globalOffset + idx + 1}</td>
                           <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
                               <span style={{ flex: 1, overflow: "hidden", fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
-                              <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{units}</span>
+                              <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{unitsDisplay}</span>
                             </div>
-                            <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>{eq?.name ?? item.product_code}</div>
+                            <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>{nameDisplay}</div>
                           </td>
                           <td style={TD}>{eq?.selection_reason ?? ""}</td>
                         </tr>
