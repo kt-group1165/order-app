@@ -4290,11 +4290,11 @@ function CarePlanPages({
   TD: React.CSSProperties;
   TH: React.CSSProperties;
 }) {
-  const ITEMS_PER_PAGE = 10;
-  const pages = selectedItems.length > ITEMS_PER_PAGE
-    ? Array.from({ length: Math.ceil(selectedItems.length / ITEMS_PER_PAGE) }, (_, i) =>
-        selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE))
-    : [selectedItems];
+  const ITEMS_PER_PAGE = 6;
+  const pages = Array.from(
+    { length: Math.max(1, Math.ceil(selectedItems.length / ITEMS_PER_PAGE)) },
+    (_, i) => selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE)
+  );
 
   // ADL用コンパクトスタイル
   const ADLTH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "1px 3px", textAlign: "center", fontSize: "7pt", whiteSpace: "nowrap" };
