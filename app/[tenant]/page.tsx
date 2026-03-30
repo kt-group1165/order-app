@@ -4452,11 +4452,16 @@ function CarePlanPages({
               <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>選定福祉用具（レンタル・販売）</p>
                 <p style={{ fontWeight: "bold", margin: "0 0 2px", fontSize: "8pt" }}>【選定した福祉用具】</p>
-                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "24px" }} />
+                    <col style={{ width: "38%" }} />
+                    <col />
+                  </colgroup>
                   <thead>
                     <tr>
-                      <th style={{ ...TH, width: "22px" }}>No</th>
-                      <th style={{ ...TH, padding: "0", width: "130px" }}>
+                      <th style={{ ...TH, width: "24px" }}>No</th>
+                      <th style={{ ...TH, padding: "0" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
                           <span>種目</span>
                           <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
@@ -4473,7 +4478,7 @@ function CarePlanPages({
                       return (
                         <tr key={item.id}>
                           <td style={{ ...TD, textAlign: "center" }}>{globalOffset + idx + 1}</td>
-                          <td style={{ ...TD, padding: "0", verticalAlign: "top", width: "130px" }}>
+                          <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
                               <span style={{ flex: 1, overflow: "hidden", fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
                               <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{units}</span>
