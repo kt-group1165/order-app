@@ -506,21 +506,28 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
       groupMap.get(key)!.push(order);
     }
 
+    const cmpOrder = (a: OrderWithItems, b: OrderWithItems) => {
+      const diff = new Date(b.ordered_at).getTime() - new Date(a.ordered_at).getTime();
+      return diff !== 0 ? diff : new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    };
+
     const groups = Array.from(groupMap.entries()).map(([key, groupOrders]) => {
-      const sorted = [...groupOrders].sort(
-        (a, b) => new Date(b.ordered_at).getTime() - new Date(a.ordered_at).getTime()
-      );
+      const sorted = [...groupOrders].sort(cmpOrder);
       return {
         clientId: key === "__none__" ? null : key,
         name: key === "__none__" ? "利用者未設定" : (clients.find((c) => c.id === key)?.name ?? key),
         furigana: key === "__none__" ? "" : (clients.find((c) => c.id === key)?.furigana ?? ""),
         latestAt: sorted[0].ordered_at,
+        latestCreatedAt: sorted[0].created_at,
         orders: sorted,
       };
     });
 
-    // 直近活動順
-    groups.sort((a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime());
+    // 直近活動順（ordered_at 同日の場合は created_at で比較）
+    groups.sort((a, b) => {
+      const diff = new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
+      return diff !== 0 ? diff : new Date(b.latestCreatedAt).getTime() - new Date(a.latestCreatedAt).getTime();
+    });
     return groups;
   })();
 
