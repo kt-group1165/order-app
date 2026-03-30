@@ -4290,11 +4290,32 @@ function CarePlanPages({
   TD: React.CSSProperties;
   TH: React.CSSProperties;
 }) {
-  const ITEMS_PER_PAGE = 6;
-  const pages = Array.from(
-    { length: Math.max(1, Math.ceil(selectedItems.length / ITEMS_PER_PAGE)) },
-    (_, i) => selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE)
-  );
+  // 選定理由の文字数から行数を推定し、高さベースでページ分割
+  const CHARS_PER_LINE = 28;   // 選定理由列の1行あたり文字数（日本語全角換算）
+  const REASON_LINE_H = 14;    // px/行（8.5pt相当）
+  const ITEM_FIXED_H = 32;     // 種目+機種行の固定高さ
+  const PAGE_ITEMS_H = 480;    // 1ページあたり用具テーブルに使える最大高さ(px)
+
+  const estimateItemH = (item: OrderItem) => {
+    const reason = getEq(item.product_code)?.selection_reason ?? "";
+    const lines = Math.max(1, Math.ceil(reason.length / CHARS_PER_LINE));
+    return ITEM_FIXED_H + lines * REASON_LINE_H;
+  };
+
+  const pages: OrderItem[][] = [];
+  let cur: OrderItem[] = [];
+  let curH = 0;
+  for (const item of selectedItems) {
+    const h = estimateItemH(item);
+    if (cur.length > 0 && curH + h > PAGE_ITEMS_H) {
+      pages.push(cur);
+      cur = [];
+      curH = 0;
+    }
+    cur.push(item);
+    curH += h;
+  }
+  pages.push(cur.length > 0 ? cur : []);
 
   // ADL用コンパクトスタイル
   const ADLTH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "1px 3px", textAlign: "center", fontSize: "7pt", whiteSpace: "nowrap" };
@@ -4443,7 +4464,7 @@ function CarePlanPages({
     <div id="care-plan-print-content" className="bg-white shadow mx-auto" style={{ minWidth: "1020px" }}>
       {pages.map((pageItems, pageIdx) => {
         const isLastPage = pageIdx === pages.length - 1;
-        const globalOffset = pageIdx * ITEMS_PER_PAGE;
+        const globalOffset = pages.slice(0, pageIdx).reduce((s, p) => s + p.length, 0);
         return (
           <div key={pageIdx} className={!isLastPage ? "page-break" : ""}
             style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", minHeight: "190mm" }}>
@@ -4489,7 +4510,7 @@ function CarePlanPages({
                         </tr>
                       );
                     })}
-                    {Array.from({ length: Math.max(0, ITEMS_PER_PAGE - pageItems.length) }).map((_, i) => (
+                    {Array.from({ length: Math.max(0, 6 - pageItems.length) }).map((_, i) => (
                       <tr key={`empty-${i}`}>
                         <td style={{ ...TD, height: "26px" }}></td>
                         <td style={{ ...TD, height: "26px" }}></td>
