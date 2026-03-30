@@ -1721,26 +1721,33 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [kanaFilter, setKanaFilter] = useState("");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "history">("list");
+  const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq, ords] = await Promise.all([
+        const [c, items, eq, ords, sup, mem] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
           getOrders(tenantId),
+          getSuppliers(),
+          getMembers(tenantId),
         ]);
         setClients(c);
         setOrderItems(items);
         setEquipment(eq);
         setOrders(ords);
+        setSuppliers(sup);
+        setMembers(mem);
       } finally {
         setLoading(false);
       }
@@ -1921,10 +1928,10 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
                 return pt === "自費";
               });
               return (
-                <li key={client.id}>
+                <li key={client.id} className="flex items-center pr-3">
                   <button
                     onClick={() => setSelectedClient(client)}
-                    className="w-full px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
+                    className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1">
                       <span className="w-20 shrink-0 text-sm font-medium text-gray-800 truncate">{client.name}</span>
@@ -1943,6 +1950,12 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
                     </div>
                     <ChevronRight size={16} className="text-gray-300 shrink-0" />
                   </button>
+                  <button
+                    onClick={() => setNewOrderClient(client)}
+                    className="shrink-0 ml-2 px-3 py-1 text-xs font-medium text-emerald-600 border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors"
+                  >
+                    発注
+                  </button>
                 </li>
               );
             })}
@@ -1950,6 +1963,19 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
         )}
       </div>
       </>}
+
+      {newOrderClient && (
+        <NewOrderModal
+          tenantId={tenantId}
+          clients={clients}
+          equipment={equipment}
+          suppliers={suppliers}
+          members={members}
+          defaultClientId={newOrderClient.id}
+          onClose={() => setNewOrderClient(null)}
+          onDone={() => setNewOrderClient(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2662,6 +2688,7 @@ function NewOrderModal({
   equipment,
   suppliers,
   members,
+  defaultClientId,
   onClose,
   onDone,
 }: {
@@ -2670,11 +2697,17 @@ function NewOrderModal({
   equipment: Equipment[];
   suppliers: Supplier[];
   members: Member[];
+  defaultClientId?: string;
   onClose: () => void;
   onDone: (order: Order, items: OrderItem[]) => void;
 }) {
-  const [clientId, setClientId] = useState("");
-  const [clientSearch, setClientSearch] = useState("");
+  const [clientId, setClientId] = useState(defaultClientId ?? "");
+  const [clientSearch, setClientSearch] = useState(() => {
+    if (defaultClientId) {
+      return clients.find((c) => c.id === defaultClientId)?.name ?? "";
+    }
+    return "";
+  });
   const [showClientList, setShowClientList] = useState(false);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<NewOrderItem[]>([]);
