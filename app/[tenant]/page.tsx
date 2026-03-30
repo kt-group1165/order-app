@@ -1980,7 +1980,7 @@ function ClientDetail({
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showProposal, setShowProposal] = useState(false);
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
-  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[] } | null>(null);
+  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
   const [showDocuments, setShowDocuments] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
@@ -2249,6 +2249,7 @@ function ClientDetail({
           members={emailPreview.members}
           emailType="new_order"
           tenantId={tenantId}
+          sentAt={emailPreview.sentAt}
           onClose={() => setEmailPreview(null)}
           onBack={() => setEmailPreview(null)}
           onDone={() => setEmailPreview(null)}
@@ -2505,7 +2506,7 @@ function ClientDetail({
                         getSuppliers(),
                         getMembers(tenantId),
                       ]);
-                      if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members });
+                      if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members, sentAt: doc.created_at });
                     }
                   }}
                   className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
@@ -3654,6 +3655,7 @@ function OrderEmailPreviewModal({
   members,
   emailType = "new_order",
   tenantId,
+  sentAt,
   onClose,
   onBack,
   onDone,
@@ -3666,6 +3668,7 @@ function OrderEmailPreviewModal({
   members: Member[];
   emailType?: "new_order" | "rental_started" | "terminated";
   tenantId?: string;
+  sentAt?: string;
   onClose: () => void;
   onBack?: () => void;
   onDone: () => void;
@@ -3806,9 +3809,16 @@ function OrderEmailPreviewModal({
     <div className="fixed inset-0 bg-black/50 flex items-end z-50">
       <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-          <h3 className="font-semibold text-gray-800">
-            発注内容確認{isResend && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">再送</span>}
-          </h3>
+          <div>
+            <h3 className="font-semibold text-gray-800">
+              発注内容確認{isResend && <span className="ml-2 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">再送</span>}
+            </h3>
+            {sentAt && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                送信日時: {new Date(sentAt).toLocaleString("ja-JP", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </p>
+            )}
+          </div>
           <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
         </div>
 
