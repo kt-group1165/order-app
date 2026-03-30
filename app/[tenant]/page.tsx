@@ -1980,6 +1980,7 @@ function ClientDetail({
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showProposal, setShowProposal] = useState(false);
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
+  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[] } | null>(null);
   const [showDocuments, setShowDocuments] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
@@ -2237,6 +2238,23 @@ function ClientDetail({
         </button>
       </div>
 
+      {/* 発注メール再送モーダル */}
+      {emailPreview && (
+        <OrderEmailPreviewModal
+          order={emailPreview.order}
+          orderItems={emailPreview.items}
+          clients={[client]}
+          equipment={equipment}
+          suppliers={emailPreview.suppliers}
+          members={emailPreview.members}
+          emailType="new_order"
+          tenantId={tenantId}
+          onClose={() => setEmailPreview(null)}
+          onBack={() => setEmailPreview(null)}
+          onDone={() => setEmailPreview(null)}
+        />
+      )}
+
       {/* 貸与報告書モーダル */}
       {(showReport || regenDoc) && (
         <RentalReportModal
@@ -2472,19 +2490,28 @@ function ClientDetail({
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
                   <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
                 </div>
-                {doc.type !== "supplier_email" && (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (doc.type === "rental_report") setRegenDoc(doc);
                     else if (doc.type === "care_plan") { setCarePlanInitialParams(doc.params); setShowCarePlan(true); }
                     else if (doc.type === "proposal") { setProposalInitialParams(doc.params); setShowProposal(true); }
                     else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
+                    else if (doc.type === "supplier_email") {
+                      const orderId = doc.params.orderId as string | undefined;
+                      if (!orderId) return;
+                      const [{ data: orderData }, items, suppliers, members] = await Promise.all([
+                        supabase.from("orders").select("*").eq("id", orderId).single(),
+                        getOrderItems(orderId),
+                        getSuppliers(),
+                        getMembers(tenantId),
+                      ]);
+                      if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members });
+                    }
                   }}
                   className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
                 >
                   再生成
                 </button>
-                )}
                 <button
                   onClick={async () => {
                     await deleteClientDocument(doc.id);
