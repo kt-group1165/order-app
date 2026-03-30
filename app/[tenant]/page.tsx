@@ -4450,19 +4450,19 @@ function OrderEmailPreviewModal({
               {(emailType === "terminated" || emailType === "cancelled") && (
                 <div className="bg-white border border-gray-200 rounded-xl p-3 space-y-2.5">
                   <p className="text-xs font-semibold text-gray-600">返却情報</p>
-                  <div className="flex items-center gap-2">
-                    <span className="w-20 shrink-0 text-xs text-gray-500">返却日</span>
+                  <div className="flex items-center gap-3">
+                    <span className="w-20 shrink-0 text-sm text-gray-500">返却日</span>
                     <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-emerald-400" />
+                      className="w-44 border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white" />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-20 shrink-0 text-xs text-gray-500">返却方法</span>
+                  <div className="flex items-center gap-3">
+                    <span className="w-20 shrink-0 text-sm text-gray-500">返却方法</span>
                     <select value={returnMethod} onChange={(e) => setReturnMethod(e.target.value)}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-emerald-400 bg-white">
+                      className="w-64 border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white">
                       <option value="">未選択</option>
-                      <option value="直引き">直引き（当社スタッフが引き取り）</option>
-                      <option value="店引き">店引き（当社店舗へお持ち込み）</option>
-                      <option value="持ち込み">持ち込み（利用者・家族が持参）</option>
+                      <option value="直引き">直引き</option>
+                      <option value="店引き">店引き</option>
+                      <option value="持ち込み">持ち込み</option>
                     </select>
                   </div>
                 </div>
