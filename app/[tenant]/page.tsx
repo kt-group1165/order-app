@@ -143,8 +143,14 @@ function calcMonthUnits(item: OrderItem, year: number, month: number, priceOverr
   const start = item.rental_start_date ? new Date(item.rental_start_date + "T00:00:00") : null;
   const end   = item.rental_end_date   ? new Date(item.rental_end_date   + "T00:00:00") : null;
 
-  if (start && start > monthEnd)  return null; // 翌月以降開始
   if (end   && end   < monthStart) return 0;   // 先月以前終了
+  if (start && start > monthEnd) {
+    // 解約済みで終了日が今月内なら半月ルール適用（開始日が来月以降の場合）
+    if (item.status === "terminated" && end && end <= monthEnd) {
+      return end <= day15 ? halfUnits : halfUnits + remUnits;
+    }
+    return null; // 翌月以降開始
+  }
 
   // 上半期（1〜15日）に1日でも利用
   const inUpper = (!start || start <= day15) && (!end || end >= monthStart);
@@ -236,6 +242,7 @@ export default function TenantPage({
   const [tenantName, setTenantName] = useState(tenantId);
   const [ordersDirty, setOrdersDirty] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
+  const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
   const [pinVerified, setPinVerified] = useState(false);
   const [pinChecked, setPinChecked] = useState(false);
   const [pin, setPin] = useState("");
@@ -336,9 +343,9 @@ export default function TenantPage({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "orders" && <OrdersTab tenantId={tenantId} onDirtyChange={setOrdersDirty} />}
+        {activeTab === "orders" && <OrdersTab tenantId={tenantId} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
-        {activeTab === "clients" && <ClientsTab tenantId={tenantId} />}
+        {activeTab === "clients" && <ClientsTab tenantId={tenantId} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
       </div>
 
@@ -407,7 +414,7 @@ export default function TenantPage({
 
 // ─── Orders Tab ─────────────────────────────────────────────────────────────
 
-function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChange: (dirty: boolean) => void }) {
+function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: string; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -691,6 +698,14 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                   <span className="text-sm font-bold text-emerald-800">{group.name}</span>
                   {group.furigana && (
                     <span className="text-xs text-emerald-500">{group.furigana}</span>
+                  )}
+                  {group.clientId && onSwitchToClient && (
+                    <button
+                      onClick={() => onSwitchToClient(group.clientId!)}
+                      className="text-xs text-emerald-600 hover:text-emerald-800 hover:underline"
+                    >
+                      利用者情報へ
+                    </button>
                   )}
                   <span className="ml-auto text-xs text-emerald-400">{group.orders.length}発注</span>
                 </div>
@@ -1731,7 +1746,7 @@ const KANA_ROWS = [
   { label: "ワ", chars: "ワヲン" },
 ];
 
-function ClientsTab({ tenantId }: { tenantId: string }) {
+function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenantId: string; initialClientId?: string | null; onClearInitialClient?: () => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1742,7 +1757,9 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
   const [search, setSearch] = useState("");
   const [kanaFilter, setKanaFilter] = useState("");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "history">("list");
+  const [selectedClientInitialViewMode, setSelectedClientInitialViewMode] = useState<"current" | "insurance" | undefined>(undefined);
+  const [viewMode, setViewMode] = useState<"list" | "insurance" | "history">("list");
+  const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -1751,13 +1768,14 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq, ords, sup, mem] = await Promise.all([
+        const [c, items, eq, ords, sup, mem, insurResult] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
           getOrders(tenantId),
           getSuppliers(),
           getMembers(tenantId),
+          supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).order("effective_date", { ascending: false }),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -1765,6 +1783,12 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
         setOrders(ords);
         setSuppliers(sup);
         setMembers(mem);
+        setAllInsuranceRecords((insurResult.data ?? []) as ClientInsuranceRecord[]);
+        if (initialClientId) {
+          const target = c.find((cl) => cl.id === initialClientId);
+          if (target) setSelectedClient(target);
+          onClearInitialClient?.();
+        }
       } finally {
         setLoading(false);
       }
@@ -1778,7 +1802,8 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
         allOrderItems={orderItems}
         equipment={equipment}
         tenantId={tenantId}
-        onBack={() => setSelectedClient(null)}
+        initialViewMode={selectedClientInitialViewMode}
+        onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
       />
     );
   }
@@ -1946,7 +1971,7 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
-        {viewMode === "list" && (
+        {(viewMode === "list" || viewMode === "insurance") && (
           <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
             <Search size={14} className="text-gray-400 shrink-0" />
             <input
@@ -1981,13 +2006,13 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
           </button>
           <input ref={csvInputRef} type="file" accept=".csv" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCSV(f); }} />
-          {(["list", "history"] as const).map((m) => (
+          {(["list", "insurance", "history"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setViewMode(m)}
               className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === m ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
             >
-              {m === "list" ? "利用者一覧" : "変更履歴"}
+              {m === "list" ? "基本情報" : m === "insurance" ? "保険情報" : "変更履歴"}
             </button>
           ))}
         </div>
@@ -2022,6 +2047,59 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
           )}
         </div>
       )}
+
+      {/* 保険情報一覧ビュー */}
+      {viewMode === "insurance" && (() => {
+        // 各利用者の最新の保険情報レコードを取得
+        const insuranceByClient = new Map<string, ClientInsuranceRecord>();
+        for (const rec of allInsuranceRecords) {
+          if (!insuranceByClient.has(rec.client_id)) {
+            insuranceByClient.set(rec.client_id, rec);
+          }
+        }
+        const insuranceFiltered = clients
+          .filter((c) => matchClient(c, search))
+          .sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
+        return (
+          <div className="flex-1 overflow-y-auto overflow-x-auto bg-white">
+            {insuranceFiltered.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-16">該当なし</p>
+            ) : (
+              <table className="w-full text-xs min-w-[600px]">
+                <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">氏名</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-20">要介護度</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">被保険者番号</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-20">負担割合</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">認定開始日</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">認定終了日</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {insuranceFiltered.map((client) => {
+                    const rec = insuranceByClient.get(client.id);
+                    return (
+                      <tr
+                        key={client.id}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => { setSelectedClientInitialViewMode("insurance"); setSelectedClient(client); }}
+                      >
+                        <td className="px-3 py-2 font-medium text-gray-800">{client.name}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.care_level ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.insured_number ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.copay_rate ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.certification_start_date ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.certification_end_date ?? <span className="text-gray-300">—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 利用者一覧ビュー */}
       {viewMode === "list" && <>
@@ -2123,12 +2201,14 @@ function ClientDetail({
   allOrderItems,
   equipment,
   tenantId,
+  initialViewMode,
   onBack,
 }: {
   client: Client;
   allOrderItems: OrderItem[];
   equipment: Equipment[];
   tenantId: string;
+  initialViewMode?: "current" | "insurance";
   onBack: () => void;
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
@@ -2136,7 +2216,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance" | "rental_history">("current");
+  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance" | "rental_history">(initialViewMode ?? "current");
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
@@ -3150,16 +3230,18 @@ function PostSaveModal({
                       >
                         <Mail size={12} /> 卸会社にメール
                       </button>
-                      <button
-                        onClick={() => onCareManagerEmail(order)}
-                        className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
-                          careSentIds.has(order.id)
-                            ? "opacity-30 text-emerald-500 border-emerald-200"
-                            : "text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                        }`}
-                      >
-                        <Mail size={12} /> ケアマネにメール
-                      </button>
+                      {!g.changes.every((c) => c.newStatus === "cancelled") && (
+                        <button
+                          onClick={() => onCareManagerEmail(order)}
+                          className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
+                            careSentIds.has(order.id)
+                              ? "opacity-30 text-emerald-500 border-emerald-200"
+                              : "text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                          }`}
+                        >
+                          <Mail size={12} /> ケアマネにメール
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
