@@ -416,6 +416,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
   const [loading, setLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<OrderItem["status"] | "all">("all");
+  const [showEnded, setShowEnded] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [previewOrder, setPreviewOrder] = useState<{ order: Order; items: OrderItem[]; emailType?: "new_order" | "rental_started" | "terminated" } | null>(null);
@@ -638,7 +639,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
       </div>
 
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 overflow-x-auto shrink-0">
+      <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 overflow-x-auto shrink-0">
         {(["all", "ordered", "delivered", "rental_started", "terminated"] as const).map(
           (s) => (
             <button
@@ -654,6 +655,15 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
             </button>
           )
         )}
+        <label className="ml-auto shrink-0 flex items-center gap-1.5 cursor-pointer text-xs text-gray-500 whitespace-nowrap">
+          <input
+            type="checkbox"
+            checked={showEnded}
+            onChange={(e) => setShowEnded(e.target.checked)}
+            className="accent-emerald-500 w-3.5 h-3.5"
+          />
+          キャンセル済み・解約済みを表示
+        </label>
       </div>
 
       {/* Order list - 利用者グループ表示 */}
@@ -662,7 +672,12 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
           <p className="text-sm text-gray-400 text-center py-16">発注データがありません</p>
         ) : (
           <div>
-            {clientGroups.map((group) => (
+            {clientGroups.map((group) => {
+              const hasVisible = group.orders.some((o) =>
+                showEnded ? true : o.items.some((i) => i.status !== "cancelled" && i.status !== "terminated")
+              );
+              if (!hasVisible) return null;
+              return (
               <div key={group.clientId ?? "__none__"}>
                 {/* 利用者ヘッダー */}
                 <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-2 flex items-center gap-2 sticky top-0 z-10">
@@ -675,8 +690,12 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                 {/* その利用者の発注一覧 */}
                 <ul className="flex flex-col gap-4 px-3 pb-3 pt-0">
                   {group.orders.map((order) => {
+                    const visibleItems = showEnded
+                      ? order.items
+                      : order.items.filter((i) => i.status !== "cancelled" && i.status !== "terminated");
+                    if (visibleItems.length === 0) return null;
                     const isOpen = expandedIds.has(order.id);
-                    const activeItems = order.items.filter((i) => i.status !== "cancelled");
+                    const activeItems = order.items.filter((i) => i.status !== "cancelled" && i.status !== "terminated");
                     const toggleExpand = () => setExpandedIds((prev) => {
                       const next = new Set(prev);
                       if (next.has(order.id)) next.delete(order.id);
@@ -722,7 +741,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                             {/* アイテム一覧（table で縦列を完全に揃える） */}
                             <table className="min-w-[600px] w-full table-fixed bg-white rounded-xl overflow-hidden text-left">
                               <tbody>
-                                {order.items.map((item) => {
+                                {visibleItems.map((item) => {
                                   const pending = pendingChanges.get(item.id);
                                   // 表示ステータス：未保存変更があれば仮表示
                                   const displayStatus = pending ? pending.newStatus : item.status;
@@ -845,7 +864,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
             })}
           </ul>
         </div>
-      ))}
+      ); })}
     </div>
         )}
       </div>
@@ -1958,7 +1977,9 @@ function ClientDetail({
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs">("current");
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
+  const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showProposal, setShowProposal] = useState(false);
+  const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showDocuments, setShowDocuments] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
@@ -2122,7 +2143,7 @@ function ClientDetail({
           </span>
         </td>
         {/* レンタル価格 */}
-        <td className="py-2 pr-3 w-[6rem] whitespace-nowrap">
+        <td className="py-2 pr-3 w-[7rem] whitespace-nowrap text-right">
           {(() => { const p = priceOverride ?? item.rental_price; return p ? (
             <span className="text-sm font-bold text-emerald-600">
               ¥{p.toLocaleString()}<span className="text-xs font-normal">/月</span>
@@ -2260,6 +2281,7 @@ function ClientDetail({
           equipment={equipment}
           companyInfo={companyInfo}
           tenantId={tenantId}
+          initialParams={carePlanInitialParams ?? undefined}
           onClose={() => setShowCarePlan(false)}
           onSaved={async () => {
             const docs = await getClientDocuments(tenantId, client.id);
@@ -2277,6 +2299,7 @@ function ClientDetail({
           equipment={equipment}
           companyInfo={companyInfo}
           tenantId={tenantId}
+          initialParams={proposalInitialParams ?? undefined}
           onClose={() => setShowProposal(false)}
           onSaved={async () => {
             const docs = await getClientDocuments(tenantId, client.id);
@@ -2426,13 +2449,13 @@ function ClientDetail({
           {/* 作成ボタン */}
           <div className="flex gap-2">
             <button
-              onClick={() => setShowCarePlan(true)}
+              onClick={() => { setCarePlanInitialParams(null); setShowCarePlan(true); }}
               className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium rounded-xl hover:bg-emerald-100"
             >
               <Plus size={13} /> 個別援助計画書
             </button>
             <button
-              onClick={() => setShowProposal(true)}
+              onClick={() => { setProposalInitialParams(null); setShowProposal(true); }}
               className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-xl hover:bg-blue-100"
             >
               <Plus size={13} /> 選定提案書
@@ -2449,17 +2472,19 @@ function ClientDetail({
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
                   <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
                 </div>
+                {doc.type !== "supplier_email" && (
                 <button
                   onClick={() => {
                     if (doc.type === "rental_report") setRegenDoc(doc);
-                    else if (doc.type === "care_plan") setShowCarePlan(true);
-                    else if (doc.type === "proposal") setShowProposal(true);
+                    else if (doc.type === "care_plan") { setCarePlanInitialParams(doc.params); setShowCarePlan(true); }
+                    else if (doc.type === "proposal") { setProposalInitialParams(doc.params); setShowProposal(true); }
                     else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
                   }}
                   className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
                 >
                   再生成
                 </button>
+                )}
                 <button
                   onClick={async () => {
                     await deleteClientDocument(doc.id);
@@ -4594,6 +4619,7 @@ function CarePlanModal({
   equipment,
   companyInfo,
   tenantId,
+  initialParams,
   onClose,
   onSaved,
 }: {
@@ -4602,6 +4628,7 @@ function CarePlanModal({
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   tenantId: string;
+  initialParams?: Record<string, unknown>;
   onClose: () => void;
   onSaved?: () => void;
 }) {
@@ -4611,23 +4638,25 @@ function CarePlanModal({
 
   const selectableItems = clientItems.filter((i) => !["ordered", "cancelled"].includes(i.status));
 
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() =>
-    new Set(selectableItems.filter((i) => i.status === "rental_started").map((i) => i.id))
-  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
+    if (initialParams?.selectedIds) return new Set(initialParams.selectedIds as string[]);
+    return new Set(selectableItems.filter((i) => i.status === "rental_started").map((i) => i.id));
+  });
   const [changeTypes, setChangeTypes] = useState<Record<string, string>>(() => {
+    if (initialParams?.changeTypes) return initialParams.changeTypes as Record<string, string>;
     const m: Record<string, string> = {};
     selectableItems.forEach((i) => { m[i.id] = i.status === "terminated" ? "回収" : "新規納品"; });
     return m;
   });
 
-  const [creationDate, setCreationDate] = useState(todayStr);
-  const [gender, setGender] = useState("");
-  const [birthDate, setBirthDate] = useState("");
-  const [certStartDate, setCertStartDate] = useState("");
-  const [consultantName, setConsultantName] = useState("");
-  const [consultantRelation, setConsultantRelation] = useState("");
-  const [consultationDate, setConsultationDate] = useState(todayStr);
-  const [monitoringMonths, setMonitoringMonths] = useState("");
+  const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
+  const [gender, setGender] = useState((initialParams?.gender as string) ?? "");
+  const [birthDate, setBirthDate] = useState((initialParams?.birthDate as string) ?? "");
+  const [certStartDate, setCertStartDate] = useState((initialParams?.certStartDate as string) ?? "");
+  const [consultantName, setConsultantName] = useState((initialParams?.consultantName as string) ?? "");
+  const [consultantRelation, setConsultantRelation] = useState((initialParams?.consultantRelation as string) ?? "");
+  const [consultationDate, setConsultationDate] = useState((initialParams?.consultationDate as string) ?? todayStr);
+  const [monitoringMonths, setMonitoringMonths] = useState((initialParams?.monitoringMonths as string) ?? "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { getCarePlanTemplates(tenantId).then(setTemplates); }, [tenantId]);
@@ -4848,6 +4877,7 @@ function ProposalModal({
   equipment,
   companyInfo,
   tenantId,
+  initialParams,
   onClose,
   onSaved,
 }: {
@@ -4856,6 +4886,7 @@ function ProposalModal({
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   tenantId: string;
+  initialParams?: Record<string, unknown>;
   onClose: () => void;
   onSaved?: () => void;
 }) {
@@ -4864,9 +4895,12 @@ function ProposalModal({
   const selectableItems = clientItems.filter((i) =>
     ["ordered", "delivered", "trial", "rental_started"].includes(i.status)
   );
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(selectableItems.map((i) => i.id)));
-  const [creationDate, setCreationDate] = useState(todayStr);
-  const [height, setHeight] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
+    if (initialParams?.selectedIds) return new Set(initialParams.selectedIds as string[]);
+    return new Set(selectableItems.map((i) => i.id));
+  });
+  const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
+  const [height, setHeight] = useState((initialParams?.height as string) ?? "");
   const [saving, setSaving] = useState(false);
 
   const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
