@@ -21,13 +21,39 @@ export type Client = {
   care_manager_org: string | null;
   certification_end_date: string | null;
   memo: string | null;
-  // 介護保険情報
+  created_at: string;
+};
+
+// 保険情報レコード（利用者1人に対して複数）
+export type ClientInsuranceRecord = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  effective_date: string | null;
   insured_number: string | null;
   birth_date: string | null;
+  care_level: string | null;
   certification_start_date: string | null;
+  certification_end_date: string | null;
   insurer_number: string | null;
   copay_rate: string | null;
   public_expense: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+// レンタル履歴（手動登録）
+export type ClientRentalHistory = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  equipment_name: string;
+  model_number: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  monthly_price: number | null;
+  notes: string | null;
+  source: string;
   created_at: string;
 };
 

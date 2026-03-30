@@ -27,7 +27,7 @@ import {
   Lock,
   Download,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
@@ -419,7 +419,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
   const [showEnded, setShowEnded] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
-  const [previewOrder, setPreviewOrder] = useState<{ order: Order; items: OrderItem[]; emailType?: "new_order" | "rental_started" | "terminated" } | null>(null);
+  const [previewOrder, setPreviewOrder] = useState<{ order: Order; items: OrderItem[]; emailType?: "new_order" | "rental_started" | "terminated" | "cancelled" } | null>(null);
   const [dateInput, setDateInput] = useState<{
     item: OrderItem;
     nextStatus: OrderItem["status"];
@@ -916,8 +916,16 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
           supplierSentIds={supplierSentIds}
           careSentIds={careSentIds}
           onSendEmail={(order) => {
+            // 保存した変更からemailTypeを判定
+            const orderChanges = (postSaveChanges ?? []).filter((c) =>
+              orders.find((o) => o.items.some((i) => i.id === c.item.id))?.id === order.id
+            );
+            let emailType: "new_order" | "rental_started" | "terminated" | "cancelled" = "new_order";
+            if (orderChanges.some((c) => c.newStatus === "rental_started")) emailType = "rental_started";
+            else if (orderChanges.some((c) => c.newStatus === "terminated")) emailType = "terminated";
+            else if (orderChanges.some((c) => c.newStatus === "cancelled")) emailType = "cancelled";
             setSupplierSentIds((prev) => new Set([...prev, order.id]));
-            setPreviewOrder({ order, items: order.items, emailType: "rental_started" });
+            setPreviewOrder({ order, items: order.items, emailType });
           }}
           onCareManagerEmail={async (order) => {
             const client = clients.find((c) => c.id === order.client_id);
@@ -2128,24 +2136,23 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance">("current");
-  // 保険情報編集
-  const [insuranceEdit, setInsuranceEdit] = useState(false);
-  const [insuredNumber, setInsuredNumber] = useState(client.insured_number ?? "");
-  const [birthDate, setBirthDate] = useState(client.birth_date ?? "");
-  const [certStartDate, setCertStartDate] = useState(client.certification_start_date ?? "");
-  const [certEndDate, setCertEndDate] = useState(client.certification_end_date ?? "");
-  const [careLevel, setCareLevel] = useState(client.care_level ?? "");
-  const [insurerNumber, setInsurerNumber] = useState(client.insurer_number ?? "");
-  const [copayRate, setCopayRate] = useState(client.copay_rate ?? "");
-  const [publicExpense, setPublicExpense] = useState(client.public_expense ?? "");
+  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance" | "rental_history">("current");
+  // 保険情報（複数レコード）
+  const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
+  const [editingInsuranceId, setEditingInsuranceId] = useState<string | null>(null);
   const [insuranceSaving, setInsuranceSaving] = useState(false);
+  // レンタル履歴（手動登録）
+  const [rentalHistoryRecords, setRentalHistoryRecords] = useState<ClientRentalHistory[]>([]);
+  const [rentalHistoryForm, setRentalHistoryForm] = useState<Omit<ClientRentalHistory, "id" | "tenant_id" | "client_id" | "source" | "created_at"> | null>(null);
+  const [editingRentalHistoryId, setEditingRentalHistoryId] = useState<string | null>(null);
+  const [rentalHistorySaving, setRentalHistorySaving] = useState(false);
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showProposal, setShowProposal] = useState(false);
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
-  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
+  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string; emailType?: "new_order" | "rental_started" | "terminated" | "cancelled" } | null>(null);
   const [showDocuments, setShowDocuments] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
@@ -2188,11 +2195,13 @@ function ClientDetail({
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: ordersData } = await supabase
-        .from("orders")
-        .select("id, payment_type")
-        .eq("tenant_id", tenantId)
-        .eq("client_id", client.id);
+      const [{ data: ordersData }, insurResult, rentalResult] = await Promise.all([
+        supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
+        supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("effective_date", { ascending: false }),
+        supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("start_date", { ascending: false }),
+      ]);
+      setInsuranceRecords((insurResult.data ?? []) as ClientInsuranceRecord[]);
+      setRentalHistoryRecords((rentalResult.data ?? []) as ClientRentalHistory[]);
       if (ordersData && ordersData.length > 0) {
         const orderIds = ordersData.map((o: { id: string; payment_type: string }) => o.id);
         const payMap: Record<string, "介護" | "自費"> = {};
@@ -2250,6 +2259,18 @@ function ClientDetail({
       await updateOrderItemStatus(item.id, newStatus, Object.keys(extra).length ? extra : undefined);
       setDateInput(null);
       await loadItems();
+      // レンタル開始・解約・キャンセル時はメール送信画面を表示
+      if (newStatus === "rental_started" || newStatus === "terminated" || newStatus === "cancelled") {
+        const [{ data: orderData }, orderItems, suppliers, members] = await Promise.all([
+          supabase.from("orders").select("*").eq("id", item.order_id).single(),
+          getOrderItems(item.order_id),
+          getSuppliers(),
+          getMembers(tenantId),
+        ]);
+        if (orderData) {
+          setEmailPreview({ order: orderData as Order, items: orderItems, suppliers, members, emailType: newStatus as "rental_started" | "terminated" | "cancelled" });
+        }
+      }
     } finally {
       setUpdatingId(null);
     }
@@ -2292,23 +2313,50 @@ function ClientDetail({
     setYearMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
-  const handleSaveInsurance = async () => {
+  const handleSaveInsuranceRecord = async () => {
+    if (!insuranceForm) return;
     setInsuranceSaving(true);
     try {
-      await supabase.from("clients").update({
-        insured_number: insuredNumber || null,
-        birth_date: birthDate || null,
-        certification_start_date: certStartDate || null,
-        certification_end_date: certEndDate || null,
-        care_level: careLevel || null,
-        insurer_number: insurerNumber || null,
-        copay_rate: copayRate || null,
-        public_expense: publicExpense || null,
-      }).eq("id", client.id);
-      setInsuranceEdit(false);
+      if (editingInsuranceId) {
+        await supabase.from("client_insurance_records").update(insuranceForm).eq("id", editingInsuranceId);
+      } else {
+        await supabase.from("client_insurance_records").insert({ ...insuranceForm, tenant_id: tenantId, client_id: client.id });
+      }
+      setInsuranceForm(null);
+      setEditingInsuranceId(null);
+      await loadItems();
     } finally {
       setInsuranceSaving(false);
     }
+  };
+
+  const handleDeleteInsuranceRecord = async (id: string) => {
+    if (!confirm("この保険情報を削除しますか？")) return;
+    await supabase.from("client_insurance_records").delete().eq("id", id);
+    await loadItems();
+  };
+
+  const handleSaveRentalHistory = async () => {
+    if (!rentalHistoryForm || !rentalHistoryForm.equipment_name.trim()) return;
+    setRentalHistorySaving(true);
+    try {
+      if (editingRentalHistoryId) {
+        await supabase.from("client_rental_history").update(rentalHistoryForm).eq("id", editingRentalHistoryId);
+      } else {
+        await supabase.from("client_rental_history").insert({ ...rentalHistoryForm, tenant_id: tenantId, client_id: client.id, source: "manual" });
+      }
+      setRentalHistoryForm(null);
+      setEditingRentalHistoryId(null);
+      await loadItems();
+    } finally {
+      setRentalHistorySaving(false);
+    }
+  };
+
+  const handleDeleteRentalHistory = async (id: string) => {
+    if (!confirm("このレンタル履歴を削除しますか？")) return;
+    await supabase.from("client_rental_history").delete().eq("id", id);
+    await loadItems();
   };
 
   // 用具行共通（ステータス変更ボタン付き）- table行として使用
@@ -2431,7 +2479,7 @@ function ClientDetail({
           equipment={equipment}
           suppliers={emailPreview.suppliers}
           members={emailPreview.members}
-          emailType="new_order"
+          emailType={emailPreview.emailType ?? "new_order"}
           tenantId={tenantId}
           sentAt={emailPreview.sentAt}
           onClose={() => setEmailPreview(null)}
@@ -2513,18 +2561,22 @@ function ClientDetail({
       )}
 
       {/* View toggle */}
-      <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-2 shrink-0">
+      <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-1.5 shrink-0">
         <button onClick={() => setViewMode("current")}
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          現在の状況
+          現在
         </button>
         <button onClick={() => setViewMode("monthly")}
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          月別レンタル
+          月別
         </button>
         <button onClick={() => setViewMode("insurance")}
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "insurance" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
           保険情報
+        </button>
+        <button onClick={() => setViewMode("rental_history")}
+          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "rental_history" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+          履歴
         </button>
         <button onClick={() => setViewMode("docs")}
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
@@ -2715,7 +2767,7 @@ function ClientDetail({
           )}
         </div>
       ) : viewMode === "insurance" ? (
-        /* 保険情報タブ */
+        /* 保険情報タブ - 複数レコード管理 */
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* 事業所情報（テナント設定から参照） */}
           <section>
@@ -2738,71 +2790,276 @@ function ClientDetail({
             </div>
           </section>
 
-          {/* 利用者・保険情報 */}
+          {/* 保険情報一覧 */}
           <section>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-gray-500">利用者・保険情報</h3>
-              {!insuranceEdit ? (
-                <button onClick={() => setInsuranceEdit(true)}
-                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50">
-                  編集
+              <h3 className="text-xs font-semibold text-gray-500">保険情報</h3>
+              {!insuranceForm && (
+                <button
+                  onClick={() => {
+                    setEditingInsuranceId(null);
+                    setInsuranceForm({ effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null, certification_start_date: null, certification_end_date: null, insurer_number: null, copay_rate: null, public_expense: null, notes: null });
+                  }}
+                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                >
+                  ＋ 新規追加
                 </button>
-              ) : (
-                <div className="flex gap-1.5">
-                  <button onClick={() => setInsuranceEdit(false)}
-                    className="text-xs text-gray-500 border border-gray-200 px-2.5 py-1 rounded-lg hover:bg-gray-50">
+              )}
+            </div>
+
+            {/* 編集フォーム */}
+            {insuranceForm && (
+              <div className="bg-emerald-50 rounded-xl p-4 mb-3 space-y-2.5">
+                <p className="text-xs font-semibold text-emerald-700">{editingInsuranceId ? "保険情報を編集" : "保険情報を追加"}</p>
+                {([
+                  { label: "有効期間開始日", key: "effective_date", type: "date" },
+                  { label: "被保険者番号", key: "insured_number" },
+                  { label: "生年月日", key: "birth_date", type: "date" },
+                  { label: "保険者番号", key: "insurer_number" },
+                ] as { label: string; key: keyof typeof insuranceForm; type?: string }[]).map(({ label, key, type }) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-xs text-gray-500">{label}</span>
+                    <input type={type ?? "text"} value={(insuranceForm[key] as string) ?? ""}
+                      onChange={(e) => setInsuranceForm((f) => f && { ...f, [key]: e.target.value || null })}
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-gray-500">要介護度</span>
+                  <select value={insuranceForm.care_level ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, care_level: e.target.value || null })}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
+                    <option value="">未設定</option>
+                    {["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                {([
+                  { label: "認定開始日", key: "certification_start_date" },
+                  { label: "認定終了日", key: "certification_end_date" },
+                ] as { label: string; key: keyof typeof insuranceForm }[]).map(({ label, key }) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-xs text-gray-500">{label}</span>
+                    <input type="date" value={(insuranceForm[key] as string) ?? ""}
+                      onChange={(e) => setInsuranceForm((f) => f && { ...f, [key]: e.target.value || null })}
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-gray-500">利用者負担割合</span>
+                  <select value={insuranceForm.copay_rate ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, copay_rate: e.target.value || null })}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
+                    <option value="">未設定</option>
+                    {["1割","2割","3割"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">公費負担情報</span>
+                  <textarea value={insuranceForm.public_expense ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, public_expense: e.target.value || null })} rows={2}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">メモ</span>
+                  <textarea value={insuranceForm.notes ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, notes: e.target.value || null })} rows={2}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
+                </div>
+                <div className="flex gap-2 justify-end pt-1">
+                  <button onClick={() => { setInsuranceForm(null); setEditingInsuranceId(null); }}
+                    className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-white">
                     キャンセル
                   </button>
-                  <button onClick={handleSaveInsurance} disabled={insuranceSaving}
-                    className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-50">
+                  <button onClick={handleSaveInsuranceRecord} disabled={insuranceSaving}
+                    className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">
                     {insuranceSaving ? "保存中..." : "保存"}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* レコード一覧 */}
+            {insuranceRecords.length === 0 && !insuranceForm ? (
+              <p className="text-sm text-gray-400 text-center py-6">保険情報がありません</p>
+            ) : (
+              <div className="space-y-2">
+                {insuranceRecords.map((rec, idx) => (
+                  <div key={rec.id} className={`bg-white rounded-xl border p-3 space-y-1.5 ${idx === 0 ? "border-emerald-200" : "border-gray-100"}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">現在</span>}
+                        <span className="text-xs font-medium text-gray-700">
+                          {rec.effective_date ?? "有効期間未設定"}
+                        </span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => {
+                            setEditingInsuranceId(rec.id);
+                            setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, notes: rec.notes });
+                          }}
+                          className="text-xs text-gray-500 border border-gray-200 px-2 py-0.5 rounded-lg hover:bg-gray-50"
+                        >
+                          編集
+                        </button>
+                        <button onClick={() => handleDeleteInsuranceRecord(rec.id)}
+                          className="text-xs text-red-400 border border-red-100 px-2 py-0.5 rounded-lg hover:bg-red-50">
+                          削除
+                        </button>
+                      </div>
+                    </div>
+                    {([
+                      ["被保険者番号", rec.insured_number],
+                      ["要介護度", rec.care_level],
+                      ["認定開始日", rec.certification_start_date],
+                      ["認定終了日", rec.certification_end_date],
+                      ["負担割合", rec.copay_rate],
+                      ["保険者番号", rec.insurer_number],
+                    ] as [string, string | null][]).filter(([, v]) => v).map(([label, value]) => (
+                      <div key={label} className="flex gap-2 text-xs">
+                        <span className="w-24 shrink-0 text-gray-400">{label}</span>
+                        <span className="text-gray-700">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      ) : viewMode === "rental_history" ? (
+        /* レンタル履歴タブ */
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-gray-500">レンタル履歴</h3>
+              {!rentalHistoryForm && (
+                <button
+                  onClick={() => {
+                    setEditingRentalHistoryId(null);
+                    setRentalHistoryForm({ equipment_name: "", model_number: null, start_date: null, end_date: null, monthly_price: null, notes: null });
+                  }}
+                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                >
+                  ＋ 手動追加
+                </button>
               )}
             </div>
-            <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
-              {/* 利用者情報 */}
-              {[
-                { label: "氏名", value: client.name, readOnly: true },
-                { label: "被保険者番号", value: insuredNumber, key: "insured_number" as const,
-                  setter: setInsuredNumber },
-                { label: "生年月日", value: birthDate, key: "birth_date" as const,
-                  setter: setBirthDate, type: "date" as const },
-                { label: "要介護度", value: careLevel, key: "care_level" as const,
-                  setter: setCareLevel, select: ["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"] },
-                { label: "認定開始日", value: certStartDate, key: "certification_start_date" as const,
-                  setter: setCertStartDate, type: "date" as const },
-                { label: "認定終了日", value: certEndDate, key: "certification_end_date" as const,
-                  setter: setCertEndDate, type: "date" as const },
-                { label: "保険者番号", value: insurerNumber, key: "insurer_number" as const,
-                  setter: setInsurerNumber },
-                { label: "利用者負担割合", value: copayRate, key: "copay_rate" as const,
-                  setter: setCopayRate, select: ["1割","2割","3割"] },
-                { label: "公費負担情報", value: publicExpense, key: "public_expense" as const,
-                  setter: setPublicExpense, textarea: true },
-              ].map(({ label, value, readOnly, setter, type, select, textarea }) => (
-                <div key={label} className="flex items-start gap-2 px-3 py-2.5">
-                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">{label}</span>
-                  {insuranceEdit && !readOnly ? (
-                    textarea ? (
-                      <textarea value={value} onChange={(e) => setter?.(e.target.value)} rows={2}
-                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 resize-none" />
-                    ) : select ? (
-                      <select value={value} onChange={(e) => setter?.(e.target.value)}
-                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
-                        <option value="">未設定</option>
-                        {select.map((o) => <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    ) : (
-                      <input type={type ?? "text"} value={value} onChange={(e) => setter?.(e.target.value)}
-                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400" />
-                    )
-                  ) : (
-                    <span className="flex-1 text-xs text-gray-800">{value || "—"}</span>
-                  )}
+
+            {/* 手動登録フォーム */}
+            {rentalHistoryForm && (
+              <div className="bg-emerald-50 rounded-xl p-4 mb-3 space-y-2.5">
+                <p className="text-xs font-semibold text-emerald-700">{editingRentalHistoryId ? "レンタル履歴を編集" : "レンタル履歴を追加"}</p>
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-xs text-gray-500">用具名 <span className="text-red-400">*</span></span>
+                  <input type="text" value={rentalHistoryForm.equipment_name}
+                    onChange={(e) => setRentalHistoryForm((f) => f && { ...f, equipment_name: e.target.value })}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
                 </div>
-              ))}
-            </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-xs text-gray-500">型番</span>
+                  <input type="text" value={rentalHistoryForm.model_number ?? ""}
+                    onChange={(e) => setRentalHistoryForm((f) => f && { ...f, model_number: e.target.value || null })}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                </div>
+                {([["開始日","start_date"],["終了日","end_date"]] as [string,string][]).map(([label, key]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-xs text-gray-500">{label}</span>
+                    <input type="date" value={(rentalHistoryForm as Record<string,unknown>)[key] as string ?? ""}
+                      onChange={(e) => setRentalHistoryForm((f) => f && { ...f, [key]: e.target.value || null })}
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-xs text-gray-500">月額</span>
+                  <input type="number" value={rentalHistoryForm.monthly_price ?? ""}
+                    onChange={(e) => setRentalHistoryForm((f) => f && { ...f, monthly_price: e.target.value ? Number(e.target.value) : null })}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="w-24 shrink-0 text-xs text-gray-500 pt-0.5">メモ</span>
+                  <textarea value={rentalHistoryForm.notes ?? ""} onChange={(e) => setRentalHistoryForm((f) => f && { ...f, notes: e.target.value || null })} rows={2}
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
+                </div>
+                <div className="flex gap-2 justify-end pt-1">
+                  <button onClick={() => { setRentalHistoryForm(null); setEditingRentalHistoryId(null); }}
+                    className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-white">
+                    キャンセル
+                  </button>
+                  <button onClick={handleSaveRentalHistory} disabled={rentalHistorySaving}
+                    className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">
+                    {rentalHistorySaving ? "保存中..." : "保存"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 合算一覧（システム由来 + 手動） */}
+            {(() => {
+              const systemEntries = historyItems.map((i) => ({
+                id: i.id, source: "system" as const,
+                equipment_name: equipName(i.product_code),
+                model_number: null as string | null,
+                start_date: i.rental_start_date,
+                end_date: i.rental_end_date,
+                monthly_price: i.rental_price,
+                notes: i.notes,
+              }));
+              const manualEntries = rentalHistoryRecords.map((r) => ({
+                id: r.id, source: "manual" as const,
+                equipment_name: r.equipment_name,
+                model_number: r.model_number,
+                start_date: r.start_date,
+                end_date: r.end_date,
+                monthly_price: r.monthly_price,
+                notes: r.notes,
+              }));
+              const combined = [...systemEntries, ...manualEntries].sort((a, b) =>
+                (b.start_date ?? "").localeCompare(a.start_date ?? "")
+              );
+              if (combined.length === 0) return (
+                <p className="text-sm text-gray-400 text-center py-6">レンタル履歴がありません</p>
+              );
+              return (
+                <div className="space-y-2">
+                  {combined.map((item) => (
+                    <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-3 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {item.source === "manual" && (
+                            <span className="shrink-0 text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">手動</span>
+                          )}
+                          <span className="text-sm font-medium text-gray-800 truncate">{item.equipment_name}</span>
+                          {item.model_number && <span className="shrink-0 text-xs text-gray-400">{item.model_number}</span>}
+                        </div>
+                        {item.source === "manual" && (
+                          <div className="flex gap-1 shrink-0 ml-2">
+                            <button
+                              onClick={() => {
+                                const rec = rentalHistoryRecords.find((r) => r.id === item.id);
+                                if (!rec) return;
+                                setEditingRentalHistoryId(rec.id);
+                                setRentalHistoryForm({ equipment_name: rec.equipment_name, model_number: rec.model_number, start_date: rec.start_date, end_date: rec.end_date, monthly_price: rec.monthly_price, notes: rec.notes });
+                              }}
+                              className="text-xs text-gray-500 border border-gray-200 px-2 py-0.5 rounded-lg hover:bg-gray-50"
+                            >
+                              編集
+                            </button>
+                            <button onClick={() => handleDeleteRentalHistory(item.id)}
+                              className="text-xs text-red-400 border border-red-100 px-2 py-0.5 rounded-lg hover:bg-red-50">
+                              削除
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-3 text-xs text-gray-500">
+                        <span>{item.start_date ?? "—"} 〜 {item.end_date ?? "継続中"}</span>
+                        {item.monthly_price != null && (
+                          <span className="font-medium text-emerald-600">¥{item.monthly_price.toLocaleString()}/月</span>
+                        )}
+                      </div>
+                      {item.notes && <p className="text-xs text-gray-400">{item.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </section>
         </div>
       ) : null}
@@ -3797,18 +4054,22 @@ function Row({ label, value, warn }: { label: string; value: string; warn?: bool
 
 /** 発注内容を構造化（確認画面・メール共用） */
 function buildStatusChangeContent(
-  emailType: "rental_started" | "terminated",
+  emailType: "rental_started" | "terminated" | "cancelled",
   order: Order,
   orderItems: OrderItem[],
   client: Client | undefined,
   equipment: Equipment[],
-  isResend: boolean
+  isResend: boolean,
+  returnDate?: string,
+  returnMethod?: string,
 ) {
   const clientName = client?.name ?? "（未設定）";
   const clientAddress = client?.address ?? "（未設定）";
   const changedItem = orderItems.find((i) => i.status === emailType);
-  const allItems = orderItems.filter((i) => i.status !== "cancelled");
-  const itemLines = allItems.map((i, idx) => {
+  const targetItems = emailType === "rental_started"
+    ? orderItems.filter((i) => i.status !== "cancelled")
+    : orderItems.filter((i) => i.status === emailType);
+  const itemLines = targetItems.map((i, idx) => {
     const eq = equipment.find((e) => e.product_code === i.product_code);
     return `${idx + 1}. ${eq?.name ?? i.product_code}`;
   });
@@ -3831,20 +4092,41 @@ function buildStatusChangeContent(
       "────────────────────", "", "よろしくお願いいたします。",
     ].join("\n");
     return { subject, preview, emailBody };
-  } else {
-    const endDate = changedItem?.rental_end_date ?? null;
+  } else if (emailType === "terminated") {
+    const endDate = returnDate || changedItem?.rental_end_date || null;
     const endDateStr = endDate
       ? new Date(endDate).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })
       : "未設定";
+    const methodStr = returnMethod || "未定";
     const subject = `【解約・返却${resendMark}】${clientName} 様`;
-    const preview = [`利用者：${clientName}`, `住所：${clientAddress}`, "", "── 返却品目 ──", ...itemLines, "", `解約日：${endDateStr}`].join("\n");
+    const preview = [`利用者：${clientName}`, `住所：${clientAddress}`, "", "── 返却品目 ──", ...itemLines, "", `解約日：${endDateStr}`, `返却方法：${methodStr}`].join("\n");
     const emailBody = [
       `【解約・返却${resendMark}】`, "", "お疲れ様です。",
       "下記の福祉用具につきまして、解約・返却のご連絡をいたします。",
       "────────────────────",
       `利用者名：${clientName}`, `住　　所：${clientAddress}`, "",
       "▼ 返却品目", ...itemLines.map((l) => `  ${l}`), "",
-      `解約日：${endDateStr}`,
+      `解約日　：${endDateStr}`,
+      `返却方法：${methodStr}`,
+      "────────────────────", "", "お引き取りのほど、よろしくお願いいたします。",
+    ].join("\n");
+    return { subject, preview, emailBody };
+  } else {
+    // cancelled
+    const cancelDateStr = returnDate
+      ? new Date(returnDate).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })
+      : "未設定";
+    const methodStr = returnMethod || "未定";
+    const subject = `【キャンセル・返却${resendMark}】${clientName} 様`;
+    const preview = [`利用者：${clientName}`, `住所：${clientAddress}`, "", "── 返却品目 ──", ...itemLines, "", `返却日：${cancelDateStr}`, `返却方法：${methodStr}`].join("\n");
+    const emailBody = [
+      `【キャンセル・返却${resendMark}】`, "", "お疲れ様です。",
+      "下記の福祉用具につきまして、キャンセル・返却のご連絡をいたします。",
+      "────────────────────",
+      `利用者名：${clientName}`, `住　　所：${clientAddress}`, "",
+      "▼ 返却品目", ...itemLines.map((l) => `  ${l}`), "",
+      `返却日　：${cancelDateStr}`,
+      `返却方法：${methodStr}`,
       "────────────────────", "", "お引き取りのほど、よろしくお願いいたします。",
     ].join("\n");
     return { subject, preview, emailBody };
@@ -3952,7 +4234,7 @@ function OrderEmailPreviewModal({
   equipment: Equipment[];
   suppliers: Supplier[];
   members: Member[];
-  emailType?: "new_order" | "rental_started" | "terminated";
+  emailType?: "new_order" | "rental_started" | "terminated" | "cancelled";
   tenantId?: string;
   sentAt?: string;
   onClose: () => void;
@@ -3961,6 +4243,13 @@ function OrderEmailPreviewModal({
 }) {
   const isResend = (order.email_sent_count ?? 0) > 0;
   const client = clients.find((c) => c.id === order.client_id);
+  const today = new Date().toISOString().split("T")[0];
+  // 解約・キャンセルメール用: 返却日・返却方法
+  const terminatedItem = orderItems.find((i) => i.status === "terminated");
+  const [returnDate, setReturnDate] = useState(
+    emailType === "terminated" ? (terminatedItem?.rental_end_date ?? today) : today
+  );
+  const [returnMethod, setReturnMethod] = useState("");
 
   // 卸会社ごとにアイテムをグループ化（new_order のみ）
   const supplierGroups: { supplierId: string | null; supplier: Supplier | undefined; items: OrderItem[] }[] = [];
@@ -4032,7 +4321,7 @@ function OrderEmailPreviewModal({
   // ステータス変更メール送信（単一）
   const { subject: scSubject, preview: scPreview, emailBody: scEmailBody } =
     emailType !== "new_order"
-      ? buildStatusChangeContent(emailType, order, orderItems, client, equipment, isResend)
+      ? buildStatusChangeContent(emailType, order, orderItems, client, equipment, isResend, returnDate, returnMethod)
       : { subject: "", preview: "", emailBody: "" };
 
   const handleSendStatusEmail = async () => {
@@ -4157,6 +4446,27 @@ function OrderEmailPreviewModal({
           ) : (
             /* ステータス変更メール（単一） */
             <>
+              {/* 解約・キャンセル: 返却日・返却方法入力 */}
+              {(emailType === "terminated" || emailType === "cancelled") && (
+                <div className="bg-white border border-gray-200 rounded-xl p-3 space-y-2.5">
+                  <p className="text-xs font-semibold text-gray-600">返却情報</p>
+                  <div className="flex items-center gap-2">
+                    <span className="w-20 shrink-0 text-xs text-gray-500">返却日</span>
+                    <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)}
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-emerald-400" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-20 shrink-0 text-xs text-gray-500">返却方法</span>
+                    <select value={returnMethod} onChange={(e) => setReturnMethod(e.target.value)}
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-emerald-400 bg-white">
+                      <option value="">未選択</option>
+                      <option value="直引き">直引き（当社スタッフが引き取り）</option>
+                      <option value="店引き">店引き（当社店舗へお持ち込み）</option>
+                      <option value="持ち込み">持ち込み（利用者・家族が持参）</option>
+                    </select>
+                  </div>
+                </div>
+              )}
               <div className="bg-gray-50 rounded-xl p-4">
                 <pre className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{scPreview}</pre>
               </div>
