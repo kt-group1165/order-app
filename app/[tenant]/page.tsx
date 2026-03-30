@@ -4266,6 +4266,285 @@ function calcAge(birthDateStr: string): number {
   return age;
 }
 
+// ─── CarePlanPages (sub-component to avoid shared JSX node issue) ─────────────
+function CarePlanPages({
+  selectedItems, getEq, client, companyInfo,
+  creationDate, gender, birthDate, certStartDate,
+  consultantName, consultantRelation, consultationDate,
+  monitoringMonths, goalsText, precautionsText, TD, TH,
+}: {
+  selectedItems: OrderItem[];
+  getEq: (code: string) => Equipment | undefined;
+  client: Client;
+  companyInfo: CompanyInfo;
+  creationDate: string;
+  gender: string;
+  birthDate: string;
+  certStartDate: string;
+  consultantName: string;
+  consultantRelation: string;
+  consultationDate: string;
+  monitoringMonths: string;
+  goalsText: string;
+  precautionsText: string;
+  TD: React.CSSProperties;
+  TH: React.CSSProperties;
+}) {
+  const ITEMS_PER_PAGE = 10;
+  const pages = selectedItems.length > ITEMS_PER_PAGE
+    ? Array.from({ length: Math.ceil(selectedItems.length / ITEMS_PER_PAGE) }, (_, i) =>
+        selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE))
+    : [selectedItems];
+
+  // ADL用コンパクトスタイル
+  const ADLTH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "1px 3px", textAlign: "center", fontSize: "7pt", whiteSpace: "nowrap" };
+  const ADLTD: React.CSSProperties = { border: "1px solid #555", padding: "1px 4px", fontSize: "7pt", whiteSpace: "nowrap" };
+  const ADLEM: React.CSSProperties = { border: "1px solid #555", padding: 0, height: "14px" };
+  const ADLNONE: React.CSSProperties = { border: "none", padding: "0 3px", width: "6px" };
+
+  const renderLeftCol = () => (
+    <div style={{ width: "46%", flexShrink: 0, display: "flex", flexDirection: "column" }}>
+      <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>個別援助計画書（基本情報）</p>
+      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
+        <tbody>
+          <tr>
+            <td style={{ border: "none", fontSize: "8pt" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
+            <td style={{ border: "none", textAlign: "right", fontSize: "8pt" }}>担当者：{companyInfo.staffName}</td>
+          </tr>
+          <tr>
+            <td style={{ border: "none", fontSize: "8pt" }}>事業所名：{companyInfo.companyName}</td>
+            <td style={{ border: "none", textAlign: "right", fontSize: "8pt" }}>事業所番号：{companyInfo.businessNumber}</td>
+          </tr>
+        </tbody>
+      </table>
+      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px" }}>
+        <tbody>
+          <tr>
+            <th style={{ ...TH, width: "64px" }}>利用者氏名</th>
+            <td style={TD} colSpan={3}>{client.name}　様</td>
+            <th style={{ ...TH, width: "50px" }}>フリガナ</th>
+            <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
+          </tr>
+          <tr>
+            <th style={TH}>性　別</th>
+            <td style={{ ...TD, width: "34px" }}>{gender || "　"}</td>
+            <th style={{ ...TH, width: "58px" }}>生年月日</th>
+            <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
+            <th style={{ ...TH, width: "50px" }}>介護度</th>
+            <td style={{ ...TD, width: "58px" }} colSpan={2}>{client.care_level ?? ""}</td>
+          </tr>
+          <tr>
+            <th style={TH}>認定期間</th>
+            <td style={TD} colSpan={3}>
+              {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00")) : "　"}
+            </td>
+            <th style={TH}>年　齢</th>
+            <td style={TD} colSpan={2}>{birthDate ? `${calcAge(birthDate)}歳` : ""}</td>
+          </tr>
+          <tr>
+            <th style={TH}>住　所</th>
+            <td style={TD} colSpan={6}>{client.address ?? ""}</td>
+          </tr>
+          <tr>
+            <th style={TH}>電話番号</th>
+            <td style={TD} colSpan={3}>{client.phone ?? client.mobile ?? ""}</td>
+            <th style={TH}>居宅支援</th>
+            <td style={TD} colSpan={2}>{client.care_manager_org ?? ""}</td>
+          </tr>
+          <tr>
+            <th style={TH}>担当CM</th>
+            <td style={TD} colSpan={6}>{client.care_manager ?? ""}</td>
+          </tr>
+        </tbody>
+      </table>
+      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px" }}>
+        <tbody>
+          <tr>
+            <th style={{ ...TH, width: "56px", verticalAlign: "top" }}>相談内容</th>
+            <td style={{ ...TD, verticalAlign: "top" }}>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", fontSize: "8pt", marginBottom: "2px" }}>
+                <span>相談者：{consultantName || "　　　　"}</span>
+                <span>続柄：{consultantRelation || "　　"}</span>
+                <span>相談日：{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : "　　年　月　日"}</span>
+              </div>
+              <div style={{ minHeight: "28px" }}></div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【介護環境】</p>
+      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px" }}>
+        <tbody>
+          <tr>
+            <th style={{ ...TH, width: "86px" }}>他のサービス<br />利用状況</th>
+            <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
+          </tr>
+          <tr>
+            <th style={TH}>家族構成/<br />主介護者</th>
+            <td style={{ ...TD, width: "28%" }}></td>
+            <th style={{ ...TH, background: "#f5b8c4", width: "54px" }}>疾病・麻痺</th>
+            <td style={TD}></td>
+          </tr>
+          <tr>
+            <th style={TH}>その他</th>
+            <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
+          </tr>
+        </tbody>
+      </table>
+      {/* ADL: 外側レイアウトtableで50/50分割 → flexbox不要で印刷でも安定 */}
+      <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【ADL・身体状況】（印刷後に✓記入）</p>
+      <table style={{ borderCollapse: "separate", borderSpacing: "4px 0", width: "100%", marginBottom: "3px" }}>
+        <tbody>
+          <tr>
+            {([
+              ["起き上がり", "立ち上がり", "移乗", "歩行"],
+              ["排泄", "入浴", "食事", "整容"],
+            ] as string[][]).map((group, gi) => (
+              <td key={gi} style={{ padding: 0, verticalAlign: "top", width: "50%", border: "none" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={ADLTH}>項目</th>
+                      <th style={ADLTH}>自立</th>
+                      <th style={ADLTH}>見守り</th>
+                      <th style={ADLTH}>一部介助</th>
+                      <th style={ADLTH}>全介助</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.map((adl) => (
+                      <tr key={adl}>
+                        <td style={ADLTD}>{adl}</td>
+                        <td style={ADLEM}></td>
+                        <td style={ADLEM}></td>
+                        <td style={ADLEM}></td>
+                        <td style={ADLEM}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+      <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
+      <table style={{ borderCollapse: "collapse", width: "100%", flex: 1 }}>
+        <tbody style={{ height: "100%" }}>
+          <tr style={{ height: "100%" }}>
+            <td style={{ ...TD, whiteSpace: "pre-wrap", verticalAlign: "top", minHeight: "60px" }}>{goalsText}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div id="care-plan-print-content" className="bg-white shadow mx-auto" style={{ minWidth: "1020px" }}>
+      {pages.map((pageItems, pageIdx) => {
+        const isLastPage = pageIdx === pages.length - 1;
+        const globalOffset = pageIdx * ITEMS_PER_PAGE;
+        return (
+          <div key={pageIdx} className={!isLastPage ? "page-break" : ""}
+            style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", gap: "10px", alignItems: "stretch", flex: 1 }}>
+              {renderLeftCol()}
+              <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>選定福祉用具（レンタル・販売）</p>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px", fontSize: "8pt" }}>【選定した福祉用具】</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...TH, width: "22px" }}>No</th>
+                      <th style={{ ...TH, padding: "0", width: "130px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
+                          <span>種目</span>
+                          <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
+                        </div>
+                        <div style={{ padding: "2px 6px" }}>機種（型式）</div>
+                      </th>
+                      <th style={TH}>選定理由</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageItems.map((item, idx) => {
+                      const eq = getEq(item.product_code);
+                      const units = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
+                      return (
+                        <tr key={item.id}>
+                          <td style={{ ...TD, textAlign: "center" }}>{globalOffset + idx + 1}</td>
+                          <td style={{ ...TD, padding: "0", verticalAlign: "top", width: "130px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
+                              <span style={{ flex: 1, overflow: "hidden", fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
+                              <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{units}</span>
+                            </div>
+                            <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>{eq?.name ?? item.product_code}</div>
+                          </td>
+                          <td style={TD}>{eq?.selection_reason ?? ""}</td>
+                        </tr>
+                      );
+                    })}
+                    {Array.from({ length: Math.max(0, ITEMS_PER_PAGE - pageItems.length) }).map((_, i) => (
+                      <tr key={`empty-${i}`}>
+                        <td style={{ ...TD, height: "26px" }}></td>
+                        <td style={{ ...TD, height: "26px" }}></td>
+                        <td style={{ ...TD, height: "26px" }}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【留意点】</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px" }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ ...TD, whiteSpace: "pre-wrap", verticalAlign: "top", minHeight: "56px", height: "56px" }}>{precautionsText}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px" }}>
+                  <tbody>
+                    <tr>
+                      <th style={{ ...TH, width: "98px" }}>モニタリング対象月</th>
+                      <td style={TD}>{monitoringMonths}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                {isLastPage && (
+                  <>
+                    <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【同意署名欄】</p>
+                    <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px", flex: 1 }}>
+                      <tbody>
+                        <tr>
+                          <td style={{ ...TD, width: "38%", verticalAlign: "top", height: "44px" }}>
+                            <p style={{ margin: "0 0 1px" }}>上記内容について説明を受け、同意します。</p>
+                            <p style={{ margin: 0 }}>　年　月　日</p>
+                            <p style={{ margin: "8px 0 0" }}>利用者氏名：</p>
+                          </td>
+                          <td style={{ ...TD, width: "31%", verticalAlign: "top" }}>
+                            <p style={{ margin: "0 0 1px" }}>代理人（続柄：　　　）</p>
+                            <p style={{ margin: "14px 0 0" }}>署名：</p>
+                          </td>
+                          <td style={{ ...TD, width: "31%", verticalAlign: "top" }}>
+                            <p style={{ margin: "0 0 1px" }}>福祉用具専門相談員</p>
+                            <p style={{ margin: "14px 0 0" }}>署名：</p>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </>
+                )}
+                <div style={{ textAlign: "right", fontSize: "7.5pt", borderTop: "1px solid #ccc", paddingTop: "3px" }}>
+                  {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CarePlanModal({
   client,
   clientItems,
@@ -4328,7 +4607,7 @@ function CarePlanModal({
       @page{size:A4 landscape;margin:8mm 10mm}
       table{border-collapse:collapse;width:100%}
       td,th{border:1px solid #555;padding:2px 4px;vertical-align:middle}
-      [style*="page-break-after:always"],[style*="break-after:page"]{page-break-after:always;break-after:page}
+      .page-break{page-break-after:always;break-after:page}
     </style></head><body>${el.innerHTML}</body></html>`);
     w.document.close();
     w.focus();
@@ -4493,266 +4772,24 @@ function CarePlanModal({
           </div>
         ) : (
           <div className="flex-1 overflow-auto bg-gray-100 p-4">
-            {(() => {
-              const ITEMS_PER_PAGE = 10;
-              const pages = selectedItems.length > ITEMS_PER_PAGE
-                ? Array.from({ length: Math.ceil(selectedItems.length / ITEMS_PER_PAGE) }, (_, i) =>
-                    selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE))
-                : [selectedItems];
-
-              const leftCol = (
-                <div style={{ width: "46%", flexShrink: 0, display: "flex", flexDirection: "column" }}>
-                  {/* タイトル */}
-                  <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>個別援助計画書（基本情報）</p>
-                  {/* 作成日・事業所 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
-                    <tbody>
-                      <tr>
-                        <td style={{ border: "none", fontSize: "8pt" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
-                        <td style={{ border: "none", textAlign: "right" as const, fontSize: "8pt" }}>担当者：{companyInfo.staffName}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ border: "none", fontSize: "8pt" }}>事業所名：{companyInfo.companyName}</td>
-                        <td style={{ border: "none", textAlign: "right" as const, fontSize: "8pt" }}>事業所番号：{companyInfo.businessNumber}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* 利用者情報 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
-                    <tbody>
-                      <tr>
-                        <th style={{ ...TH, width: "64px" }}>利用者氏名</th>
-                        <td style={TD} colSpan={3}>{client.name}　様</td>
-                        <th style={{ ...TH, width: "50px" }}>フリガナ</th>
-                        <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>性　別</th>
-                        <td style={{ ...TD, width: "34px" }}>{gender || "　"}</td>
-                        <th style={{ ...TH, width: "58px" }}>生年月日</th>
-                        <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
-                        <th style={{ ...TH, width: "50px" }}>介護度</th>
-                        <td style={{ ...TD, width: "58px" }} colSpan={2}>{client.care_level ?? ""}</td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>認定期間</th>
-                        <td style={TD} colSpan={3}>
-                          {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00")) : "　"}
-                        </td>
-                        <th style={TH}>年　齢</th>
-                        <td style={TD} colSpan={2}>{birthDate ? `${calcAge(birthDate)}歳` : ""}</td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>住　所</th>
-                        <td style={TD} colSpan={6}>{client.address ?? ""}</td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>電話番号</th>
-                        <td style={TD} colSpan={3}>{client.phone ?? client.mobile ?? ""}</td>
-                        <th style={TH}>居宅支援</th>
-                        <td style={TD} colSpan={2}>{client.care_manager_org ?? ""}</td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>担当CM</th>
-                        <td style={TD} colSpan={6}>{client.care_manager ?? ""}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* 相談内容 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
-                    <tbody>
-                      <tr>
-                        <th style={{ ...TH, width: "56px", verticalAlign: "top" as const }}>相談内容</th>
-                        <td style={{ ...TD, verticalAlign: "top" as const }}>
-                          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" as const, fontSize: "8pt", marginBottom: "2px" }}>
-                            <span>相談者：{consultantName || "　　　　"}</span>
-                            <span>続柄：{consultantRelation || "　　"}</span>
-                            <span>相談日：{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : "　　年　月　日"}</span>
-                          </div>
-                          <div style={{ minHeight: "28px" }}></div>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* 介護環境 */}
-                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【介護環境】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
-                    <tbody>
-                      <tr>
-                        <th style={{ ...TH, width: "86px" }}>他のサービス<br />利用状況</th>
-                        <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>家族構成/<br />主介護者</th>
-                        <td style={{ ...TD, width: "28%" }}></td>
-                        <th style={{ ...TH, background: "#f5b8c4", width: "54px" }}>疾病・麻痺</th>
-                        <td style={TD}></td>
-                      </tr>
-                      <tr>
-                        <th style={TH}>その他</th>
-                        <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* ADL（1テーブル・2グループ） */}
-                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【ADL・身体状況】（印刷後に✓記入）</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px", tableLayout: "fixed" as const }}>
-                    <thead>
-                      <tr>
-                        <th style={{ ...TH, width: "58px" }}>項目</th>
-                        <th style={{ ...TH, width: "26px" }}>自立</th>
-                        <th style={{ ...TH, width: "30px" }}>見守り</th>
-                        <th style={{ ...TH, width: "36px" }}>一部介助</th>
-                        <th style={{ ...TH, width: "26px" }}>全介助</th>
-                        <th style={{ border: "none", background: "none", width: "8px" }}></th>
-                        <th style={{ ...TH, width: "58px" }}>項目</th>
-                        <th style={{ ...TH, width: "26px" }}>自立</th>
-                        <th style={{ ...TH, width: "30px" }}>見守り</th>
-                        <th style={{ ...TH, width: "36px" }}>一部介助</th>
-                        <th style={{ ...TH, width: "26px" }}>全介助</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {([["起き上がり", "排泄"], ["立ち上がり", "入浴"], ["移乗", "食事"], ["歩行", "整容"]] as [string, string][]).map(([left, right]) => (
-                        <tr key={left}>
-                          <td style={{ ...TD, whiteSpace: "nowrap" as const, overflow: "hidden" as const, fontSize: "7.5pt" }}>{left}</td>
-                          <td style={{ ...TD, height: "15px" }}></td>
-                          <td style={TD}></td>
-                          <td style={TD}></td>
-                          <td style={TD}></td>
-                          <td style={{ border: "none", background: "none" }}></td>
-                          <td style={{ ...TD, whiteSpace: "nowrap" as const, overflow: "hidden" as const, fontSize: "7.5pt" }}>{right}</td>
-                          <td style={TD}></td>
-                          <td style={TD}></td>
-                          <td style={TD}></td>
-                          <td style={TD}></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {/* 利用目標（1枠・伸縮） */}
-                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", flex: 1 }}>
-                    <tbody style={{ height: "100%" }}>
-                      <tr style={{ height: "100%" }}>
-                        <td style={{ ...TD, whiteSpace: "pre-wrap" as const, verticalAlign: "top" as const, minHeight: "60px" }}>{goalsText}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              );
-
-              return (
-                <div id="care-plan-print-content" className="bg-white shadow mx-auto" style={{ minWidth: "1020px" }}>
-                  {pages.map((pageItems, pageIdx) => {
-                    const isLastPage = pageIdx === pages.length - 1;
-                    const globalOffset = pageIdx * ITEMS_PER_PAGE;
-                    return (
-                      <div key={pageIdx} style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", display: "flex", flexDirection: "column", minHeight: "192mm", pageBreakAfter: isLastPage ? "auto" : "always", breakAfter: isLastPage ? "auto" : "page" }}>
-                        <div style={{ display: "flex", gap: "10px", alignItems: "stretch", flex: 1 }}>
-                          {leftCol}
-                          {/* ===右カラム=== */}
-                          <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                            {/* 右カラムタイトル */}
-                            <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>選定福祉用具（レンタル・販売）</p>
-                            {/* 用具テーブル */}
-                            <p style={{ fontWeight: "bold", margin: "0 0 2px", fontSize: "8pt" }}>【選定した福祉用具】</p>
-                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
-                              <thead>
-                                <tr>
-                                  <th style={{ ...TH, width: "22px" }}>No</th>
-                                  <th style={{ ...TH, padding: "0", width: "130px" }}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
-                                      <span>種目</span>
-                                      <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
-                                    </div>
-                                    <div style={{ padding: "2px 6px" }}>機種（型式）</div>
-                                  </th>
-                                  <th style={TH}>選定理由</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {pageItems.map((item, idx) => {
-                                  const eq = getEq(item.product_code);
-                                  const units = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
-                                  return (
-                                    <tr key={item.id}>
-                                      <td style={{ ...TD, textAlign: "center" as const }}>{globalOffset + idx + 1}</td>
-                                      <td style={{ ...TD, padding: "0", verticalAlign: "top" as const, width: "130px" }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
-                                          <span style={{ flex: 1, overflow: "hidden" as const, fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
-                                          <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" as const }}>{units}</span>
-                                        </div>
-                                        <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap" as const, overflow: "hidden" as const }}>{eq?.name ?? item.product_code}</div>
-                                      </td>
-                                      <td style={TD}>{eq?.selection_reason ?? ""}</td>
-                                    </tr>
-                                  );
-                                })}
-                                {Array.from({ length: Math.max(0, ITEMS_PER_PAGE - pageItems.length) }).map((_, i) => (
-                                  <tr key={`empty-${i}`}>
-                                    <td style={{ ...TD, height: "40px" }}></td>
-                                    <td style={{ ...TD, height: "40px" }}></td>
-                                    <td style={{ ...TD, height: "40px" }}></td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            {/* 留意点 */}
-                            <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【留意点】</p>
-                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
-                              <tbody>
-                                <tr>
-                                  <td style={{ ...TD, whiteSpace: "pre-wrap" as const, verticalAlign: "top" as const, minHeight: "72px", height: "72px" }}>{precautionsText}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                            {/* モニタリング */}
-                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
-                              <tbody>
-                                <tr>
-                                  <th style={{ ...TH, width: "98px" }}>モニタリング対象月</th>
-                                  <td style={TD}>{monitoringMonths}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                            {/* 同意署名欄（最終ページのみ） */}
-                            {isLastPage && (
-                              <>
-                                <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【同意署名欄】</p>
-                                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px", flex: 1 }}>
-                                  <tbody>
-                                    <tr>
-                                      <td style={{ ...TD, width: "38%", verticalAlign: "top" as const, height: "44px" }}>
-                                        <p style={{ margin: "0 0 1px" }}>上記内容について説明を受け、同意します。</p>
-                                        <p style={{ margin: 0 }}>　年　月　日</p>
-                                        <p style={{ margin: "8px 0 0" }}>利用者氏名：</p>
-                                      </td>
-                                      <td style={{ ...TD, width: "31%", verticalAlign: "top" as const }}>
-                                        <p style={{ margin: "0 0 1px" }}>代理人（続柄：　　　）</p>
-                                        <p style={{ margin: "14px 0 0" }}>署名：</p>
-                                      </td>
-                                      <td style={{ ...TD, width: "31%", verticalAlign: "top" as const }}>
-                                        <p style={{ margin: "0 0 1px" }}>福祉用具専門相談員</p>
-                                        <p style={{ margin: "14px 0 0" }}>署名：</p>
-                                      </td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </>
-                            )}
-                            {/* 法人情報 */}
-                            <div style={{ textAlign: "right" as const, fontSize: "7.5pt", borderTop: "1px solid #ccc", paddingTop: "3px" }}>
-                              {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+            <CarePlanPages
+              selectedItems={selectedItems}
+              getEq={getEq}
+              client={client}
+              companyInfo={companyInfo}
+              creationDate={creationDate}
+              gender={gender}
+              birthDate={birthDate}
+              certStartDate={certStartDate}
+              consultantName={consultantName}
+              consultantRelation={consultantRelation}
+              consultationDate={consultationDate}
+              monitoringMonths={monitoringMonths}
+              goalsText={goalsText}
+              precautionsText={precautionsText}
+              TD={TD}
+              TH={TH}
+            />
           </div>
         )}
       </div>
