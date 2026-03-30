@@ -1905,6 +1905,12 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
           care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
           certification_end_date: cols[col("認定終了日")]?.trim() || null,
           memo: cols[col("メモ")]?.trim() || null,
+          insured_number: cols[col("被保険者番号")]?.trim() || null,
+          birth_date: cols[col("生年月日")]?.trim() || null,
+          certification_start_date: cols[col("認定開始日")]?.trim() || null,
+          insurer_number: cols[col("保険者番号")]?.trim() || null,
+          copay_rate: cols[col("利用者負担割合")]?.trim() || null,
+          public_expense: cols[col("公費負担情報")]?.trim() || null,
         };
         const existing = userNumber ? clients.find((c) => c.user_number === userNumber) : null;
         if (existing) toUpdate.push({ id: existing.id, data });
@@ -2115,7 +2121,18 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs">("current");
+  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance">("current");
+  // 保険情報編集
+  const [insuranceEdit, setInsuranceEdit] = useState(false);
+  const [insuredNumber, setInsuredNumber] = useState(client.insured_number ?? "");
+  const [birthDate, setBirthDate] = useState(client.birth_date ?? "");
+  const [certStartDate, setCertStartDate] = useState(client.certification_start_date ?? "");
+  const [certEndDate, setCertEndDate] = useState(client.certification_end_date ?? "");
+  const [careLevel, setCareLevel] = useState(client.care_level ?? "");
+  const [insurerNumber, setInsurerNumber] = useState(client.insurer_number ?? "");
+  const [copayRate, setCopayRate] = useState(client.copay_rate ?? "");
+  const [publicExpense, setPublicExpense] = useState(client.public_expense ?? "");
+  const [insuranceSaving, setInsuranceSaving] = useState(false);
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
@@ -2266,6 +2283,25 @@ function ClientDetail({
     const [y, m] = yearMonth.split("-").map(Number);
     const d = new Date(y, m - 1 + delta, 1);
     setYearMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  const handleSaveInsurance = async () => {
+    setInsuranceSaving(true);
+    try {
+      await supabase.from("clients").update({
+        insured_number: insuredNumber || null,
+        birth_date: birthDate || null,
+        certification_start_date: certStartDate || null,
+        certification_end_date: certEndDate || null,
+        care_level: careLevel || null,
+        insurer_number: insurerNumber || null,
+        copay_rate: copayRate || null,
+        public_expense: publicExpense || null,
+      }).eq("id", client.id);
+      setInsuranceEdit(false);
+    } finally {
+      setInsuranceSaving(false);
+    }
   };
 
   // 用具行共通（ステータス変更ボタン付き）- table行として使用
@@ -2479,6 +2515,10 @@ function ClientDetail({
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
           月別レンタル
         </button>
+        <button onClick={() => setViewMode("insurance")}
+          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "insurance" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+          保険情報
+        </button>
         <button onClick={() => setViewMode("docs")}
           className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
           書類{documents.length > 0 && <span className="ml-1 opacity-70">({documents.length})</span>}
@@ -2666,6 +2706,97 @@ function ClientDetail({
               </div>
             ))
           )}
+        </div>
+      ) : viewMode === "insurance" ? (
+        /* 保険情報タブ */
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* 事業所情報（テナント設定から参照） */}
+          <section>
+            <h3 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+              事業所情報
+              <span className="text-[10px] text-gray-400 font-normal">（設定タブで変更）</span>
+            </h3>
+            <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+              {[
+                ["事業所番号", companyInfo.businessNumber],
+                ["事業所名", companyInfo.companyName],
+                ["所在地", companyInfo.companyAddress],
+                ["連絡先", companyInfo.tel],
+              ].map(([label, value]) => (
+                <div key={label} className="flex gap-2 text-xs">
+                  <span className="w-24 shrink-0 text-gray-500">{label}</span>
+                  <span className="text-gray-800">{value || "—"}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* 利用者・保険情報 */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-gray-500">利用者・保険情報</h3>
+              {!insuranceEdit ? (
+                <button onClick={() => setInsuranceEdit(true)}
+                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50">
+                  編集
+                </button>
+              ) : (
+                <div className="flex gap-1.5">
+                  <button onClick={() => setInsuranceEdit(false)}
+                    className="text-xs text-gray-500 border border-gray-200 px-2.5 py-1 rounded-lg hover:bg-gray-50">
+                    キャンセル
+                  </button>
+                  <button onClick={handleSaveInsurance} disabled={insuranceSaving}
+                    className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-50">
+                    {insuranceSaving ? "保存中..." : "保存"}
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+              {/* 利用者情報 */}
+              {[
+                { label: "氏名", value: client.name, readOnly: true },
+                { label: "被保険者番号", value: insuredNumber, key: "insured_number" as const,
+                  setter: setInsuredNumber },
+                { label: "生年月日", value: birthDate, key: "birth_date" as const,
+                  setter: setBirthDate, type: "date" as const },
+                { label: "要介護度", value: careLevel, key: "care_level" as const,
+                  setter: setCareLevel, select: ["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"] },
+                { label: "認定開始日", value: certStartDate, key: "certification_start_date" as const,
+                  setter: setCertStartDate, type: "date" as const },
+                { label: "認定終了日", value: certEndDate, key: "certification_end_date" as const,
+                  setter: setCertEndDate, type: "date" as const },
+                { label: "保険者番号", value: insurerNumber, key: "insurer_number" as const,
+                  setter: setInsurerNumber },
+                { label: "利用者負担割合", value: copayRate, key: "copay_rate" as const,
+                  setter: setCopayRate, select: ["1割","2割","3割"] },
+                { label: "公費負担情報", value: publicExpense, key: "public_expense" as const,
+                  setter: setPublicExpense, textarea: true },
+              ].map(({ label, value, readOnly, setter, type, select, textarea }) => (
+                <div key={label} className="flex items-start gap-2 px-3 py-2.5">
+                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">{label}</span>
+                  {insuranceEdit && !readOnly ? (
+                    textarea ? (
+                      <textarea value={value} onChange={(e) => setter?.(e.target.value)} rows={2}
+                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 resize-none" />
+                    ) : select ? (
+                      <select value={value} onChange={(e) => setter?.(e.target.value)}
+                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
+                        <option value="">未設定</option>
+                        {select.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input type={type ?? "text"} value={value} onChange={(e) => setter?.(e.target.value)}
+                        className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400" />
+                    )
+                  ) : (
+                    <span className="flex-1 text-xs text-gray-800">{value || "—"}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
       ) : null}
     </div>
