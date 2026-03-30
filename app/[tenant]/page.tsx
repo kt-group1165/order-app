@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, useCallback, Fragment } from "react";
+import { useState, useEffect, use, useCallback, Fragment, useRef } from "react";
 import {
   Package,
   ClipboardList,
@@ -1729,6 +1729,8 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "history">("list");
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
+  const [importing, setImporting] = useState(false);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -1824,6 +1826,102 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
       .sort((a, b) => (b.events[0]?.date ?? "").localeCompare(a.events[0]?.date ?? ""));
   })();
 
+  const CSV_HEADERS = ["利用者番号", "氏名", "ふりがな", "電話番号", "携帯番号", "住所", "介護度", "給付率", "ケアマネ名", "ケアマネ事業所", "認定終了日", "メモ"];
+
+  const handleExportCSV = () => {
+    const rows = clients.map((c) => [
+      c.user_number ?? "", c.name, c.furigana ?? "",
+      c.phone ?? "", c.mobile ?? "", c.address ?? "",
+      c.care_level ?? "", c.benefit_rate ?? "",
+      c.care_manager ?? "", c.care_manager_org ?? "",
+      c.certification_end_date ?? "", c.memo ?? "",
+    ]);
+    const csvText = [CSV_HEADERS, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `利用者一覧_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const parseCsvRow = (line: string): string[] => {
+    const result: string[] = [];
+    let cur = ""; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQ) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') inQ = false;
+        else cur += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === ',') { result.push(cur); cur = ""; }
+        else cur += ch;
+      }
+    }
+    result.push(cur);
+    return result;
+  };
+
+  const handleImportCSV = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim());
+      if (lines.length < 2) return;
+      const headers = parseCsvRow(lines[0]);
+      const col = (name: string) => headers.indexOf(name);
+
+      const maxNum = clients.reduce((mx, c) => {
+        const n = parseInt(c.user_number ?? "0");
+        return isNaN(n) ? mx : Math.max(mx, n);
+      }, 0);
+      let nextNum = maxNum + 1;
+
+      const toInsert: Omit<Client, "id" | "created_at">[] = [];
+      const toUpdate: { id: string; data: Partial<Client> }[] = [];
+
+      for (const line of lines.slice(1)) {
+        if (!line.trim()) continue;
+        const cols = parseCsvRow(line);
+        const name = cols[col("氏名")]?.trim();
+        if (!name) continue;
+        const userNumber = cols[col("利用者番号")]?.trim() || null;
+        const data = {
+          tenant_id: tenantId,
+          user_number: userNumber ?? String(nextNum++),
+          name,
+          furigana: cols[col("ふりがな")]?.trim() || null,
+          phone: cols[col("電話番号")]?.trim() || null,
+          mobile: cols[col("携帯番号")]?.trim() || null,
+          address: cols[col("住所")]?.trim() || null,
+          care_level: cols[col("介護度")]?.trim() || null,
+          benefit_rate: cols[col("給付率")]?.trim() || null,
+          care_manager: cols[col("ケアマネ名")]?.trim() || null,
+          care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
+          certification_end_date: cols[col("認定終了日")]?.trim() || null,
+          memo: cols[col("メモ")]?.trim() || null,
+        };
+        const existing = userNumber ? clients.find((c) => c.user_number === userNumber) : null;
+        if (existing) toUpdate.push({ id: existing.id, data });
+        else toInsert.push(data);
+      }
+
+      if (toInsert.length > 0) await supabase.from("clients").insert(toInsert);
+      for (const { id, data } of toUpdate) await supabase.from("clients").update(data).eq("id", id);
+
+      const newClients = await getClients(tenantId);
+      setClients(newClients);
+    } finally {
+      setImporting(false);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
@@ -1845,6 +1943,23 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
         )}
         {viewMode === "history" && <div className="flex-1" />}
         <div className="flex gap-1 shrink-0">
+          <button
+            onClick={handleExportCSV}
+            title="CSVダウンロード"
+            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
+          >
+            CSV出力
+          </button>
+          <button
+            onClick={() => csvInputRef.current?.click()}
+            disabled={importing}
+            title="CSVから利用者を取り込む"
+            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            {importing ? "取り込み中..." : "CSV取り込み"}
+          </button>
+          <input ref={csvInputRef} type="file" accept=".csv" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCSV(f); }} />
           {(["list", "history"] as const).map((m) => (
             <button
               key={m}
