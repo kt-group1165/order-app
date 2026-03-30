@@ -25,6 +25,7 @@ import {
   Send,
   FileText,
   Lock,
+  Download,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
@@ -74,6 +75,15 @@ type CompanyInfo = {
   tel: string;
   fax: string;
   staffName: string;
+  serviceArea: string;
+  businessDays: string;
+  businessHours: string;
+  staffManagerFull: string;
+  staffManagerPart: string;
+  staffSpecialistFull: string;
+  staffSpecialistPart: string;
+  staffAdminFull: string;
+  staffAdminPart: string;
 };
 
 const COMPANY_INFO_DEFAULTS: CompanyInfo = {
@@ -83,11 +93,21 @@ const COMPANY_INFO_DEFAULTS: CompanyInfo = {
   tel: "000-0000-0000",
   fax: "000-0000-0001",
   staffName: "担当者",
+  serviceArea: "",
+  businessDays: "月〜土（祝日除く）",
+  businessHours: "9:00〜17:00",
+  staffManagerFull: "",
+  staffManagerPart: "",
+  staffSpecialistFull: "",
+  staffSpecialistPart: "",
+  staffAdminFull: "",
+  staffAdminPart: "",
 };
 
 // ─── 和暦・単位数ヘルパー ──────────────────────────────────────────────────────
 
 function toJapaneseEra(date: Date): string {
+  if (isNaN(date.getTime())) return "";
   const y = date.getFullYear(), m = date.getMonth() + 1, d = date.getDate();
   if (y > 2019 || (y === 2019 && m >= 5)) return `令和${y - 2018}年${m}月${d}日`;
   if (y > 1989 || (y === 1989 && m >= 1 && d >= 8)) return `平成${y - 1988}年${m}月${d}日`;
@@ -653,7 +673,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                   <span className="ml-auto text-xs text-emerald-400">{group.orders.length}発注</span>
                 </div>
                 {/* その利用者の発注一覧 */}
-                <ul className="divide-y divide-gray-100">
+                <ul className="flex flex-col gap-4 px-3 pb-3 pt-0">
                   {group.orders.map((order) => {
                     const isOpen = expandedIds.has(order.id);
                     const activeItems = order.items.filter((i) => i.status !== "cancelled");
@@ -664,9 +684,11 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                       return next;
                     });
                     return (
-                      <li key={order.id} className="bg-white">
+                      <li key={order.id} className="relative bg-white border border-gray-100 rounded-lg pl-1">
+                        <div className="absolute left-0 top-2 bottom-5 w-1 rounded-r-full bg-emerald-400" />
+                        <div className="overflow-x-auto">
                         {/* 発注ヘッダー行 */}
-                        <div className="px-4 py-2.5 flex items-center gap-2 hover:bg-gray-50 transition-colors">
+                        <div className="min-w-[600px] px-4 py-0.5 flex items-center gap-2 hover:bg-gray-50 transition-colors">
                           {/* 折りたたみボタン（大部分） */}
                           <button
                             onClick={toggleExpand}
@@ -698,7 +720,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                         {isOpen && (
                           <div className="px-3 pb-3 bg-gray-50">
                             {/* アイテム一覧（table で縦列を完全に揃える） */}
-                            <table className="w-full table-fixed bg-white rounded-xl overflow-hidden text-left">
+                            <table className="min-w-[600px] w-full table-fixed bg-white rounded-xl overflow-hidden text-left">
                               <tbody>
                                 {order.items.map((item) => {
                                   const pending = pendingChanges.get(item.id);
@@ -817,6 +839,7 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
                             </table>
                           </div>
                         )}
+                        </div>{/* overflow-x-auto wrapper */}
                       </li>
               );
             })}
@@ -882,12 +905,21 @@ function OrdersTab({ tenantId, onDirtyChange }: { tenantId: string; onDirtyChang
               getTenantById(tenantId),
             ]);
             const companyInfo: CompanyInfo = tenant ? {
-              businessNumber: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
-              companyName:    tenant.company_name    ?? COMPANY_INFO_DEFAULTS.companyName,
-              companyAddress: tenant.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
-              tel:            tenant.company_tel     ?? COMPANY_INFO_DEFAULTS.tel,
-              fax:            tenant.company_fax     ?? COMPANY_INFO_DEFAULTS.fax,
-              staffName:      tenant.staff_name      ?? COMPANY_INFO_DEFAULTS.staffName,
+              businessNumber:      tenant.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
+              companyName:         tenant.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
+              companyAddress:      tenant.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
+              tel:                 tenant.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
+              fax:                 tenant.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
+              staffName:           tenant.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
+              serviceArea:         tenant.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
+              businessDays:        tenant.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
+              businessHours:       tenant.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
+              staffManagerFull:    tenant.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+              staffManagerPart:    tenant.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+              staffSpecialistFull: tenant.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+              staffSpecialistPart: tenant.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+              staffAdminFull:      tenant.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+              staffAdminPart:      tenant.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
             } : COMPANY_INFO_DEFAULTS;
             setCareSentIds((prev) => new Set([...prev, order.id]));
             setCareManagerModal({ client, items: allItems, companyInfo, priceHistory: history });
@@ -955,6 +987,29 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
     setLocalEquipment(equipment);
     setOrderChanged(false);
   }, [equipment]);
+
+  const handleExportCSV = () => {
+    const headers = ["用具名", "TAISコード", "カテゴリ", "レンタル価格", "全国平均価格", "限度額", "商品コード"];
+    const rows = localEquipment.map(e => [
+      e.name,
+      e.tais_code ?? "",
+      e.category ?? "",
+      e.rental_price?.toString() ?? "",
+      e.national_avg_price?.toString() ?? "",
+      e.price_limit?.toString() ?? "",
+      e.product_code,
+    ]);
+    const csv = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "用具マスタ.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const sortedEquipment = (() => {
     if (sortMode === "default") return localEquipment;
@@ -1067,7 +1122,14 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           className="shrink-0 flex items-center gap-1 bg-gray-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
         >
           <Upload size={14} />
-          CSV
+          取込
+        </button>
+        <button
+          onClick={handleExportCSV}
+          className="shrink-0 flex items-center gap-1 bg-gray-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+        >
+          <Download size={14} />
+          CSV出力
         </button>
         <button
           onClick={handleDeleteAll}
@@ -1139,19 +1201,19 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           <Loader2 size={28} className="animate-spin text-emerald-400" />
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto overflow-x-auto">
           {filtered.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-16">
               {equipment.length === 0 ? "用具データがありません。CSVからインポートしてください。" : "該当なし"}
             </p>
           ) : (
-            <table className="w-full table-fixed bg-white text-left">
+            <table className="min-w-[680px] w-full table-fixed bg-white text-left">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="pl-4 py-2 text-xs font-semibold text-gray-500">用具名</th>
+                  <th className="pl-3 py-2 text-xs font-semibold text-gray-500 w-[5.5rem]">種目</th>
+                  <th className="py-2 text-xs font-semibold text-gray-500">用具名</th>
                   <th className="py-2 px-3 text-xs font-semibold text-gray-500 w-[6.5rem]">コード</th>
                   <th className="py-2 pr-3 text-xs font-semibold text-gray-500 w-[10rem]">TAISコード</th>
-                  <th className="py-2 pr-3 text-xs font-semibold text-gray-500 w-[7rem]">カテゴリ</th>
                   <th className="py-2 pr-2 text-xs font-semibold text-gray-500 w-[5.5rem] text-right">レンタル価格</th>
                   <th className="w-6"></th>
                 </tr>
@@ -1165,8 +1227,16 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
                     onDragEnd={handleDragEnd}
                     className={`hover:bg-gray-50 transition-colors cursor-pointer ${dragId === item.id ? "opacity-40" : ""}`}
                     onClick={() => setSelectedItem(item)}>
+                    {/* 種目マーク */}
+                    <td className="pl-3 py-2.5 w-[5.5rem] overflow-hidden">
+                      {item.category && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium block truncate ${catColor(item.category)}`}>
+                          {item.category}
+                        </span>
+                      )}
+                    </td>
                     {/* 用具名 */}
-                    <td className="pl-4 py-2.5 text-sm font-medium text-gray-800 max-w-0">
+                    <td className="py-2.5 text-sm font-medium text-gray-800 max-w-0">
                       <span className="block truncate">{item.name}</span>
                     </td>
                     {/* コード */}
@@ -1176,14 +1246,6 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
                     {/* TAISコード */}
                     <td className="py-2.5 pr-3 text-xs text-gray-400 whitespace-nowrap w-[10rem]">
                       {item.tais_code ? `TAIS: ${item.tais_code}` : ""}
-                    </td>
-                    {/* カテゴリ */}
-                    <td className="py-2.5 pr-3 whitespace-nowrap w-[7rem]">
-                      {item.category && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${catColor(item.category)}`}>
-                          {item.category}
-                        </span>
-                      )}
                     </td>
                     {/* レンタル価格 */}
                     <td className="py-2.5 pr-2 text-sm font-semibold text-emerald-600 whitespace-nowrap w-[5.5rem] text-right">
@@ -1816,32 +1878,55 @@ function ClientsTab({ tenantId }: { tenantId: string }) {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto bg-white">
+      <div className="flex-1 overflow-y-auto overflow-x-auto bg-white">
         {filtered.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-16">
             {clients.length === 0 ? "利用者データがありません" : "該当なし"}
           </p>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {filtered.map((client) => (
-              <li key={client.id}>
-                <button
-                  onClick={() => setSelectedClient(client)}
-                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="w-9 h-9 bg-gray-100 rounded-full flex items-center justify-center shrink-0 text-sm font-semibold text-gray-500">
-                    {client.name.charAt(0)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{client.name}</p>
-                    {client.furigana && (
-                      <p className="text-xs text-gray-400">{client.furigana}</p>
-                    )}
-                  </div>
-                  <ChevronRight size={16} className="text-gray-300 shrink-0" />
-                </button>
-              </li>
-            ))}
+          <ul className="divide-y divide-gray-100 min-w-[480px]">
+            {filtered.map((client) => {
+              const clientOrders = orders.filter(o => o.client_id === client.id);
+              const clientOrderIds = new Set(clientOrders.map(o => o.id));
+              const activeItems = orderItems.filter(
+                item => clientOrderIds.has(item.order_id) &&
+                        item.status !== "cancelled" &&
+                        item.status !== "terminated"
+              );
+              const hasKaigo = activeItems.some(item => {
+                const pt = item.payment_type ?? clientOrders.find(o => o.id === item.order_id)?.payment_type;
+                return pt === "介護";
+              });
+              const hasJihi = activeItems.some(item => {
+                const pt = item.payment_type ?? clientOrders.find(o => o.id === item.order_id)?.payment_type;
+                return pt === "自費";
+              });
+              return (
+                <li key={client.id}>
+                  <button
+                    onClick={() => setSelectedClient(client)}
+                    className="w-full px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="flex-1 min-w-0 flex items-center gap-1">
+                      <span className="w-20 shrink-0 text-sm font-medium text-gray-800 truncate">{client.name}</span>
+                      <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
+                      <div className="w-8 shrink-0 flex items-center">
+                        {hasKaigo && (
+                          <span className="text-xs px-1 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">介護</span>
+                        )}
+                      </div>
+                      <div className="w-8 shrink-0 flex items-center">
+                        {hasJihi && (
+                          <span className="text-xs px-1 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">自費</span>
+                        )}
+                      </div>
+                      <span className="flex-1 min-w-0 text-xs text-gray-400 truncate">{client.address ?? ""}</span>
+                    </div>
+                    <ChevronRight size={16} className="text-gray-300 shrink-0" />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -1866,6 +1951,7 @@ function ClientDetail({
   onBack: () => void;
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
+  const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1873,6 +1959,7 @@ function ClientDetail({
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [showProposal, setShowProposal] = useState(false);
+  const [showDocuments, setShowDocuments] = useState(false);
   const [yearMonth, setYearMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -1891,12 +1978,21 @@ function ClientDetail({
     getTenantById(tenantId).then((t) => {
       if (t) {
         setCompanyInfo({
-          businessNumber: t.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
-          companyName:    t.company_name    ?? COMPANY_INFO_DEFAULTS.companyName,
-          companyAddress: t.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
-          tel:            t.company_tel     ?? COMPANY_INFO_DEFAULTS.tel,
-          fax:            t.company_fax     ?? COMPANY_INFO_DEFAULTS.fax,
-          staffName:      t.staff_name      ?? COMPANY_INFO_DEFAULTS.staffName,
+          businessNumber:      t.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
+          companyName:         t.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
+          companyAddress:      t.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
+          tel:                 t.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
+          fax:                 t.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
+          staffName:           t.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
+          serviceArea:         t.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
+          businessDays:        t.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
+          businessHours:       t.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
+          staffManagerFull:    t.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+          staffManagerPart:    t.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+          staffSpecialistFull: t.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+          staffSpecialistPart: t.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+          staffAdminFull:      t.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+          staffAdminPart:      t.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
         });
       }
     });
@@ -1907,11 +2003,17 @@ function ClientDetail({
     try {
       const { data: ordersData } = await supabase
         .from("orders")
-        .select("id")
+        .select("id, payment_type")
         .eq("tenant_id", tenantId)
         .eq("client_id", client.id);
       if (ordersData && ordersData.length > 0) {
-        const orderIds = ordersData.map((o: { id: string }) => o.id);
+        const orderIds = ordersData.map((o: { id: string; payment_type: string }) => o.id);
+        const payMap: Record<string, "介護" | "自費"> = {};
+        ordersData.forEach((o: { id: string; payment_type: string }) => {
+          if (o.payment_type === "自費") payMap[o.id] = "自費";
+          else payMap[o.id] = "介護";
+        });
+        setOrderPaymentMap(payMap);
         const { data: items } = await supabase
           .from("order_items")
           .select("*")
@@ -1940,7 +2042,7 @@ function ClientDetail({
   const today = new Date().toISOString().split("T")[0];
 
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"]) => {
-    if (nextStatus === "rental_started" || nextStatus === "terminated") {
+    if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
       setDateInput({ item, nextStatus, date: today });
     } else {
       execStatusChange(item, nextStatus);
@@ -1955,6 +2057,7 @@ function ClientDetail({
     setUpdatingId(item.id);
     try {
       const extra: Record<string, string> = {};
+      if (newStatus === "delivered" && date) extra.delivered_at = date;
       if (newStatus === "rental_started" && date) extra.rental_start_date = date;
       if (newStatus === "terminated" && date) extra.rental_end_date = date;
       await updateOrderItemStatus(item.id, newStatus, Object.keys(extra).length ? extra : undefined);
@@ -2059,7 +2162,7 @@ function ClientDetail({
           <td colSpan={5} className="px-3 pb-2">
             <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
               <p className="text-xs font-medium text-emerald-700">
-                {dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
+                {dateInput.nextStatus === "delivered" ? "納品日" : dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
               </p>
               <div className="flex gap-2 items-center">
                 <input
@@ -2096,6 +2199,14 @@ function ClientDetail({
           {client.furigana && <p className="text-xs text-gray-400">{client.furigana}</p>}
         </div>
         <button
+          onClick={() => setShowDocuments(true)}
+          title="重要事項説明書・契約書を作成"
+          className="flex items-center gap-1.5 text-xs text-blue-600 border border-blue-200 px-2.5 py-1.5 rounded-xl hover:bg-blue-50 transition-colors"
+        >
+          <FileText size={14} />
+          書類作成
+        </button>
+        <button
           onClick={() => setShowReport(true)}
           title="貸与提供報告書を作成"
           className="flex items-center gap-1.5 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1.5 rounded-xl hover:bg-emerald-50 transition-colors"
@@ -2110,6 +2221,7 @@ function ClientDetail({
         <RentalReportModal
           client={client}
           items={clientItems}
+          orderPaymentMap={orderPaymentMap}
           equipment={equipment}
           companyInfo={companyInfo}
           priceHistory={priceHistory}
@@ -2119,6 +2231,23 @@ function ClientDetail({
           onSaved={async () => {
             const docs = await getClientDocuments(tenantId, client.id);
             setDocuments(docs);
+          }}
+        />
+      )}
+
+      {/* 書類作成モーダル（重要事項説明書＋契約書） */}
+      {showDocuments && (
+        <ContractDocumentsModal
+          client={client}
+          clientItems={clientItems}
+          equipment={equipment}
+          companyInfo={companyInfo}
+          tenantId={tenantId}
+          onClose={() => setShowDocuments(false)}
+          onSaved={async () => {
+            const docs = await getClientDocuments(tenantId, client.id);
+            setDocuments(docs);
+            setShowDocuments(false);
           }}
         />
       )}
@@ -2320,14 +2449,17 @@ function ClientDetail({
                   <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
                   <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
                 </div>
-                {doc.type === "rental_report" && (
-                  <button
-                    onClick={() => setRegenDoc(doc)}
-                    className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
-                  >
-                    再生成
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    if (doc.type === "rental_report") setRegenDoc(doc);
+                    else if (doc.type === "care_plan") setShowCarePlan(true);
+                    else if (doc.type === "proposal") setShowProposal(true);
+                    else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
+                  }}
+                  className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                >
+                  再生成
+                </button>
                 <button
                   onClick={async () => {
                     await deleteClientDocument(doc.id);
@@ -3315,9 +3447,9 @@ function NewOrderModal({
 
 function Row({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <span className="text-xs text-gray-500 shrink-0">{label}</span>
-      <span className={`text-xs font-medium text-right ${warn ? "text-amber-500" : "text-gray-800"}`}>{value}</span>
+    <div className="flex items-baseline gap-3">
+      <span className="text-xs text-gray-500 shrink-0 w-20">{label}</span>
+      <span className={`text-xs font-medium ${warn ? "text-amber-500" : "text-gray-800"}`}>{value}</span>
     </div>
   );
 }
@@ -3745,12 +3877,22 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
 
   // 会社情報
   const [company, setCompany] = useState({
-    business_number: COMPANY_INFO_DEFAULTS.businessNumber,
-    company_name:    COMPANY_INFO_DEFAULTS.companyName,
-    company_address: COMPANY_INFO_DEFAULTS.companyAddress,
-    company_tel:     COMPANY_INFO_DEFAULTS.tel,
-    company_fax:     COMPANY_INFO_DEFAULTS.fax,
-    staff_name:      COMPANY_INFO_DEFAULTS.staffName,
+    business_number:       COMPANY_INFO_DEFAULTS.businessNumber,
+    company_name:          COMPANY_INFO_DEFAULTS.companyName,
+    company_address:       COMPANY_INFO_DEFAULTS.companyAddress,
+    company_tel:           COMPANY_INFO_DEFAULTS.tel,
+    company_fax:           COMPANY_INFO_DEFAULTS.fax,
+    staff_name:            COMPANY_INFO_DEFAULTS.staffName,
+    legal_name:            "",
+    service_area:          COMPANY_INFO_DEFAULTS.serviceArea,
+    business_days:         COMPANY_INFO_DEFAULTS.businessDays,
+    business_hours:        COMPANY_INFO_DEFAULTS.businessHours,
+    staff_manager_full:    COMPANY_INFO_DEFAULTS.staffManagerFull,
+    staff_manager_part:    COMPANY_INFO_DEFAULTS.staffManagerPart,
+    staff_specialist_full: COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+    staff_specialist_part: COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+    staff_admin_full:      COMPANY_INFO_DEFAULTS.staffAdminFull,
+    staff_admin_part:      COMPANY_INFO_DEFAULTS.staffAdminPart,
   });
   const [savingCompany, setSavingCompany] = useState(false);
   const [savedCompany, setSavedCompany] = useState(false);
@@ -3766,12 +3908,22 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
       setEmailMap(map);
       if (tenant) {
         setCompany({
-          business_number: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
-          company_name:    tenant.company_name    ?? COMPANY_INFO_DEFAULTS.companyName,
-          company_address: tenant.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
-          company_tel:     tenant.company_tel     ?? COMPANY_INFO_DEFAULTS.tel,
-          company_fax:     tenant.company_fax     ?? COMPANY_INFO_DEFAULTS.fax,
-          staff_name:      tenant.staff_name      ?? COMPANY_INFO_DEFAULTS.staffName,
+          business_number:       tenant.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
+          company_name:          tenant.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
+          company_address:       tenant.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
+          company_tel:           tenant.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
+          company_fax:           tenant.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
+          staff_name:            tenant.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
+          legal_name:            tenant.legal_name            ?? "",
+          service_area:          tenant.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
+          business_days:         tenant.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
+          business_hours:        tenant.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
+          staff_manager_full:    tenant.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+          staff_manager_part:    tenant.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+          staff_specialist_full: tenant.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+          staff_specialist_part: tenant.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+          staff_admin_full:      tenant.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+          staff_admin_part:      tenant.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
         });
       }
     }).finally(() => setLoading(false));
@@ -3796,6 +3948,9 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
       await updateTenantInfo(tenantId, company);
       setSavedCompany(true);
       setTimeout(() => setSavedCompany(false), 2500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : (err as any)?.message ?? JSON.stringify(err);
+      alert("保存に失敗しました: " + msg);
     } finally {
       setSavingCompany(false);
     }
@@ -3815,7 +3970,20 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     { key: "company_address", label: "所在地",         placeholder: "○○県○○市○○1-2-3" },
     { key: "company_tel",     label: "TEL",            placeholder: "000-0000-0000" },
     { key: "company_fax",     label: "FAX",            placeholder: "000-0000-0001" },
-    { key: "staff_name",      label: "担当者名",       placeholder: "山田 太郎" },
+    { key: "staff_name",      label: "担当者名（管理者）", placeholder: "山田 太郎" },
+    { key: "legal_name",      label: "法人名（事業者名）", placeholder: "株式会社○○福祉用具" },
+  ] as const;
+
+  const importantMattersFields = [
+    { key: "service_area",   label: "通常の事業の実施地域",  placeholder: "○○市、○○市" },
+    { key: "business_days",  label: "営業日",                placeholder: "月〜土（祝日除く）" },
+    { key: "business_hours", label: "営業時間",              placeholder: "9:00〜17:00" },
+  ] as const;
+
+  const staffRows = [
+    { label: "管理者 兼 専門相談員", fullKey: "staff_manager_full",    partKey: "staff_manager_part" },
+    { label: "専門相談員",           fullKey: "staff_specialist_full", partKey: "staff_specialist_part" },
+    { label: "事務･配送職員",        fullKey: "staff_admin_full",      partKey: "staff_admin_part" },
   ] as const;
 
   return (
@@ -3827,7 +3995,7 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
 
         {/* 会社情報 */}
         <div>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">会社情報（貸与報告書に使用）</h3>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">会社情報</h3>
           <div className="bg-white rounded-xl p-4 space-y-3">
             {companyFields.map(({ key, label, placeholder }) => (
               <div key={key}>
@@ -3840,6 +4008,48 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
                 />
               </div>
             ))}
+
+            <p className="text-xs font-semibold text-gray-400 pt-2 border-t border-gray-100">重要事項説明書用</p>
+            {importantMattersFields.map(({ key, label, placeholder }) => (
+              <div key={key}>
+                <label className="text-xs text-gray-500 block mb-1">{label}</label>
+                <input
+                  value={company[key]}
+                  onChange={(e) => setCompany({ ...company, [key]: e.target.value })}
+                  placeholder={placeholder}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+                />
+              </div>
+            ))}
+
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">職員体制（常勤 / 非常勤）</label>
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-3 bg-gray-50 px-3 py-1.5">
+                  <span className="text-xs text-gray-500">職種</span>
+                  <span className="text-xs text-gray-500 text-center">常勤</span>
+                  <span className="text-xs text-gray-500 text-center">非常勤</span>
+                </div>
+                {staffRows.map(({ label, fullKey, partKey }) => (
+                  <div key={label} className="grid grid-cols-3 items-center border-t border-gray-100 px-3 py-1.5 gap-2">
+                    <span className="text-xs text-gray-700">{label}</span>
+                    <input
+                      value={company[fullKey]}
+                      onChange={(e) => setCompany({ ...company, [fullKey]: e.target.value })}
+                      placeholder="0"
+                      className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400"
+                    />
+                    <input
+                      value={company[partKey]}
+                      onChange={(e) => setCompany({ ...company, [partKey]: e.target.value })}
+                      placeholder="0"
+                      className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <button
               onClick={handleSaveCompany}
               disabled={savingCompany}
@@ -4105,6 +4315,8 @@ function CarePlanModal({
   const selectedCategories = [...new Set(
     selectedItems.map((i) => getEq(i.product_code)?.category).filter(Boolean) as string[]
   )];
+  const goalsText = selectedCategories.map((cat) => templates.find((t) => t.category === cat)?.goals ?? "").filter(Boolean).join("　");
+  const precautionsText = selectedCategories.map((cat) => templates.find((t) => t.category === cat)?.precautions ?? "").filter(Boolean).join("　");
 
   const handlePrint = () => {
     const el = document.getElementById("care-plan-print-content");
@@ -4116,7 +4328,26 @@ function CarePlanModal({
       @page{size:A4 landscape;margin:8mm 10mm}
       table{border-collapse:collapse;width:100%}
       td,th{border:1px solid #555;padding:2px 4px;vertical-align:middle}
+      [style*="page-break-after:always"],[style*="break-after:page"]{page-break-after:always;break-after:page}
     </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handlePrintRight = () => {
+    const el = document.getElementById("care-plan-right-col");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>選定福祉用具</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:8.5pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:8mm 10mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 4px;vertical-align:middle}
+      .right-col{display:flex;flex-direction:column;min-height:261mm}
+      .right-col>*:last-child{flex:1}
+    </style></head><body><div class="right-col">${el.innerHTML}</div></body></html>`);
     w.document.close();
     w.focus();
     setTimeout(() => w.print(), 400);
@@ -4155,7 +4386,10 @@ function CarePlanModal({
           {step === 2 && (
             <div className="flex gap-2">
               <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
-                <Printer size={14} /> 印刷
+                <Printer size={14} /> A4横（全体）
+              </button>
+              <button onClick={handlePrintRight} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> A4縦（右半分）
               </button>
               <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
                 {saving ? "保存中..." : "保存"}
@@ -4259,19 +4493,19 @@ function CarePlanModal({
           </div>
         ) : (
           <div className="flex-1 overflow-auto bg-gray-100 p-4">
-            <div id="care-plan-print-content" className="bg-white shadow mx-auto"
-              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "12px 14px", minWidth: "1000px" }}>
+            {(() => {
+              const ITEMS_PER_PAGE = 10;
+              const pages = selectedItems.length > ITEMS_PER_PAGE
+                ? Array.from({ length: Math.ceil(selectedItems.length / ITEMS_PER_PAGE) }, (_, i) =>
+                    selectedItems.slice(i * ITEMS_PER_PAGE, (i + 1) * ITEMS_PER_PAGE))
+                : [selectedItems];
 
-              {/* タイトル（全幅）*/}
-              <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", marginBottom: "6px" }}>個別援助計画書</p>
-
-              {/* 2カラムレイアウト */}
-              <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
-
-                {/* ===左カラム: 基本情報 + 利用目標=== */}
-                <div style={{ width: "46%", flexShrink: 0 }}>
+              const leftCol = (
+                <div style={{ width: "46%", flexShrink: 0, display: "flex", flexDirection: "column" }}>
+                  {/* タイトル */}
+                  <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>個別援助計画書（基本情報）</p>
                   {/* 作成日・事業所 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
                     <tbody>
                       <tr>
                         <td style={{ border: "none", fontSize: "8pt" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
@@ -4284,29 +4518,29 @@ function CarePlanModal({
                     </tbody>
                   </table>
                   {/* 利用者情報 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
                     <tbody>
                       <tr>
-                        <th style={{ ...TH, width: "68px" }}>利用者氏名</th>
+                        <th style={{ ...TH, width: "64px" }}>利用者氏名</th>
                         <td style={TD} colSpan={3}>{client.name}　様</td>
-                        <th style={{ ...TH, width: "52px" }}>フリガナ</th>
+                        <th style={{ ...TH, width: "50px" }}>フリガナ</th>
                         <td style={TD} colSpan={2}>{client.furigana ?? ""}</td>
                       </tr>
                       <tr>
                         <th style={TH}>性　別</th>
-                        <td style={{ ...TD, width: "36px" }}>{gender || "　"}</td>
-                        <th style={{ ...TH, width: "60px" }}>生年月日</th>
+                        <td style={{ ...TD, width: "34px" }}>{gender || "　"}</td>
+                        <th style={{ ...TH, width: "58px" }}>生年月日</th>
                         <td style={TD}>{birthDate ? `${toJapaneseEra(new Date(birthDate + "T00:00:00"))}（${calcAge(birthDate)}歳）` : "　"}</td>
-                        <th style={{ ...TH, width: "52px" }}>介護度</th>
-                        <td style={{ ...TD, width: "60px" }} colSpan={2}>{client.care_level ?? ""}</td>
+                        <th style={{ ...TH, width: "50px" }}>介護度</th>
+                        <td style={{ ...TD, width: "58px" }} colSpan={2}>{client.care_level ?? ""}</td>
                       </tr>
                       <tr>
                         <th style={TH}>認定期間</th>
                         <td style={TD} colSpan={3}>
-                          {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date + "T00:00:00")) : "　"}
+                          {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00")) : "　"}
                         </td>
-                        <th style={TH}>給付割合</th>
-                        <td style={TD} colSpan={2}>{client.benefit_rate ?? ""}</td>
+                        <th style={TH}>年　齢</th>
+                        <td style={TD} colSpan={2}>{birthDate ? `${calcAge(birthDate)}歳` : ""}</td>
                       </tr>
                       <tr>
                         <th style={TH}>住　所</th>
@@ -4325,35 +4559,70 @@ function CarePlanModal({
                     </tbody>
                   </table>
                   {/* 相談内容 */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
                     <tbody>
                       <tr>
-                        <th style={{ ...TH, width: "60px" }}>相談内容</th>
-                        <th style={{ ...TH, width: "52px" }}>相談者</th>
-                        <td style={TD}>{consultantName}</td>
-                        <th style={{ ...TH, width: "36px" }}>続柄</th>
-                        <td style={{ ...TD, width: "60px" }}>{consultantRelation}</td>
-                        <th style={{ ...TH, width: "48px" }}>相談日</th>
-                        <td style={TD}>{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : ""}</td>
+                        <th style={{ ...TH, width: "56px", verticalAlign: "top" as const }}>相談内容</th>
+                        <td style={{ ...TD, verticalAlign: "top" as const }}>
+                          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" as const, fontSize: "8pt", marginBottom: "2px" }}>
+                            <span>相談者：{consultantName || "　　　　"}</span>
+                            <span>続柄：{consultantRelation || "　　"}</span>
+                            <span>相談日：{consultationDate ? toJapaneseEra(new Date(consultationDate + "T00:00:00")) : "　　年　月　日"}</span>
+                          </div>
+                          <div style={{ minHeight: "28px" }}></div>
+                        </td>
                       </tr>
                     </tbody>
                   </table>
-                  {/* ADL */}
-                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【ADL・身体状況】（印刷後に✓記入）</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                  {/* 介護環境 */}
+                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【介護環境】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
+                    <tbody>
+                      <tr>
+                        <th style={{ ...TH, width: "86px" }}>他のサービス<br />利用状況</th>
+                        <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>家族構成/<br />主介護者</th>
+                        <td style={{ ...TD, width: "28%" }}></td>
+                        <th style={{ ...TH, background: "#f5b8c4", width: "54px" }}>疾病・麻痺</th>
+                        <td style={TD}></td>
+                      </tr>
+                      <tr>
+                        <th style={TH}>その他</th>
+                        <td style={{ ...TD, height: "22px" }} colSpan={3}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* ADL（1テーブル・2グループ） */}
+                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【ADL・身体状況】（印刷後に✓記入）</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px", tableLayout: "fixed" as const }}>
                     <thead>
                       <tr>
-                        <th style={TH}>項目</th>
-                        {["自立", "見守り", "一部介助", "全介助"].map((h) => (
-                          <th key={h} style={{ ...TH, width: "48px" }}>{h}</th>
-                        ))}
+                        <th style={{ ...TH, width: "58px" }}>項目</th>
+                        <th style={{ ...TH, width: "26px" }}>自立</th>
+                        <th style={{ ...TH, width: "30px" }}>見守り</th>
+                        <th style={{ ...TH, width: "36px" }}>一部介助</th>
+                        <th style={{ ...TH, width: "26px" }}>全介助</th>
+                        <th style={{ border: "none", background: "none", width: "8px" }}></th>
+                        <th style={{ ...TH, width: "58px" }}>項目</th>
+                        <th style={{ ...TH, width: "26px" }}>自立</th>
+                        <th style={{ ...TH, width: "30px" }}>見守り</th>
+                        <th style={{ ...TH, width: "36px" }}>一部介助</th>
+                        <th style={{ ...TH, width: "26px" }}>全介助</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {["起き上がり", "立ち上がり", "移乗", "歩行", "排泄", "入浴", "食事", "整容"].map((adl) => (
-                        <tr key={adl}>
-                          <td style={TD}>{adl}</td>
-                          <td style={{ ...TD, height: "16px" }}></td>
+                      {([["起き上がり", "排泄"], ["立ち上がり", "入浴"], ["移乗", "食事"], ["歩行", "整容"]] as [string, string][]).map(([left, right]) => (
+                        <tr key={left}>
+                          <td style={{ ...TD, whiteSpace: "nowrap" as const, overflow: "hidden" as const, fontSize: "7.5pt" }}>{left}</td>
+                          <td style={{ ...TD, height: "15px" }}></td>
+                          <td style={TD}></td>
+                          <td style={TD}></td>
+                          <td style={TD}></td>
+                          <td style={{ border: "none", background: "none" }}></td>
+                          <td style={{ ...TD, whiteSpace: "nowrap" as const, overflow: "hidden" as const, fontSize: "7.5pt" }}>{right}</td>
+                          <td style={TD}></td>
                           <td style={TD}></td>
                           <td style={TD}></td>
                           <td style={TD}></td>
@@ -4361,110 +4630,129 @@ function CarePlanModal({
                       ))}
                     </tbody>
                   </table>
-                  {/* モニタリング */}
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
-                    <tbody>
-                      <tr>
-                        <th style={{ ...TH, width: "100px" }}>モニタリング対象月</th>
-                        <td style={TD}>{monitoringMonths}</td>
+                  {/* 利用目標（1枠・伸縮） */}
+                  <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
+                  <table style={{ borderCollapse: "collapse" as const, width: "100%", flex: 1 }}>
+                    <tbody style={{ height: "100%" }}>
+                      <tr style={{ height: "100%" }}>
+                        <td style={{ ...TD, whiteSpace: "pre-wrap" as const, verticalAlign: "top" as const, minHeight: "60px" }}>{goalsText}</td>
                       </tr>
-                    </tbody>
-                  </table>
-                  {/* 利用目標 */}
-                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【福祉用具利用目標】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%" }}>
-                    <tbody>
-                      {selectedCategories.length === 0 ? (
-                        <tr><td style={{ ...TD, height: "30px" }}></td></tr>
-                      ) : selectedCategories.map((cat) => {
-                        const tmpl = templates.find((t) => t.category === cat);
-                        return (
-                          <tr key={cat}>
-                            <th style={{ ...TH, width: "68px", verticalAlign: "top" as const }}>{cat}</th>
-                            <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.goals ?? ""}</td>
-                          </tr>
-                        );
-                      })}
                     </tbody>
                   </table>
                 </div>
+              );
 
-                {/* ===右カラム: 用具テーブル + 留意点 + 署名欄=== */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {/* 選定した福祉用具（統合）*/}
-                  <p style={{ fontWeight: "bold", margin: "0 0 3px", fontSize: "8pt" }}>【選定した福祉用具】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
-                    <thead>
-                      <tr>
-                        {["No", "種目", "機種（型式）", "単位数", "選定理由", "変更区分", "貸与価格"].map((h, i) => (
-                          <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 3 ? "38px" : i === 5 ? "56px" : i === 6 ? "62px" : undefined }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedItems.map((item, idx) => {
-                        const eq = getEq(item.product_code);
-                        const price = item.rental_price ?? eq?.rental_price;
-                        return (
-                          <tr key={item.id}>
-                            <td style={{ ...TD, textAlign: "center" as const }}>{idx + 1}</td>
-                            <td style={TD}>{eq?.category ?? ""}</td>
-                            <td style={TD}>{eq?.name ?? item.product_code}</td>
-                            <td style={{ ...TD, textAlign: "center" as const }}>{eq?.rental_price ? Math.round(eq.rental_price / 10) : ""}</td>
-                            <td style={TD}>{eq?.selection_reason ?? ""}</td>
-                            <td style={{ ...TD, textAlign: "center" as const }}>{changeTypes[item.id] ?? "新規納品"}</td>
-                            <td style={{ ...TD, textAlign: "right" as const }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {/* 留意点 */}
-                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【留意点】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "5px" }}>
-                    <tbody>
-                      {selectedCategories.length === 0 ? (
-                        <tr><td style={{ ...TD, height: "30px" }}></td></tr>
-                      ) : selectedCategories.map((cat) => {
-                        const tmpl = templates.find((t) => t.category === cat);
-                        return (
-                          <tr key={cat}>
-                            <th style={{ ...TH, width: "68px", verticalAlign: "top" as const }}>{cat}</th>
-                            <td style={{ ...TD, whiteSpace: "pre-wrap" as const }}>{tmpl?.precautions ?? ""}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {/* 同意署名欄 */}
-                  <p style={{ fontWeight: "bold", margin: "5px 0 3px", fontSize: "8pt" }}>【同意署名欄】</p>
-                  <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
-                    <tbody>
-                      <tr>
-                        <td style={{ ...TD, width: "38%" }}>
-                          <p style={{ margin: "0 0 3px" }}>上記内容について説明を受け、同意します。</p>
-                          <p style={{ margin: 0 }}>　年　月　日</p>
-                          <p style={{ margin: "16px 0 0" }}>利用者氏名：</p>
-                        </td>
-                        <td style={{ ...TD, width: "31%", height: "70px" }}>
-                          <p style={{ margin: "0 0 3px" }}>代理人（続柄：　　　）</p>
-                          <p style={{ margin: "26px 0 0" }}>署名：</p>
-                        </td>
-                        <td style={{ ...TD, width: "31%" }}>
-                          <p style={{ margin: "0 0 3px" }}>福祉用具専門相談員</p>
-                          <p style={{ margin: "26px 0 0" }}>署名：</p>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* 法人情報 */}
-                  <div style={{ textAlign: "right" as const, fontSize: "7.5pt", marginTop: "5px", borderTop: "1px solid #ccc", paddingTop: "4px" }}>
-                    {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
-                  </div>
+              return (
+                <div id="care-plan-print-content" className="bg-white shadow mx-auto" style={{ minWidth: "1020px" }}>
+                  {pages.map((pageItems, pageIdx) => {
+                    const isLastPage = pageIdx === pages.length - 1;
+                    const globalOffset = pageIdx * ITEMS_PER_PAGE;
+                    return (
+                      <div key={pageIdx} style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "10px 12px", display: "flex", flexDirection: "column", minHeight: "192mm", pageBreakAfter: isLastPage ? "auto" : "always", breakAfter: isLastPage ? "auto" : "page" }}>
+                        <div style={{ display: "flex", gap: "10px", alignItems: "stretch", flex: 1 }}>
+                          {leftCol}
+                          {/* ===右カラム=== */}
+                          <div id={pageIdx === 0 ? "care-plan-right-col" : undefined} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                            {/* 右カラムタイトル */}
+                            <p style={{ fontSize: "13pt", fontWeight: "bold", textAlign: "center", margin: "0 0 4px" }}>選定福祉用具（レンタル・販売）</p>
+                            {/* 用具テーブル */}
+                            <p style={{ fontWeight: "bold", margin: "0 0 2px", fontSize: "8pt" }}>【選定した福祉用具】</p>
+                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                              <thead>
+                                <tr>
+                                  <th style={{ ...TH, width: "22px" }}>No</th>
+                                  <th style={{ ...TH, padding: "0", width: "130px" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
+                                      <span>種目</span>
+                                      <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
+                                    </div>
+                                    <div style={{ padding: "2px 6px" }}>機種（型式）</div>
+                                  </th>
+                                  <th style={TH}>選定理由</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pageItems.map((item, idx) => {
+                                  const eq = getEq(item.product_code);
+                                  const units = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
+                                  return (
+                                    <tr key={item.id}>
+                                      <td style={{ ...TD, textAlign: "center" as const }}>{globalOffset + idx + 1}</td>
+                                      <td style={{ ...TD, padding: "0", verticalAlign: "top" as const, width: "130px" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
+                                          <span style={{ flex: 1, overflow: "hidden" as const, fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
+                                          <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" as const }}>{units}</span>
+                                        </div>
+                                        <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap" as const, overflow: "hidden" as const }}>{eq?.name ?? item.product_code}</div>
+                                      </td>
+                                      <td style={TD}>{eq?.selection_reason ?? ""}</td>
+                                    </tr>
+                                  );
+                                })}
+                                {Array.from({ length: Math.max(0, ITEMS_PER_PAGE - pageItems.length) }).map((_, i) => (
+                                  <tr key={`empty-${i}`}>
+                                    <td style={{ ...TD, height: "40px" }}></td>
+                                    <td style={{ ...TD, height: "40px" }}></td>
+                                    <td style={{ ...TD, height: "40px" }}></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {/* 留意点 */}
+                            <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【留意点】</p>
+                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px" }}>
+                              <tbody>
+                                <tr>
+                                  <td style={{ ...TD, whiteSpace: "pre-wrap" as const, verticalAlign: "top" as const, minHeight: "72px", height: "72px" }}>{precautionsText}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            {/* モニタリング */}
+                            <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px" }}>
+                              <tbody>
+                                <tr>
+                                  <th style={{ ...TH, width: "98px" }}>モニタリング対象月</th>
+                                  <td style={TD}>{monitoringMonths}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            {/* 同意署名欄（最終ページのみ） */}
+                            {isLastPage && (
+                              <>
+                                <p style={{ fontWeight: "bold", margin: "3px 0 2px", fontSize: "8pt" }}>【同意署名欄】</p>
+                                <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "3px", flex: 1 }}>
+                                  <tbody>
+                                    <tr>
+                                      <td style={{ ...TD, width: "38%", verticalAlign: "top" as const, height: "44px" }}>
+                                        <p style={{ margin: "0 0 1px" }}>上記内容について説明を受け、同意します。</p>
+                                        <p style={{ margin: 0 }}>　年　月　日</p>
+                                        <p style={{ margin: "8px 0 0" }}>利用者氏名：</p>
+                                      </td>
+                                      <td style={{ ...TD, width: "31%", verticalAlign: "top" as const }}>
+                                        <p style={{ margin: "0 0 1px" }}>代理人（続柄：　　　）</p>
+                                        <p style={{ margin: "14px 0 0" }}>署名：</p>
+                                      </td>
+                                      <td style={{ ...TD, width: "31%", verticalAlign: "top" as const }}>
+                                        <p style={{ margin: "0 0 1px" }}>福祉用具専門相談員</p>
+                                        <p style={{ margin: "14px 0 0" }}>署名：</p>
+                                      </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </>
+                            )}
+                            {/* 法人情報 */}
+                            <div style={{ textAlign: "right" as const, fontSize: "7.5pt", borderTop: "1px solid #ccc", paddingTop: "3px" }}>
+                              {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-
-              </div>
-            </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -4692,11 +4980,1174 @@ function ProposalModal({
                       </Fragment>
                     );
                   })}
+                  {(() => {
+                    const totalRows = selectedItems.reduce((acc, item) => {
+                      const eq = getEq(item.product_code);
+                      const compCodes = (eq?.comparison_product_codes ?? []).filter((c) => equipment.find((e) => e.product_code === c));
+                      return acc + 1 + compCodes.length;
+                    }, 0);
+                    return Array.from({ length: Math.max(0, 8 - totalRows) }).map((_, i) => (
+                      <tr key={`empty-${i}`} style={{ height: "24px" }}>
+                        <td style={{ ...TD, textAlign: "center" as const }}>&nbsp;</td>
+                        <td style={TD}>&nbsp;</td>
+                        <td style={TD}>&nbsp;</td>
+                        <td style={TD}>&nbsp;</td>
+                        <td style={{ ...TD, textAlign: "center" as const }}>&nbsp;</td>
+                      </tr>
+                    ));
+                  })()}
                 </tbody>
               </table>
               <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "12px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
                 {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
               </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Contract Documents Modal (重要事項説明書 + 契約書) ────────────────────────
+
+function ContractDocumentsModal({
+  client,
+  clientItems,
+  equipment,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [step, setStep] = useState<1 | 2>(1);
+  const [explanationDate, setExplanationDate] = useState(todayStr);
+  const [contractDate, setContractDate] = useState(todayStr);
+  const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">("1");
+  const [saving, setSaving] = useState(false);
+
+  const selectableItems = clientItems.filter((i) =>
+    ["ordered", "delivered", "rental_started"].includes(i.status)
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(selectableItems.map((i) => i.id))
+  );
+  const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
+  const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+
+  const explanationDateJa = explanationDate ? toJapaneseEra(new Date(explanationDate + "T00:00:00")) : "　　年　月　日";
+  const contractDateJa    = contractDate    ? toJapaneseEra(new Date(contractDate    + "T00:00:00")) : "　　年　月　日";
+  const certEndJa = client.certification_end_date
+    ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00"))
+    : "　　年　月　日";
+  const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";
+
+  const handlePrint = () => {
+    const el = document.getElementById("combined-docs-print");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>重要事項説明書・契約書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:8pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:12mm 12mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 5px;vertical-align:top;font-size:8pt}
+      h1{font-size:13pt;text-align:center;margin:0 0 6px;font-weight:bold}
+      h2{font-size:9pt;margin:6px 0 2px;font-weight:bold;border-bottom:1px solid #333;padding-bottom:1px}
+      .page-break{page-break-after:always}
+      .article{margin-bottom:5px}
+      p{margin:2px 0;line-height:1.5}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await Promise.all([
+        saveClientDocument({
+          tenant_id: tenantId, client_id: client.id,
+          type: "important_matters",
+          title: `重要事項説明書 ${explanationDate}`,
+          params: { explanationDate },
+        }),
+        saveClientDocument({
+          tenant_id: tenantId, client_id: client.id,
+          type: "rental_contract",
+          title: `福祉用具貸与契約書 ${contractDate}`,
+          params: { contractDate, benefitRate, selectedIds: [...selectedIds] },
+        }),
+      ]);
+      onSaved?.();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "2px 5px", fontWeight: "bold", textAlign: "left" };
+  const TD: React.CSSProperties = { border: "1px solid #555", padding: "2px 5px", verticalAlign: "top" };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        {/* ヘッダー */}
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">書類作成（重要事項説明書・契約書）</h2>
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+          {step === 1 && (
+            <button disabled={selectedIds.size === 0} onClick={() => setStep(2)}
+              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              プレビュー →
+            </button>
+          )}
+        </div>
+
+        {step === 1 ? (
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">説明日（重要事項）</label>
+                <input type="date" value={explanationDate} onChange={(e) => setExplanationDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">契約締結日</label>
+                <input type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">負担割合</label>
+              <select value={benefitRate} onChange={(e) => setBenefitRate(e.target.value as "1" | "2" | "3")}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400">
+                <option value="1">１割</option>
+                <option value="2">２割</option>
+                <option value="3">３割</option>
+              </select>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">契約対象の用具</h3>
+              <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                {selectableItems.map((item) => {
+                  const eq = getEq(item.product_code);
+                  return (
+                    <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                      <input type="checkbox" checked={selectedIds.has(item.id)} onChange={(e) => {
+                        const n = new Set(selectedIds);
+                        e.target.checked ? n.add(item.id) : n.delete(item.id);
+                        setSelectedIds(n);
+                      }} className="accent-blue-500 shrink-0" />
+                      <span className="text-sm text-gray-800">{eq?.name ?? item.product_code}</span>
+                      {item.rental_price && <span className="ml-auto text-xs text-emerald-600">¥{item.rental_price.toLocaleString()}/月</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+            <div id="combined-docs-print">
+
+              {/* ─── 重要事項説明書 ─── */}
+              <div className="bg-white shadow mx-auto page-break"
+                style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8pt", padding: "12mm 12mm", maxWidth: "210mm", marginBottom: "16px" }}>
+                <h1 style={{ fontSize: "13pt", textAlign: "center", fontWeight: "bold", marginBottom: "6px" }}>福祉用具貸与重要事項説明書</h1>
+                <p style={{ textAlign: "right", marginBottom: "6px", fontSize: "7.5pt" }}>○管理者　{companyInfo.staffName}　氏名　　　　　　㊞</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>１．事業所の概要</h2>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}><tbody>
+                  <tr><th style={{ ...TH, width: "120px" }}>事　業　者　名</th><td style={TD}>{companyInfo.companyName}</td></tr>
+                  <tr><th style={TH}>福 祉 用 具 貸 与 事 業 所 名</th><td style={TD}>{companyInfo.companyName}</td></tr>
+                  <tr><th style={TH}>事　業　所　所　在　地</th><td style={TD}>{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}</td></tr>
+                  <tr><th style={TH}>介護保険指定番号</th><td style={TD}>{companyInfo.businessNumber}</td></tr>
+                  <tr><th style={TH}>管理者・連絡先</th><td style={TD}>{companyInfo.staffName}　TEL: {companyInfo.tel}</td></tr>
+                  <tr><th style={TH}>通常の事業の実施地域</th><td style={TD}>{companyInfo.serviceArea || "　"}</td></tr>
+                </tbody></table>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>※通常のサービス提供地域以外の方も希望される方はご気軽にご相談ください。</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>２．事業所の職員体制</h2>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}>
+                  <thead><tr>
+                    <th style={{ ...TH, width: "160px" }}>職種</th>
+                    <th style={{ ...TH, width: "50px", textAlign: "center" }}>常勤</th>
+                    <th style={{ ...TH, width: "50px", textAlign: "center" }}>非常勤</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr><td style={TD}>管理者 兼 専門相談員</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffManagerFull}</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffManagerPart}</td></tr>
+                    <tr><td style={TD}>専門相談員</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffSpecialistFull}</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffSpecialistPart}</td></tr>
+                    <tr><td style={TD}>事務･配送職員</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffAdminFull}</td><td style={{ ...TD, textAlign: "center" }}>{companyInfo.staffAdminPart}</td></tr>
+                  </tbody>
+                </table>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>３．営業日・営業時間</h2>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "2px", fontSize: "8pt" }}><tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "60px" }}>営業日</th><td style={TD}>{companyInfo.businessDays}</td>
+                    <th style={{ ...TH, width: "60px" }}>営業時間</th><td style={TD}>{companyInfo.businessHours}</td>
+                  </tr>
+                </tbody></table>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>注）土・日曜、祝祭日、夏期休暇（8／13〜8／15）、年末年始休暇（12／30〜1／3）を休業とする。</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>４．福祉用具貸与の内容等</h2>
+                <p style={{ margin: "0 0 2px" }}>　　福祉用具貸与にて取り扱う福祉用具の種目は、以下のとおりです。</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", margin: "0 0 4px", fontSize: "8pt" }}><tbody>
+                  {[["車いす","車いす付属品","特殊寝台","特殊寝台付属品"],["床ずれ防止用具","体位変換器","手すり","スロープ"],["歩行器","歩行補助つえ","認知症老人徘徊感知機器","移動用リフト"],["自動排泄処理装置","排泄予測支援機器","",""]].map((row,i)=>(
+                    <tr key={i}>{row.map((cell,j)=><td key={j} style={{ border:"1px solid #555", padding:"2px 6px", width:"25%" }}>{cell}</td>)}</tr>
+                  ))}
+                </tbody></table>
+                <p style={{ margin: "0 0 2px" }}>　　介護予防福祉用具貸与にて取り扱う福祉用具の種目は、以下のとおりです。</p>
+                <table style={{ borderCollapse: "collapse", margin: "0 0 4px", fontSize: "8pt" }}><tbody>
+                  <tr>{["手すり","スロープ","歩行器","歩行補助つえ"].map((cell,j)=><td key={j} style={{ border:"1px solid #555", padding:"2px 6px" }}>{cell}</td>)}</tr>
+                </tbody></table>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>※上記の（介護予防）福祉用具貸与品以外に、腰掛便座、入浴補助用具、等が介護保険制度により購入できます。また、住宅改修につきましても介護保険により支給されますので、希望される方はご相談ください。</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>５．サービスの利用方法</h2>
+                <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（１）サービスの利用開始</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "2em" }}>まずは、電話等でご連絡ください。当社の専門相談員がご自宅に訪問させていただきます。重要事項を説明した後、正式に契約を結び、サービスの提供を開始します（居宅介護支援事業者に居宅サービス計画の作成を依頼している場合は、事前に当該介護支援専門員とご相談下さい）。</p>
+                <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（２）サービスの終了</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>①お客様の都合によりサービスを終了する場合</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>サービスの終了を希望する日の1週間前までに文書又は口頭で通知することにより、サービスを終了することができます。</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>②当社の都合によりサービスを終了する場合（終了1ヶ月前までに通知します。）</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>やむを得ない事情により、当社よりサービスの提供を終了させていただく場合があります。</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>③自動終了</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様の要介護認定区分が、更新申請などにより、自立と認定された場合（この場合、条件を変更して再度契約することができます）</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様が介護保健施設に入所された場合　・医療機関へご入院された場合　・お客様が亡くなられた場合</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>④その他</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "3em" }}>・当社が正当な理由なく適切なサービスを提供しない場合、守秘義務に反した場合などは、文書で解約を通知することによって即座にサービスを終了することができます。・サービス利用料金の支払いを１ヶ月以上遅延し、催告後３０日以内に支払わない場合等は直ちにサービスを終了させていただく場合があります。</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>６．当社の（介護予防）福祉用具貸与の運営の方針</h2>
+                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・利用者が、可能な限り居宅において、自立した日常生活を営めるように、利用者の心身の状況、希望及びその置かれている環境を踏まえた適切な福祉用具選定の援助を行います。</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・利用者の要介護状態の軽減もしくは悪化防止のため、適切な福祉用具貸与の提供を行います。</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・サービス従業者は、業務上知り得た利用者又はその家族の秘密を保持します。</p>
+                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・専門相談員の資質向上のために、定期的に福祉用具に関する適切な研修の機会を設けます。</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "1em" }}>・災害発生時や感染症流行時などの非常時においては、事前に合意した日時・内容通りのサービスが提供できない可能性があります。利用者が避難所に避難された場合には、状況を考慮した上で提供可能と判断した場合にのみサービスを提供するものとします。</p>
+
+                <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>７．サービス内容に関する相談･苦情</h2>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em" }}>当社福祉用具貸与事業に関する相談、要望、苦情等は、担当の専門相談員又はお客様サービス係までご連絡下さい。</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "2px", fontSize: "8pt" }}><tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "80px" }}>事業所名</th><td style={TD}>{companyInfo.companyName}</td>
+                    <th style={{ ...TH, width: "80px" }}>電話番号</th><td style={TD}>{companyInfo.tel}</td>
+                  </tr>
+                  <tr><th style={TH}>受付時間</th><td style={TD} colSpan={3}>{companyInfo.businessHours}（{companyInfo.businessDays}）</td></tr>
+                </tbody></table>
+                <p style={{ margin: "0 0 2px" }}>当社以外に、区役所・市役所・町、村役場などでも相談･苦情等に対する窓口があります。</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", margin: "0 0 4px", fontSize: "8pt" }}>
+                  <tbody>
+                    {[
+                      ["千葉市",  "介護保険事業課",                  "043－245－5062"],
+                      ["市原市",  "保健福祉部　高齢者支援課",        "0436－23－9873"],
+                      ["四街道市","福祉サービス部　高齢者支援課",    "043－421－6127"],
+                      ["習志野市","保健福祉部　高齢者支援課",        "047－454－7533"],
+                      ["木更津市","福祉部　高齢者支援課　高齢者支援担当","0438－23－2630"],
+                      ["佐倉市",  "福祉部　高齢者支援課",            "043－484－6243"],
+                      ["", "", ""],
+                    ].map(([city, dept, tel], i) => (
+                      <tr key={i}>
+                        <td style={{ border: "1px solid #555", padding: "2px 6px", width: "70px", textAlign: "center" }}>{city}</td>
+                        <td style={{ border: "1px solid #555", padding: "2px 6px" }}>{dept}</td>
+                        <td style={{ border: "1px solid #555", padding: "2px 6px", width: "110px", textAlign: "center" }}>{tel}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {/* 説明者欄 */}
+                <div style={{ border: "1px solid #555", padding: "5px 8px", marginBottom: "4px", fontSize: "7.5pt" }}>
+                  <p style={{ margin: "0 0 2px" }}>私は、（介護予防）福祉用具貸与の提供について利用者またはその家族等に対して、契約書及び本書面によって重要事項を説明しました。</p>
+                  <p style={{ margin: "0 0 2px" }}>説明日　{explanationDateJa}　　説明者　　　　　　　　　　　　㊞</p>
+                  <p style={{ margin: "0 0 1px" }}>事業者　＜住所＞{companyInfo.companyAddress}　＜事業所名＞{companyInfo.companyName}　＜管理者名＞{companyInfo.staffName}　㊞</p>
+                </div>
+                <div style={{ marginBottom: "4px", fontSize: "7.5pt" }}>
+                  <p style={{ margin: "0 0 1px" }}>○　利用者等に福祉用具搬入後、取扱説明書を説明し交付する。</p>
+                  <p style={{ margin: "0 0 1px" }}>○　利用者等に貸与する福祉用具を使用しながら、使用方法を説明する。</p>
+                  <p style={{ margin: "0 0 3px" }}>○　当該商品の全国平均貸与価格と、その貸与事業所の貸与価格の両方を利用者に説明する。</p>
+                </div>
+                <div style={{ border: "1px solid #555", padding: "5px 8px", fontSize: "7.5pt" }}>
+                  <p style={{ margin: "0 0 2px" }}>私は、契約書及び本書面によって事業者から福祉用具貸与事業について重要事項及び上記について説明を受けました。</p>
+                  <p style={{ margin: 0 }}>＜利用者氏名＞{client.name}　　　　　　印　　　　＜代理人氏名＞　　　　　　　　　　　　印</p>
+                </div>
+              </div>
+
+              {/* ─── 福祉用具貸与契約書 ─── */}
+              <div className="bg-white shadow mx-auto"
+                style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "15mm 15mm", maxWidth: "210mm" }}>
+
+                <h1 style={{ fontSize: "14pt", textAlign: "center", fontWeight: "bold", marginBottom: "12px" }}>
+                  介護（介護予防）福祉用具貸与サービス契約書
+                </h1>
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "10px", fontSize: "8pt" }}><tbody>
+                  <tr><td style={{ border: "none", paddingBottom: "4px" }}>契約締結日　{contractDateJa}</td></tr>
+                  <tr><td style={{ border: "none" }}>
+                    <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+                      <tr>
+                        <td style={{ border: "1px solid #555", padding: "4px 8px", width: "50%", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "4px" }}>利用者</div>
+                          <div>＜住　所＞{client.address ?? ""}</div>
+                          <div style={{ marginTop: "4px" }}>＜氏　名＞{client.name}　　　　印</div>
+                        </td>
+                        <td style={{ border: "1px solid #555", padding: "4px 8px", width: "50%", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "4px" }}>代理人</div>
+                          <div>＜続　柄＞</div>
+                          <div style={{ marginTop: "4px" }}>＜氏　名＞　　　　　　　　　　印</div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={2} style={{ border: "1px solid #555", padding: "4px 8px" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "2px" }}>事　業　者</div>
+                          <div>＜事業所名＞{companyInfo.companyName}</div>
+                          <div>＜住　　所＞{companyInfo.companyAddress}</div>
+                          <div style={{ marginTop: "2px" }}>＜管理者名＞　　　　　　　　　　㊞　　TEL：{companyInfo.tel}</div>
+                        </td>
+                      </tr>
+                    </tbody></table>
+                  </td></tr>
+                </tbody></table>
+
+                {[
+                  { title: "第１条（契約の目的）", body: "　事業者は、利用者に対し、介護保険認定利用者に対して介護保険法令の趣旨に従って、利用者が可能な限りその居宅において、その有する能力に応じて自立した日常生活を営むことが出来るよう、（介護予防）福祉用具貸与を提供し、利用者は、事業者に対してそのサービスに対する料金を支払います。" },
+                  { title: "第２条（契約期間）", body: `１　この契約の契約期間は、${contractDateJa}から利用者の要介護認定又は要支援認定の有効期限満了日（${certEndJa}）までとします。\n２　契約満了の１週間前までに、利用者から事業者に対して、文書又は口頭で契約終了の申し出がない場合、契約は自動更新されるものとします。` },
+                  { title: "第３条（専門相談員）", body: "　事業者は、一定の研修を修了した専門相談員を配置し、専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえて、居宅介護支援事業者の作成する「居宅サービス計画」に沿って、福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じます。" },
+                  { title: "第４条（（介護予防）福祉用具貸与の内容）", body: "１　福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じるとともに、取り扱い説明書等の文書を示して福祉用具の機能、使用方法、利用料金等に関する情報を提供し、個別の福祉用具の貸与に係る同意を得ます。\n２　貸与する福祉用具の機能、安全性、衛生状態などを考慮し、十分な点検を行います。\n３　利用者の心身の状況等に応じて福祉用具の調整を行うとともに、当該福祉用具の使用方法、使用上の留意事項、故障時の対応等を記載した文書を利用者に交付し、十分な説明を行った上で、必要に応じて利用者に実際に当該福祉用具を使用してもらいながら使用方法の指導を行います。\n４　貸与した福祉用具の使用状況の定期的な確認を行い、必要な場合は、使用方法の指導又は修理等を行います。" },
+                  { title: "第５条（福祉用具貸与計画の作成）", body: "１　福祉用具専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえ、（介護予防）福祉用具利用計画・目標、当該目標を達成する為の具体的なサービスの内容を記載した福祉用具サービス計画を作成致します。\n２　福祉用具サービス計画は、既に居宅サービス計画が作成されている場合はその計画内容に沿って作成致します。\n３　福祉用具専門相談員は、福祉用具サービス計画の作成にあたり、その内容について利用者又はその家族に対して説明し、利用者様の同意を得てから計画をすすめてまいります。\n４　福祉用具専門相談員は、福祉用具サービス計画を作成した際には、当該福祉用具サービス計画を利用者様に交付致します。" },
+                  { title: "第６条（サービス提供の記録）", body: "１　事業者は、サービス提供記録を作成することとし、この契約の終了後２年間保存します。\n２　利用者は、事業所の営業時間内にその事業所にて、当該利用者に関する第１項のサービス提供記録やサービスの実施マニュアル等、サービスの質を利用者が評価するための情報については、いつでも閲覧できます。\n３　利用者は、当該利用者に関する第１項のサービス実施記録等の複写物の交付を無料で受けることができます。" },
+                ].map(({ title, body }) => (
+                  <div key={title} style={{ marginBottom: "5px" }}>
+                    <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>{title}</p>
+                    <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{body}</p>
+                  </div>
+                ))}
+
+                {/* 第７条 料金 */}
+                <div style={{ marginBottom: "5px" }}>
+                  <p style={{ fontWeight: "bold", margin: "0 0 4px" }}>第７条（料金）</p>
+                  <p style={{ margin: "0 0 3px", paddingLeft: "1em", lineHeight: "1.6" }}>１　利用者は、サービスの対価として、下記の（介護予防）福祉用具貸与料金一覧表をもとに、月額料金の1割・2割・3割いずれかの合計額を利用者の負担として支払います。</p>
+                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>２　搬出入にかかる費用は、現に福祉用具貸与に要した費用に含まれるものとし、別にいただきません。</p>
+                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>３　事業者は当月の利用内容明細を請求書として、使用月の翌月末日までに利用者に交付します。</p>
+                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>４　利用者は、事業者が発行した請求書に記載されている口座引き落とし日の前日までに、事前にご記入いただいた預金口座振替依頼書の指定金融機関の口座に、請求された金額をご入金ください。</p>
+                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6" }}>５　事業者は、利用者から料金の支払いを受けたときは、利用者に対し領収書を発行します。介護保険適用の場合、利用者の負担額は原則として下記の（介護予防）福祉用具貸与料金一覧表の1割・2割・3割のいずれかです。ただし、介護保険適用外のサービス利用については、全額が利用者の負担となります。</p>
+                  <p style={{ fontWeight: "bold", margin: "0 0 2px", paddingLeft: "1em" }}>（介護予防）福祉用具貸与料金一覧表</p>
+                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（１）介護保険の適用がある場合は、料金表のサービス費の1割・2割・3割のいずれかが利用者負担額となります。</p>
+                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>　　下記の「利用者負担額」は介護保険の負担割合が1割の方の場合の負担額となります。介護保険の負担割合が２割または３割の方はこれに２または３を乗じた金額が負担額となります。</p>
+                  <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}>
+                    <thead><tr>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center" }}>種目</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center" }}>福祉用具貸与商品</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "52px" }}>月額料金</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "32px" }}>数量</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "52px" }}>利用者負担</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "60px" }}>初月利用者負担</th>
+                    </tr></thead>
+                    <tbody>
+                      {selectedItems.map((item) => {
+                        const eq = getEq(item.product_code);
+                        const price = item.rental_price ?? eq?.rental_price ?? 0;
+                        const qty = item.quantity ?? 1;
+                        const burden = Math.round(price * parseInt(benefitRate) / 10);
+                        const halfBurden = Math.round(burden / 2);
+                        return (
+                          <tr key={item.id}>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px" }}>{eq?.category ?? ""}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px" }}>{eq?.name ?? item.product_code}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "center" }}>{qty}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{burden ? `¥${burden.toLocaleString()}` : ""}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{halfBurden ? `¥${halfBurden.toLocaleString()}` : ""}</td>
+                          </tr>
+                        );
+                      })}
+                      {(() => {
+                        const total = selectedItems.reduce((s, i) => s + (i.rental_price ?? getEq(i.product_code)?.rental_price ?? 0) * (i.quantity ?? 1), 0);
+                        const totalBurden = Math.round(total * parseInt(benefitRate) / 10);
+                        const totalHalf = Math.round(totalBurden / 2);
+                        return (
+                          <tr>
+                            <td colSpan={2} style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>合　計</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{total.toLocaleString()}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px" }}></td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{totalBurden.toLocaleString()}</td>
+                            <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{totalHalf.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさせていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
+                  <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約については１ヵ月分の料金を請求させていただきます。</p>
+                </div>
+
+                {[
+                  { title: "第８条（（介護予防）福祉用具貸与の変更）", body: "１　利用者は、身体状況の急変等によって必要とする福祉用具に変更が生じた場合、事業者に対して当該福祉用具の変更を求めることができます。ただし、製品によっては料金の変更が生じる場合がありますのでご了承下さい。\n２　貸与された福祉用具について、万一不良品などで使い勝手が悪く、他に変更したい場合は、すぐにお申し出くだされば、無料で変更します。\n３　前記第２項については、同一製品に限り有効で、他製品への変更は、遠慮させていただきます。" },
+                  { title: "第９条（料金の変更）", body: "１　事業者は、利用者に対して１ヵ月前までに文書で通知することにより、料金の変更（増額又は減額）を申し出ることができます。\n２　利用者が料金の変更を承諾する場合、新たな料金表に基づく【契約書別紙】を作成し、お互いに取り交わします。\n３　利用者は料金の変更を承諾しない場合、事業者に対し、文書で通知することにより、この契約を解除することができます。" },
+                  { title: "第１０条（契約の終了）", body: "１　利用者は事業者に対して、１週間の予告期間を置いて文書又は口頭で通知することにより､この契約を解約することができます｡但し､利用者の病変、急な入院などやむをえない事情がある場合は､１週間以内の通知でもこの契約を解約することができます｡\n２　事業者は､やむをえない事情がある場合､利用者に対して､１ヵ月間の予告期間をおいて理由を示した文書で通知することにより､この契約を解約することができます｡\n３　次の事由に該当した場合は､利用者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　事業者が正当な理由なくサービスを提供しない場合\n　②　事業者が守秘義務に反した場合\n　③　事業者が利用者やその家族などに対して社会理念を逸脱する行為を行った場合\n　④　事業者が破産した場合\n４　次の事由に該当した場合は､事業者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　利用者のサービス料金の支払いが１ヵ月以上遅延し､料金を支払うよう催促したにもかかわらず､３０日以内に支払われない場合\n　②　利用者又はその家族などが､事業者やサービス提供者に対して本契約を継続しがたいほどの背信行為を行った場合\n５　次の事由に該当した場合は､この契約は自動的に終了します｡\n　①　利用者が介護保健施設に入所した場合\n　②　利用者の要介護（要支援）認定区分が、非該当（自立）と認定されたとき（この場合、内容を変更して再度契約することができます）\n　③　医療機関への入院\n　④　利用者が亡くなられたとき" },
+                  { title: "第１１条（守秘義務）", body: "１　事業者及び事業者の使用する者は､（介護予防）福祉用具貸与を提供する上で知り得た利用者及びその家族に関する秘密を正当な理由なく第三者に漏らしません｡この守秘義務は契約終了後についても同様です｡\n２　事業者は､利用者からあらかじめ文書で同意を得ない限り、サービス担当者会議等において､利用者の個人情報を用いません｡\n３　事業者は､利用者の家族からあらかじめ文書で同意を得ない限り、サービス担当者会議等において、当該家族の個人情報を用いません｡" },
+                  { title: "第１２条（利用者及びその家族等の義務）", body: "１　利用者及びその家族等は、レンタル商品について定められた使用方法及び使用上の注意事項を遵守する事とします。\n２　利用者等は、事業者の承諾を得ることなくレンタル商品の仕様変更、加工・改造等を行うことはできません。\n３　利用者等は、事業者の承諾を得ることなく本契約に基づく権利の全部もしくは一部を第三者に譲渡し又は転貸することはできません。" },
+                  { title: "第１３条（福祉用具の保管･消毒）", body: "　福祉用具の保管･消毒については、指定居宅サービス等の事業の人員、設置及び運営に関する基準第２０３条第３項の規定に基づき、株式会社インフォゲート、フランスベッド株式会社、野口株式会社、株式会社日本ケアサプライ、ケアレックス株式会社にこの業務を委託し、業務委託契約書を取り交わした上で事業所は委託の契約の内容において、保管及び消毒が適切な方法により行われていることを担保します。" },
+                  { title: "第１４条（賠償責任）", body: "　事業者は､福祉用具貸与サービスの提供に伴い、賠償責任を負う場合に備えて損害保険に加入し、納品時に家具に損傷を与えるなど、事業者の責めに帰すべき事由により利用者の生命・身体・財産に損害を及ぼした場合は､利用者に対してその損害を賠償します｡ただし、事業者は自己の責に帰すべからざる事由によって生じた損害については賠償責任を負いません。とりわけ、以下の事由に該当する場合には、損害賠償責任を免れます。\n①　利用者が、その疾患・心身状態及び福祉用具の設置・使用環境等、レンタル商品の選定に必要な事項について故意にこれを告げず、又は不実の告知を行ったことに起因して損害が発生した場合。\n②　利用者の急激な体調の変化等、事業者の実施した（介護予防）福祉用具貸与サービスを原因としない事由に起因して損害が発生した場合。\n③　利用者又はその家族が、事業者及びサービス従事者の指示・説明に反して行った行為に起因して損害が発生した場合。" },
+                  { title: "第１５条（災害等発生時のサービス提供）", body: "１　災害発生時や感染症流行時などの非常時においては、事業者は従業員の安全を確保した上でサービスを提供するため、事前に合意した日時・内容通りのサービスが提供できない可能性があります。\n２　利用者が避難所に避難された場合には、サービス提供の場所が変わることになりますので、道路状況・人員体制・避難所の環境等を考慮した上で、サービスの提供が可能と事業者が判断した場合にのみサービスを提供するものとします。" },
+                  { title: "第１６条（利用者の損害賠償責任）", body: "　事業者は、利用者の故意又は重大な過失によってレンタル商品が消失し、又は回収したレンタル商品について通常の使用状態を超える著しい破損・汚損等が認められる場合には、利用者等に対して補修費もしくは弁償費相当額の支払を請求することができます。" },
+                  { title: "第１７条（身分証携帯義務）", body: "　サービス従業者は、常に身分証を携帯し、初回納品時及び利用者やその家族から提示を求められたときは、いつでも身分証を提示します。" },
+                  { title: "第１８条（連携）", body: "１　事業者は、福祉用具貸与の提供にあたり、介護支援専門員及び保健医療サービス又は福祉サービスを提供する者との密接な関係に努めます。\n２　事業者は、本契約の内容が変更された場合又は本契約が終了した場合は、その内容を記した書面の写しを速やかに介護支援専門員に送付します。なお、第１０条２項及び４項に基づいて解約通知をする際は、事前に介護支援専門員に連絡します。" },
+                  { title: "第１９条（苦情処理）", body: "１　事業者は、利用者からの相談･苦情に対する窓口を設置し、当該福祉用具の故障・修理依頼など、（介護予防）福祉用具貸与に関する利用者の要望、苦情等に対し、迅速に対応します。\n２　苦情の内容によっては、再発防止のために関係メーカー及び提携先との連携･調整を行います。また、必要に応じて「苦情処理改善会議」を開催します。\n３　事業者は、利用者が苦情等を申し立てた場合であっても、これを理由にしていかなる不利益な扱いをしません。" },
+                  { title: "第２０条（信義誠実の原則）", body: "１　利用者及び事業者は、信義に従い誠実に本契約を履行するものとする。\n２　本契約に定める事項に疑義が生じた場合及び本契約に定めのない事項については、介護保険法令その他諸法令の定めるところを尊重し、双方の協議の上定めるものとします。" },
+                ].map(({ title, body }) => (
+                  <div key={title} style={{ marginBottom: "5px" }}>
+                    <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>{title}</p>
+                    <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{body}</p>
+                  </div>
+                ))}
+
+                <p style={{ margin: "10px 0 8px", lineHeight: "1.6", fontSize: "8pt" }}>
+                  本契約書の契約内容を証するため、本書２通を作成し、利用者、事業者が署名押印の上、各自１通保有するものとします。同様に、介護保険制度にて義務づけられているサービス担当者会議の開催が必要と認められる場合において、利用者様の個人情報を用いることについての説明を受け、同意するものといたします。
+                </p>
+
+                <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "8pt" }}><tbody>
+                  <tr>
+                    <td style={{ border: "1px solid #555", padding: "6px 8px", width: "50%", verticalAlign: "top", height: "60px" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>利用者</div>
+                      <div>＜住　所＞{client.address ?? ""}</div>
+                      <div style={{ marginTop: "8px" }}>＜氏　名＞{client.name}　　　　　　印</div>
+                    </td>
+                    <td style={{ border: "1px solid #555", padding: "6px 8px", width: "50%", verticalAlign: "top" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>代理人（続柄：　　　）</div>
+                      <div style={{ marginTop: "8px" }}>＜氏　名＞　　　　　　　　　　　　印</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ border: "1px solid #555", padding: "6px 8px", verticalAlign: "top" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>事　業　者</div>
+                      <div>＜事業所名＞{companyInfo.companyName}</div>
+                      <div>＜住　　所＞{companyInfo.companyAddress}　TEL：{companyInfo.tel}</div>
+                      <div style={{ marginTop: "8px" }}>＜管理者名＞　　　　　　　　　　　　㊞</div>
+                      <div style={{ marginTop: "4px" }}>＜担　　当＞{companyInfo.staffName}　　　　印</div>
+                      <div style={{ marginTop: "4px" }}>説　明　者：　　　　　　　　　　　　印</div>
+                    </td>
+                  </tr>
+                </tbody></table>
+
+                <div style={{ marginTop: "10px", border: "1px solid #555", padding: "6px 8px", fontSize: "7.5pt" }}>
+                  <p style={{ fontWeight: "bold", margin: "0 0 3px" }}>【個人情報の取り扱いについて】</p>
+                  <p style={{ margin: 0, lineHeight: "1.6" }}>当事業所はご利用者様の身体的状況やご家族の状況をケアプラン上必要な情報に限り、ご利用者様担当ケアマネージャーに報告致します。当事業所内においてのお客様に関するサービス内容の検討や、向上の為のケース会議、ケアマネージャー様等関係従事者様とのサービス担当者会議以外に個人情報を用いない事を厳守いたします。</p>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Important Matters Modal ─────────────────────────────────────────────────
+
+function ImportantMattersModal({
+  client,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  client: Client;
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [explanationDate, setExplanationDate] = useState(todayStr);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [saving, setSaving] = useState(false);
+
+  const explanationDateJa = explanationDate
+    ? toJapaneseEra(new Date(explanationDate + "T00:00:00"))
+    : "　　年　月　日";
+
+  const handlePrint = () => {
+    const el = document.getElementById("important-matters-print");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>重要事項説明書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:8pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:12mm 12mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 5px;vertical-align:top;font-size:8pt}
+      h1{font-size:13pt;text-align:center;margin:0 0 6px;font-weight:bold}
+      h2{font-size:9pt;margin:8px 0 3px;font-weight:bold;border-bottom:1px solid #333;padding-bottom:1px}
+      .section{margin-bottom:6px}
+      p{margin:2px 0;line-height:1.5}
+      .indent{padding-left:1em}
+      .indent2{padding-left:2em}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveClientDocument({
+        tenant_id: tenantId,
+        client_id: client.id,
+        type: "important_matters",
+        title: `重要事項説明書 ${explanationDate}`,
+        params: { explanationDate },
+      });
+      onSaved?.();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "2px 5px", fontWeight: "bold", textAlign: "left" };
+  const TD: React.CSSProperties = { border: "1px solid #555", padding: "2px 5px", verticalAlign: "top" };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        {/* ヘッダー */}
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">重要事項説明書</h2>
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+          {step === 1 && (
+            <button onClick={() => setStep(2)} className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl">
+              プレビュー →
+            </button>
+          )}
+        </div>
+
+        {step === 1 ? (
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">説明日</label>
+              <input type="date" value={explanationDate} onChange={(e) => setExplanationDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400" />
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+            <div id="important-matters-print" className="bg-white shadow mx-auto"
+              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8pt", padding: "12mm 12mm", maxWidth: "210mm" }}>
+
+              <h1 style={{ fontSize: "13pt", textAlign: "center", fontWeight: "bold", marginBottom: "8px" }}>
+                福祉用具貸与重要事項説明書
+              </h1>
+              <p style={{ textAlign: "right", marginBottom: "6px", fontSize: "7.5pt" }}>
+                ○管理者　{companyInfo.staffName}　氏名　　　　　　㊞
+              </p>
+
+              {/* 1. 事業所の概要 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>１．事業所の概要</h2>
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "6px", fontSize: "8pt" }}>
+                <tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "120px" }}>事　業　者　名</th>
+                    <td style={TD}>{companyInfo.companyName}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>福 祉 用 具 貸 与 事 業 所 名</th>
+                    <td style={TD}>{companyInfo.companyName}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>事　業　所　所　在　地</th>
+                    <td style={TD}>{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>介護保険指定番号及びその他サービス</th>
+                    <td style={TD}>{companyInfo.businessNumber}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>管理者・連絡先</th>
+                    <td style={TD}>{companyInfo.staffName}　TEL: {companyInfo.tel}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>通常の事業の実施地域</th>
+                    <td style={TD}>&nbsp;</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p style={{ margin: "0 0 6px", fontSize: "7.5pt" }}>※通常のサービス提供地域以外の方も希望される方はご気軽にご相談ください。</p>
+
+              {/* 2. 職員体制 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>２．事業所の職員体制</h2>
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "6px", fontSize: "8pt" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...TH, width: "160px" }}>職種</th>
+                    <th style={{ ...TH, width: "60px", textAlign: "center" }}>常勤</th>
+                    <th style={{ ...TH, width: "60px", textAlign: "center" }}>非常勤</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[["管理者 兼 専門相談員", "", ""], ["専門相談員", "", ""], ["事務･配送職員", "", ""]].map(([role, f, p]) => (
+                    <tr key={role}>
+                      <td style={TD}>{role}</td>
+                      <td style={{ ...TD, textAlign: "center" }}>{f}</td>
+                      <td style={{ ...TD, textAlign: "center" }}>{p}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* 3. 営業日・営業時間 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>３．営業日・営業時間</h2>
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "2px", fontSize: "8pt" }}>
+                <tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "60px" }}>営業日</th>
+                    <td style={TD}>月曜日〜土曜日（祝日を除く）</td>
+                    <th style={{ ...TH, width: "60px" }}>営業時間</th>
+                    <td style={TD}>9:00〜17:00</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p style={{ margin: "0 0 6px", fontSize: "7.5pt" }}>注）土・日曜、祝祭日、夏期休暇（8／13〜8／15）、年末年始休暇（12／30〜1／3）を休業とする。</p>
+
+              {/* 4. 福祉用具貸与の内容等 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>４．福祉用具貸与の内容等</h2>
+              <p style={{ margin: "0 0 2px" }}>　　福祉用具貸与にて取り扱う福祉用具の種目は、以下のとおりです。</p>
+              <table style={{ borderCollapse: "collapse", width: "100%", margin: "0 0 4px", fontSize: "8pt" }}><tbody>
+                {[["車いす","車いす付属品","特殊寝台","特殊寝台付属品"],["床ずれ防止用具","体位変換器","手すり","スロープ"],["歩行器","歩行補助つえ","認知症老人徘徊感知機器","移動用リフト"],["自動排泄処理装置","排泄予測支援機器","",""]].map((row,i)=>(
+                  <tr key={i}>{row.map((cell,j)=><td key={j} style={{ border:"1px solid #555", padding:"2px 6px", width:"25%" }}>{cell}</td>)}</tr>
+                ))}
+              </tbody></table>
+              <p style={{ margin: "0 0 2px" }}>　　介護予防福祉用具貸与にて取り扱う福祉用具の種目は、以下のとおりです。</p>
+              <table style={{ borderCollapse: "collapse", margin: "0 0 4px", fontSize: "8pt" }}><tbody>
+                <tr>{["手すり","スロープ","歩行器","歩行補助つえ"].map((cell,j)=><td key={j} style={{ border:"1px solid #555", padding:"2px 6px" }}>{cell}</td>)}</tr>
+              </tbody></table>
+              <p style={{ margin: "0 0 2px", fontSize: "7.5pt" }}>※上記の（介護予防）福祉用具貸与品以外に、腰掛便座、入浴補助用具、等が介護保険制度により購入できます。</p>
+              <p style={{ margin: "0 0 6px", fontSize: "7.5pt" }}>※住宅改修につきましても介護保険により支給されますので、希望される方はご相談ください。</p>
+
+              {/* 5. サービスの利用方法 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>５．サービスの利用方法</h2>
+              <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（１）サービスの利用開始</p>
+              <p style={{ margin: "0 0 2px", paddingLeft: "2em" }}>まずは、電話等でご連絡ください。当社の専門相談員がご自宅に訪問させていただきます。重要事項を説明した後、正式に契約を結び、サービスの提供を開始します（居宅介護支援事業者に、居宅サービス計画の作成を依頼している場合は、事前に当該介護支援専門員とご相談下さい）。</p>
+              <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（２）サービスの終了</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>①お客様の都合によりサービスを終了する場合</p>
+              <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>サービスの終了を希望する日の1週間前までに文書又は口頭で通知することにより、サービスを終了することができます。この場合、お客様が居宅介護支援事業者に居宅サービス計画の作成を依頼している場合は、当該事業者にも通知してください。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>②当社の都合によりサービスを終了する場合（終了1ヶ月前までに通知します。）</p>
+              <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>やむを得ない事情により、当社よりサービスの提供を終了させていただく場合があります。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>③自動終了</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>以下の場合は、文書による通知がなくても、自動的にサービスを終了させて頂きます。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様の要介護認定区分が、更新申請などにより、自立と認定された場合（この場合、条件を変更して再度契約することができます）</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様が介護保健施設に入所された場合</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・医療機関へご入院された場合</p>
+              <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>・お客様が亡くなられた場合</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>④その他</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・当社が正当な理由なく適切なサービスを提供しない場合、守秘義務に反した場合、お客様やその家族などに対して社会通念を逸脱する行為を行った場合などは、文書で解約を通知することによって即座にサービスを終了することができます。</p>
+              <p style={{ margin: "0 0 6px", paddingLeft: "3em" }}>・お客様が、サービス利用料金の支払いを１ヶ月以上遅延し、料金を支払うよう催告したにもかかわらず、３０日以内に支払わない場合、またはお客様やご家族などが当社のサービス従業者に対して本契約を継続しがたいほどの背信行為を行った場合は、文書で通知することにより、直ちにサービスの提供を終了させていただく場合があります。</p>
+
+              {/* 6. 運営の方針 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>６．当社の（介護予防）福祉用具貸与の運営の方針</h2>
+              <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（１）運営の方針</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・利用者が、可能な限り居宅において、その有する能力に応じて、自立した日常生活を営めるように、利用者の心身の状況、希望及びその置かれている環境を踏まえた適切な福祉用具選定の援助を行います。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・利用者の要介護状態の軽減もしくは悪化防止又は要介護状態となることの予防に資するよう、適切な福祉用具貸与の提供を行います。</p>
+              <p style={{ margin: "0 0 2px", paddingLeft: "2em" }}>・福祉用具貸与の提供にあたっては、貸与する福祉用具の機能、安全性、衛生状態等に関し、十分な説明を行った上で、必要に応じて利用者に実際に福祉用具を使用してもらいながら使用方法の指導を行います。</p>
+              <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（２）その他重要事項</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・サービス従業者は、業務上知り得た利用者又はその家族の秘密を保持します。又、従業者であったものに、従業員でなくなった後においてもこれらの秘密を保持する旨を、従業者との雇用契約の内容とします。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・利用者の身体状態の多様性、変化等に対応することができるように、できる限り多くの種類の福祉用具を取り扱うように努めます。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・専門相談員の資質向上のために、定期的に福祉用具に関する適切な研修の機会を設けます。</p>
+              <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>・災害発生時や感染症流行時などの非常時においては、事業者は従業員の安全を確保した上でサービスを提供するため、事前に合意した日時・内容通りのサービスが提供できない可能性があります。</p>
+              <p style={{ margin: "0 0 6px", paddingLeft: "2em" }}>・利用者が避難所に避難された場合には、サービス提供の場所が変わることになりますので、道路状況・人員体制・避難所の環境等を考慮した上で、サービスの提供が可能と事業者が判断した場合にのみサービスを提供するものとします。</p>
+
+              {/* 7. 苦情処理 */}
+              <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>７．サービス内容に関する相談･苦情</h2>
+              <p style={{ margin: "0 0 2px", paddingLeft: "1em" }}>当社福祉用具貸与事業に関する相談、要望、苦情等は、担当の専門相談員又はお客様サービス係までご連絡下さい。</p>
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "2px", fontSize: "8pt" }}>
+                <tbody>
+                  <tr>
+                    <th style={{ ...TH, width: "80px" }}>事業所名</th>
+                    <td style={TD}>{companyInfo.companyName}</td>
+                    <th style={{ ...TH, width: "80px" }}>電話番号</th>
+                    <td style={TD}>{companyInfo.tel}</td>
+                  </tr>
+                  <tr>
+                    <th style={TH}>受付時間</th>
+                    <td style={TD} colSpan={3}>9:00〜17:00（月〜土、祝日除く）</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p style={{ margin: "0 0 2px" }}>当社以外に、区役所・市役所・町、村役場などでも相談･苦情等に対する窓口があります。</p>
+              <table style={{ borderCollapse: "collapse", width: "100%", margin: "0 0 6px", fontSize: "8pt" }}>
+                <tbody>
+                  {[
+                    ["千葉市",  "介護保険事業課",                  "043－245－5062"],
+                    ["市原市",  "保健福祉部　高齢者支援課",        "0436－23－9873"],
+                    ["四街道市","福祉サービス部　高齢者支援課",    "043－421－6127"],
+                    ["習志野市","保健福祉部　高齢者支援課",        "047－454－7533"],
+                    ["木更津市","福祉部　高齢者支援課　高齢者支援担当","0438－23－2630"],
+                    ["佐倉市",  "福祉部　高齢者支援課",            "043－484－6243"],
+                    ["", "", ""],
+                  ].map(([city, dept, tel], i) => (
+                    <tr key={i}>
+                      <td style={{ border: "1px solid #555", padding: "2px 6px", width: "70px", textAlign: "center" }}>{city}</td>
+                      <td style={{ border: "1px solid #555", padding: "2px 6px" }}>{dept}</td>
+                      <td style={{ border: "1px solid #555", padding: "2px 6px", width: "110px", textAlign: "center" }}>{tel}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* 説明者欄 */}
+              <div style={{ border: "1px solid #555", padding: "6px 8px", marginBottom: "6px", fontSize: "7.5pt" }}>
+                <p style={{ margin: "0 0 3px" }}>私は、（介護予防）福祉用具貸与の提供について利用者またはその家族等に対して、契約書及び本書面によって重要事項を説明しました。</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "8pt" }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ border: "none", padding: "2px 5px", width: "50%" }}>
+                        説明日　{explanationDateJa}
+                      </td>
+                      <td style={{ border: "none", padding: "2px 5px" }}>
+                        説明者　　　　　　　　　　　　㊞
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={2} style={{ border: "none", padding: "2px 5px" }}>
+                        事業者　＜住　所＞{companyInfo.companyAddress}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={2} style={{ border: "none", padding: "2px 5px" }}>
+                        　　　　＜事業所名＞{companyInfo.companyName}　　＜管理者名＞{companyInfo.staffName}　㊞
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 確認チェック項目 */}
+              <div style={{ marginBottom: "6px", fontSize: "7.5pt" }}>
+                <p style={{ margin: "0 0 1px" }}>○　利用者等に福祉用具搬入後、取扱説明書を説明し交付する。</p>
+                <p style={{ margin: "0 0 1px" }}>○　利用者等に貸与する福祉用具を使用しながら、使用方法を説明する。</p>
+                <p style={{ margin: "0 0 3px" }}>○　当該商品の全国平均貸与価格と、その貸与事業所の貸与価格の両方を利用者に説明する。</p>
+              </div>
+
+              {/* 利用者同意欄 */}
+              <div style={{ border: "1px solid #555", padding: "6px 8px", fontSize: "7.5pt" }}>
+                <p style={{ margin: "0 0 3px" }}>私は、契約書及び本書面によって事業者から福祉用具貸与事業について重要事項及び上記について説明を受けました。</p>
+                <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "8pt" }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ border: "none", padding: "4px 5px", width: "50%" }}>
+                        ＜利用者氏名＞{client.name}　　　　　　印
+                      </td>
+                      <td style={{ border: "none", padding: "4px 5px" }}>
+                        ＜代理人氏名＞　　　　　　　　　　　　印
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Rental Contract Modal ───────────────────────────────────────────────────
+
+function RentalContractModal({
+  client,
+  clientItems,
+  equipment,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [step, setStep] = useState<1 | 2>(1);
+  const [contractDate, setContractDate] = useState(todayStr);
+  const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">("1");
+  const [saving, setSaving] = useState(false);
+
+  const selectableItems = clientItems.filter((i) =>
+    ["ordered", "delivered", "rental_started"].includes(i.status)
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(selectableItems.map((i) => i.id))
+  );
+  const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
+  const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+
+  const handlePrint = () => {
+    const el = document.getElementById("rental-contract-print");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>福祉用具貸与契約書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:8.5pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:15mm 15mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:2px 5px;vertical-align:top}
+      h1{font-size:13pt;text-align:center;margin:0 0 8px}
+      h2{font-size:9.5pt;margin:10px 0 3px;border-bottom:1px solid #333;padding-bottom:2px}
+      .article{margin-bottom:6px}
+      .article-title{font-weight:bold;margin:0 0 2px}
+      .article-body{margin:0;padding-left:1em;white-space:pre-wrap;line-height:1.5}
+      .sig-table td{height:40px}
+      .no-border td,.no-border th{border:none}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveClientDocument({
+        tenant_id: tenantId,
+        client_id: client.id,
+        type: "rental_contract",
+        title: `福祉用具貸与契約書 ${contractDate}`,
+        params: { contractDate, benefitRate, selectedIds: [...selectedIds] },
+      });
+      onSaved?.();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const contractDateJa = contractDate
+    ? toJapaneseEra(new Date(contractDate + "T00:00:00"))
+    : "　　年　月　日";
+  const certEndJa = client.certification_end_date
+    ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00"))
+    : "　　年　月　日";
+
+  const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        {/* ヘッダー */}
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">福祉用具貸与契約書</h2>
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+          {step === 1 && (
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => setStep(2)}
+              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40"
+            >プレビュー →</button>
+          )}
+        </div>
+
+        {step === 1 ? (
+          /* ステップ1: 設定 */
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">契約締結日</label>
+                <input type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">負担割合</label>
+                <select value={benefitRate} onChange={(e) => setBenefitRate(e.target.value as "1" | "2" | "3")}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400">
+                  <option value="1">１割</option>
+                  <option value="2">２割</option>
+                  <option value="3">３割</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">契約対象の用具を選択</h3>
+              <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                {selectableItems.map((item) => {
+                  const eq = getEq(item.product_code);
+                  const checked = selectedIds.has(item.id);
+                  return (
+                    <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                      <input type="checkbox" checked={checked} onChange={(e) => {
+                        const n = new Set(selectedIds);
+                        e.target.checked ? n.add(item.id) : n.delete(item.id);
+                        setSelectedIds(n);
+                      }} className="accent-emerald-500 shrink-0" />
+                      <span className="text-sm text-gray-800">{eq?.name ?? item.product_code}</span>
+                      {item.rental_price && (
+                        <span className="ml-auto text-xs text-emerald-600">¥{item.rental_price.toLocaleString()}/月</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ステップ2: プレビュー */
+          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+            <div id="rental-contract-print" className="bg-white shadow mx-auto"
+              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "8.5pt", padding: "15mm 15mm", maxWidth: "210mm" }}>
+
+              <h1 style={{ fontSize: "14pt", textAlign: "center", fontWeight: "bold", marginBottom: "12px" }}>
+                介護（介護予防）福祉用具貸与サービス契約書
+              </h1>
+
+              {/* 契約締結日・当事者 */}
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "10px", fontSize: "8pt" }}><tbody>
+                <tr>
+                  <td style={{ border: "none", paddingBottom: "4px" }}>
+                    契約締結日　{contractDateJa}
+                  </td>
+                </tr>
+                <tr>
+                  <td style={{ border: "none" }}>
+                    <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+                      <tr>
+                        <td style={{ border: "1px solid #555", padding: "4px 8px", width: "50%", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "4px" }}>利用者</div>
+                          <div>＜住　所＞{client.address ?? ""}</div>
+                          <div style={{ marginTop: "4px" }}>＜氏　名＞{client.name}　　　　印</div>
+                        </td>
+                        <td style={{ border: "1px solid #555", padding: "4px 8px", width: "50%", verticalAlign: "top" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "4px" }}>代理人</div>
+                          <div>＜続　柄＞</div>
+                          <div style={{ marginTop: "4px" }}>＜氏　名＞　　　　　　　　　　印</div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={2} style={{ border: "1px solid #555", padding: "4px 8px" }}>
+                          <div style={{ fontWeight: "bold", marginBottom: "2px" }}>事　業　者</div>
+                          <div>＜事業所名＞{companyInfo.companyName}</div>
+                          <div>＜住　　所＞{companyInfo.companyAddress}</div>
+                          <div style={{ marginTop: "2px" }}>＜管理者名＞　　　　　　　　　　㊞　　TEL：{companyInfo.tel}</div>
+                        </td>
+                      </tr>
+                    </tbody></table>
+                  </td>
+                </tr>
+              </tbody></table>
+
+              {/* 第１条 */}
+              <div className="article" style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第１条（契約の目的）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{"　事業者は、利用者に対し、介護保険認定利用者に対して介護保険法令の趣旨に従って、利用者が可能な限りその居宅において、その有する能力に応じて自立した日常生活を営むことが出来るよう、（介護予防）福祉用具貸与を提供し、利用者は、事業者に対してそのサービスに対する料金を支払います。"}</p>
+              </div>
+
+              {/* 第２条 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第２条（契約期間）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>１　この契約の契約期間は、{contractDateJa}から利用者の要介護認定又は要支援認定の有効期限満了日（{certEndJa}）までとします。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>２　契約満了の１週間前までに、利用者から事業者に対して、文書又は口頭で契約終了の申し出がない場合、契約は自動更新されるものとします。</p>
+              </div>
+
+              {/* 第３条 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第３条（専門相談員）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>{"　事業者は、一定の研修を修了した専門相談員を配置し、専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえて、居宅介護支援事業者の作成する「居宅サービス計画」に沿って、福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じます。"}</p>
+              </div>
+
+              {/* 第４条 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第４条（（介護予防）福祉用具貸与の内容）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>１　福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じるとともに、取り扱い説明書等の文書を示して福祉用具の機能、使用方法、利用料金等に関する情報を提供し、個別の福祉用具の貸与に係る同意を得ます。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>２　貸与する福祉用具の機能、安全性、衛生状態などを考慮し、十分な点検を行います。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>３　利用者の心身の状況等に応じて福祉用具の調整を行うとともに、当該福祉用具の使用方法、使用上の留意事項、故障時の対応等を記載した文書を利用者に交付し、十分な説明を行った上で、必要に応じて利用者に実際に当該福祉用具を使用してもらいながら使用方法の指導を行います。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>４　貸与した福祉用具の使用状況の定期的な確認を行い、必要な場合は、使用方法の指導又は修理等を行います。</p>
+              </div>
+
+              {/* 第５条 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第５条（福祉用具貸与計画の作成）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>１　福祉用具専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえ、（介護予防）福祉用具利用計画・目標、当該目標を達成する為の具体的なサービスの内容を記載した福祉用具サービス計画を作成致します。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>２　福祉用具サービス計画は、既に居宅サービス計画が作成されている場合はその計画内容に沿って作成致します。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>３　福祉用具専門相談員は、福祉用具サービス計画の作成にあたり、その内容について利用者又はその家族に対して説明し、利用者様の同意を得てから計画をすすめてまいります。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>４　福祉用具専門相談員は、福祉用具サービス計画を作成した際には、当該福祉用具サービス計画を利用者様に交付致します。</p>
+              </div>
+
+              {/* 第６条 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>第６条（サービス提供の記録）</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>１　事業者は、サービス提供記録を作成することとし、この契約の終了後２年間保存します。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>２　利用者は、事業所の営業時間内にその事業所にて、当該利用者に関する第１項のサービス提供記録やサービスの実施マニュアル等、サービスの質を利用者が評価するための情報については、いつでも閲覧できます。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6" }}>３　利用者は、当該利用者に関する第１項のサービス実施記録等の複写物の交付を無料で受けることができます。</p>
+              </div>
+
+              {/* 第７条 料金 */}
+              <div style={{ marginBottom: "5px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 4px" }}>第７条（料金）</p>
+                <p style={{ margin: "0 0 3px", paddingLeft: "1em", lineHeight: "1.6" }}>１　利用者は、サービスの対価として、下記の（介護予防）福祉用具貸与料金一覧表をもとに、月額料金の1割・2割・3割いずれかの合計額を利用者の負担として支払います。</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>２　搬出入にかかる費用は、現に福祉用具貸与に要した費用に含まれるものとし、別にいただきません。</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>３　事業者は当月の利用内容明細を請求書として、使用月の翌月末日までに利用者に交付します。</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>４　利用者は、事業者が発行した請求書に記載されている口座引き落とし日の前日までに、事前にご記入いただいた預金口座振替依頼書の指定金融機関の口座に、請求された金額をご入金ください。</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6" }}>５　事業者は、利用者から料金の支払いを受けたときは、利用者に対し領収書を発行します。介護保険適用の場合、利用者の負担額は原則として下記の（介護予防）福祉用具貸与料金一覧表の1割・2割・3割のいずれかです。ただし、介護保険適用外のサービス利用については、全額が利用者の負担となります。</p>
+                <p style={{ fontWeight: "bold", margin: "0 0 2px", paddingLeft: "1em" }}>（介護予防）福祉用具貸与料金一覧表</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（１）介護保険の適用がある場合は、料金表のサービス費の1割・2割・3割のいずれかが利用者負担額となります。</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>　　下記の「利用者負担額」は介護保険の負担割合が1割の方の場合の負担額となります。介護保険の負担割合が２割または３割の方はこれに２または３を乗じた金額が負担額となります。</p>
+                {/* 料金表 */}
+                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center" }}>種目</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center" }}>福祉用具貸与商品</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "52px" }}>月額料金</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "32px" }}>数量</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "52px" }}>利用者負担</th>
+                      <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center", width: "60px" }}>初月利用者負担</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedItems.map((item) => {
+                      const eq = getEq(item.product_code);
+                      const price = item.rental_price ?? eq?.rental_price ?? 0;
+                      const qty = item.quantity ?? 1;
+                      const burden = Math.round(price * parseInt(benefitRate) / 10);
+                      const halfBurden = Math.round(burden / 2);
+                      return (
+                        <tr key={item.id}>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px" }}>{eq?.category ?? ""}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px" }}>{eq?.name ?? item.product_code}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{price ? `¥${price.toLocaleString()}` : ""}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "center" }}>{qty}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{burden ? `¥${burden.toLocaleString()}` : ""}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right" }}>{halfBurden ? `¥${halfBurden.toLocaleString()}` : ""}</td>
+                        </tr>
+                      );
+                    })}
+                    {/* 合計行 */}
+                    {(() => {
+                      const total = selectedItems.reduce((s, i) => s + (i.rental_price ?? getEq(i.product_code)?.rental_price ?? 0) * (i.quantity ?? 1), 0);
+                      const totalBurden = Math.round(total * parseInt(benefitRate) / 10);
+                      const totalHalf = Math.round(totalBurden / 2);
+                      return (
+                        <tr>
+                          <td colSpan={2} style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>合　計</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{total.toLocaleString()}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px" }}></td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{totalBurden.toLocaleString()}</td>
+                          <td style={{ border: "1px solid #555", padding: "3px 5px", textAlign: "right", fontWeight: "bold" }}>¥{totalHalf.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさせていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
+                <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約については１ヵ月分の料金を請求させていただきます。</p>
+              </div>
+
+              {/* 第８〜２０条 */}
+              {[
+                { title: "第８条（（介護予防）福祉用具貸与の変更）", body: "１　利用者は、身体状況の急変等によって必要とする福祉用具に変更が生じた場合、事業者に対して当該福祉用具の変更を求めることができます。ただし、製品によっては料金の変更が生じる場合がありますのでご了承下さい。\n２　貸与された福祉用具について、万一不良品などで使い勝手が悪く、他に変更したい場合は、すぐにお申し出くだされば、無料で変更します。\n３　前記第２項については、同一製品に限り有効で、他製品への変更は、遠慮させていただきます。" },
+                { title: "第９条（料金の変更）", body: "１　事業者は、利用者に対して１ヵ月前までに文書で通知することにより、料金の変更（増額又は減額）を申し出ることができます。\n２　利用者が料金の変更を承諾する場合、新たな料金表に基づく【契約書別紙】を作成し、お互いに取り交わします。\n３　利用者は料金の変更を承諾しない場合、事業者に対し、文書で通知することにより、この契約を解除することができます。" },
+                { title: "第１０条（契約の終了）", body: "１　利用者は事業者に対して、１週間の予告期間を置いて文書又は口頭で通知することにより､この契約を解約することができます｡但し､利用者の病変、急な入院などやむをえない事情がある場合は､１週間以内の通知でもこの契約を解約することができます｡\n２　事業者は､やむをえない事情がある場合､利用者に対して､１ヵ月間の予告期間をおいて理由を示した文書で通知することにより､この契約を解約することができます｡\n３　次の事由に該当した場合は､利用者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　事業者が正当な理由なくサービスを提供しない場合\n　②　事業者が守秘義務に反した場合\n　③　事業者が利用者やその家族などに対して社会理念を逸脱する行為を行った場合\n　④　事業者が破産した場合\n４　次の事由に該当した場合は､事業者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　利用者のサービス料金の支払いが１ヵ月以上遅延し､料金を支払うよう催促したにもかかわらず､３０日以内に支払われない場合\n　②　利用者又はその家族などが､事業者やサービス提供者に対して本契約を継続しがたいほどの背信行為を行った場合\n５　次の事由に該当した場合は､この契約は自動的に終了します｡\n　①　利用者が介護保健施設に入所した場合\n　②　利用者の要介護（要支援）認定区分が、非該当（自立）と認定されたとき（この場合、内容を変更して再度契約することができます）\n　③　医療機関への入院\n　④　利用者が亡くなられたとき" },
+                { title: "第１１条（守秘義務）", body: "１　事業者及び事業者の使用する者は､（介護予防）福祉用具貸与を提供する上で知り得た利用者及びその家族に関する秘密を正当な理由なく第三者に漏らしません｡この守秘義務は契約終了後についても同様です｡\n２　事業者は､利用者からあらかじめ文書で同意を得ない限り、サービス担当者会議等において､利用者の個人情報を用いません｡\n３　事業者は､利用者の家族からあらかじめ文書で同意を得ない限り、サービス担当者会議等において、当該家族の個人情報を用いません｡" },
+                { title: "第１２条（利用者及びその家族等の義務）", body: "１　利用者及びその家族等は、レンタル商品について定められた使用方法及び使用上の注意事項を遵守する事とします。\n２　利用者等は、事業者の承諾を得ることなくレンタル商品の仕様変更、加工・改造等を行うことはできません。\n３　利用者等は、事業者の承諾を得ることなく本契約に基づく権利の全部もしくは一部を第三者に譲渡し又は転貸することはできません。" },
+                { title: "第１３条（福祉用具の保管･消毒）", body: "　福祉用具の保管･消毒については、指定居宅サービス等の事業の人員、設置及び運営に関する基準第２０３条第３項の規定に基づき、株式会社インフォゲート、フランスベッド株式会社、野口株式会社、株式会社日本ケアサプライ、ケアレックス株式会社にこの業務を委託し、業務委託契約書を取り交わした上で事業所は委託の契約の内容において、保管及び消毒が適切な方法により行われていることを担保します。" },
+                { title: "第１４条（賠償責任）", body: "　事業者は､福祉用具貸与サービスの提供に伴い、賠償責任を負う場合に備えて損害保険に加入し、納品時に家具に損傷を与えるなど、事業者の責めに帰すべき事由により利用者の生命・身体・財産に損害を及ぼした場合は､利用者に対してその損害を賠償します｡ただし、事業者は自己の責に帰すべからざる事由によって生じた損害については賠償責任を負いません。とりわけ、以下の事由に該当する場合には、損害賠償責任を免れます。\n①　利用者が、その疾患・心身状態及び福祉用具の設置・使用環境等、レンタル商品の選定に必要な事項について故意にこれを告げず、又は不実の告知を行ったことに起因して損害が発生した場合。\n②　利用者の急激な体調の変化等、事業者の実施した（介護予防）福祉用具貸与サービスを原因としない事由に起因して損害が発生した場合。\n③　利用者又はその家族が、事業者及びサービス従事者の指示・説明に反して行った行為に起因して損害が発生した場合。" },
+                { title: "第１５条（災害等発生時のサービス提供）", body: "１　災害発生時や感染症流行時などの非常時においては、事業者は従業員の安全を確保した上でサービスを提供するため、事前に合意した日時・内容通りのサービスが提供できない可能性があります。\n２　利用者が避難所に避難された場合には、サービス提供の場所が変わることになりますので、道路状況・人員体制・避難所の環境等を考慮した上で、サービスの提供が可能と事業者が判断した場合にのみサービスを提供するものとします。" },
+                { title: "第１６条（利用者の損害賠償責任）", body: "　事業者は、利用者の故意又は重大な過失によってレンタル商品が消失し、又は回収したレンタル商品について通常の使用状態を超える著しい破損・汚損等が認められる場合には、利用者等に対して補修費もしくは弁償費相当額の支払を請求することができます。" },
+                { title: "第１７条（身分証携帯義務）", body: "　サービス従業者は、常に身分証を携帯し、初回納品時及び利用者やその家族から提示を求められたときは、いつでも身分証を提示します。" },
+                { title: "第１８条（連携）", body: "１　事業者は、福祉用具貸与の提供にあたり、介護支援専門員及び保健医療サービス又は福祉サービスを提供する者との密接な関係に努めます。\n２　事業者は、本契約の内容が変更された場合又は本契約が終了した場合は、その内容を記した書面の写しを速やかに介護支援専門員に送付します。なお、第１０条２項及び４項に基づいて解約通知をする際は、事前に介護支援専門員に連絡します。" },
+                { title: "第１９条（苦情処理）", body: "１　事業者は、利用者からの相談･苦情に対する窓口を設置し、当該福祉用具の故障・修理依頼など、（介護予防）福祉用具貸与に関する利用者の要望、苦情等に対し、迅速に対応します。\n２　苦情の内容によっては、再発防止のために関係メーカー及び提携先との連携･調整を行います。また、必要に応じて「苦情処理改善会議」を開催します。\n３　事業者は、利用者が苦情等を申し立てた場合であっても、これを理由にしていかなる不利益な扱いをしません。" },
+                { title: "第２０条（信義誠実の原則）", body: "１　利用者及び事業者は、信義に従い誠実に本契約を履行するものとする。\n２　本契約に定める事項に疑義が生じた場合及び本契約に定めのない事項については、介護保険法令その他諸法令の定めるところを尊重し、双方の協議の上定めるものとします。" },
+              ].map(({ title, body }) => (
+                <div key={title} style={{ marginBottom: "5px" }}>
+                  <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>{title}</p>
+                  <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{body}</p>
+                </div>
+              ))}
+
+              {/* 締結文・署名欄 */}
+              <p style={{ margin: "10px 0 8px", lineHeight: "1.6", fontSize: "8pt" }}>
+                本契約書の契約内容を証するため、本書２通を作成し、利用者、事業者が署名押印の上、各自１通保有するものとします。同様に、介護保険制度にて義務づけられているサービス担当者会議の開催が必要と認められる場合において、利用者様の個人情報を用いることについての説明を受け、同意するものといたします。
+              </p>
+
+              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "8pt" }}>
+                <tbody>
+                  <tr>
+                    <td style={{ border: "1px solid #555", padding: "6px 8px", width: "50%", verticalAlign: "top", height: "60px" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>利用者</div>
+                      <div>＜住　所＞{client.address ?? ""}</div>
+                      <div style={{ marginTop: "8px" }}>＜氏　名＞{client.name}　　　　　　印</div>
+                    </td>
+                    <td style={{ border: "1px solid #555", padding: "6px 8px", width: "50%", verticalAlign: "top" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>代理人（続柄：　　　）</div>
+                      <div style={{ marginTop: "8px" }}>＜氏　名＞　　　　　　　　　　　　印</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ border: "1px solid #555", padding: "6px 8px", verticalAlign: "top" }}>
+                      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>事　業　者</div>
+                      <div>＜事業所名＞{companyInfo.companyName}</div>
+                      <div>＜住　　所＞{companyInfo.companyAddress}　TEL：{companyInfo.tel}</div>
+                      <div style={{ marginTop: "8px" }}>＜管理者名＞　　　　　　　　　　　　㊞</div>
+                      <div style={{ marginTop: "4px" }}>＜担　　当＞{companyInfo.staffName}　　　　印</div>
+                      <div style={{ marginTop: "4px" }}>説　明　者：　　　　　　　　　　　　印</div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {/* 個人情報 */}
+              <div style={{ marginTop: "10px", border: "1px solid #555", padding: "6px 8px", fontSize: "7.5pt" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 3px" }}>【個人情報の取り扱いについて】</p>
+                <p style={{ margin: 0, lineHeight: "1.6" }}>当事業所はご利用者様の身体的状況やご家族の状況をケアプラン上必要な情報に限り、ご利用者様担当ケアマネージャーに報告致します。当事業所内においてのお客様に関するサービス内容の検討や、向上の為のケース会議、ケアマネージャー様等関係従事者様とのサービス担当者会議以外に個人情報を用いない事を厳守いたします。</p>
+              </div>
+
             </div>
           </div>
         )}
@@ -4721,6 +6172,7 @@ const REQUEST_LABELS = [
 function RentalReportModal({
   client,
   items,
+  orderPaymentMap = {},
   equipment,
   companyInfo,
   priceHistory,
@@ -4731,6 +6183,7 @@ function RentalReportModal({
 }: {
   client: Client;
   items: OrderItem[];
+  orderPaymentMap?: Record<string, "介護" | "自費">;
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   priceHistory: EquipmentPriceHistory[];
@@ -4801,8 +6254,9 @@ function RentalReportModal({
       return (getEq(a.product_code)?.name ?? "").localeCompare(getEq(b.product_code)?.name ?? "", "ja");
     });
 
-  const careItems    = reportItems.filter((i) => i.payment_type !== "自費");
-  const selfPayItems = reportItems.filter((i) => i.payment_type === "自費");
+  const resolvePayType = (i: OrderItem) => i.payment_type ?? orderPaymentMap[i.order_id] ?? "介護";
+  const careItems    = reportItems.filter((i) => resolvePayType(i) !== "自費");
+  const selfPayItems = reportItems.filter((i) => resolvePayType(i) === "自費");
 
   const m1Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m1Year, m1Month, histPrice(i.product_code, targetMonth)) ?? 0), 0);
   const m2Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m2Year, m2Month, histPrice(i.product_code, m2YM)) ?? 0), 0);

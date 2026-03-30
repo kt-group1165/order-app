@@ -9,6 +9,16 @@ export type Tenant = {
   company_tel: string | null;
   company_fax: string | null;
   staff_name: string | null;
+  legal_name: string | null;
+  service_area: string | null;
+  business_days: string | null;
+  business_hours: string | null;
+  staff_manager_full: string | null;
+  staff_manager_part: string | null;
+  staff_specialist_full: string | null;
+  staff_specialist_part: string | null;
+  staff_admin_full: string | null;
+  staff_admin_part: string | null;
   created_at: string;
 };
 
@@ -39,6 +49,16 @@ export async function updateTenantInfo(
     company_tel?: string;
     company_fax?: string;
     staff_name?: string;
+    legal_name?: string;
+    service_area?: string;
+    business_days?: string;
+    business_hours?: string;
+    staff_manager_full?: string;
+    staff_manager_part?: string;
+    staff_specialist_full?: string;
+    staff_specialist_part?: string;
+    staff_admin_full?: string;
+    staff_admin_part?: string;
   }
 ): Promise<void> {
   const { error } = await supabase
