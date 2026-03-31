@@ -7734,7 +7734,6 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         itemFrom += 1000;
       }
       setActiveItems(items);
-      console.log("[Monitoring] clients:", cls.length, "orders:", allOrders.length, "activeItems:", items.length, "rentalHistory:", (rentalHistRes.data ?? []).length);
     } finally {
       setLoading(false);
     }
