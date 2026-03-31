@@ -7671,17 +7671,28 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [clientsRes, ordersRes, monRes, eqData, tenantData] = await Promise.all([
+      const [clientsRes, monRes, eqData, tenantData] = await Promise.all([
         supabase.from("clients").select("*").eq("tenant_id", tenantId),
-        supabase.from("orders").select("id, client_id").eq("tenant_id", tenantId),
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
         getTenantById(tenantId),
       ]);
       const cls = (clientsRes.data ?? []) as Client[];
-      const ords = (ordersRes.data ?? []) as { id: string; client_id: string }[];
+      // orders をページングで全件取得
+      const allOrders: { id: string; client_id: string }[] = [];
+      let ordFrom = 0;
+      while (true) {
+        const { data: ordChunk } = await supabase
+          .from("orders").select("id, client_id")
+          .eq("tenant_id", tenantId)
+          .range(ordFrom, ordFrom + 999);
+        if (!ordChunk || ordChunk.length === 0) break;
+        allOrders.push(...(ordChunk as { id: string; client_id: string }[]));
+        if (ordChunk.length < 1000) break;
+        ordFrom += 1000;
+      }
       setClients(cls);
-      setClientOrders(ords);
+      setClientOrders(allOrders);
       setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
       setEquipment(eqData);
       if (tenantData) {
