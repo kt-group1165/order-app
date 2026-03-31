@@ -2983,7 +2983,6 @@ function ClientDetail({
                 <table className="w-full text-xs min-w-[700px]">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500 w-6"></th>
                       <th className="text-left px-2 py-2 font-medium text-gray-500">被保険者番号</th>
                       <th className="text-left px-2 py-2 font-medium text-gray-500">要介護度</th>
                       <th className="text-left px-2 py-2 font-medium text-gray-500">認定開始日</th>
@@ -2999,9 +2998,11 @@ function ClientDetail({
                     {insuranceRecords.map((rec, idx) => (
                       <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
                         <td className="px-2 py-2">
-                          {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
+                          <div className="flex items-center gap-1.5 whitespace-nowrap">
+                            {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
+                            <span className="text-gray-700">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
+                          </div>
                         </td>
-                        <td className="px-2 py-2 text-gray-700">{rec.insured_number ?? <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-2 text-gray-700">{rec.care_level ?? <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-2 text-gray-700">{rec.certification_start_date ?? <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-2 text-gray-700">{rec.certification_end_date ?? <span className="text-gray-300">—</span>}</td>
