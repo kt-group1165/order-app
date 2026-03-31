@@ -7775,7 +7775,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         const histItems = rentalHistoryMap.get(client.id) ?? [];
         // 開始日の候補（order_items + rental_history）
         const startDates: string[] = [
-          ...items.map(i => i.rental_start_date ?? i.delivered_at?.slice(0, 10) ?? i.created_at?.slice(0, 10) ?? null).filter((d): d is string => !!d),
+          ...items.map(i => i.rental_start_date).filter((d): d is string => !!d),
           ...histItems.map(h => h.start_date).filter((d): d is string => !!d),
         ];
         const earliestStart = startDates.sort()[0] ?? null;
