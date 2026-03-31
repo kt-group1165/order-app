@@ -27,6 +27,7 @@ import {
   Lock,
   Download,
   ClipboardCheck,
+  Eye,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
@@ -7937,6 +7938,176 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   );
 }
 
+// ─── MonitoringPreview ───────────────────────────────────────────────────────
+
+function MonitoringPreview({
+  client, visitDate, reportDate, tm, staffName, companyInfo,
+  itemChecks, equipment, insuranceRecord, continuityComment, reportComment, previousComment, onClose,
+}: {
+  client: Client;
+  visitDate: string;
+  reportDate: string;
+  tm: string;
+  staffName: string;
+  companyInfo: CompanyInfo;
+  itemChecks: { order_item_id: string; product_code: string; equipment_name: string; category: string; quantity: number; no_issue: boolean; has_malfunction: boolean; has_deterioration: boolean; needs_replacement: boolean }[];
+  equipment: Equipment[];
+  insuranceRecord: ClientInsuranceRecord | null;
+  continuityComment: string;
+  reportComment: string;
+  previousComment: string;
+  onClose: () => void;
+}) {
+  const toJaDate = (s: string) => {
+    if (!s) return "";
+    const d = new Date(s + "T00:00:00");
+    if (isNaN(d.getTime())) return s;
+    const r = d.getFullYear() - 2018;
+    return `令和${r}年${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+  const toJaMonth = (ym: string) => {
+    if (!ym) return "";
+    const [y, m] = ym.split("-");
+    return `令和${Number(y) - 2018}年${Number(m)}月`;
+  };
+
+  const TD = "border border-gray-400 px-1 py-0.5 text-[10px]";
+  const TH = `${TD} bg-gray-100 font-semibold text-center whitespace-nowrap`;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 overflow-y-auto" onClick={onClose}>
+      <div className="min-h-full flex items-start justify-center py-4 px-2">
+        <div className="bg-white w-full max-w-3xl rounded-xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+          {/* Toolbar */}
+          <div className="bg-gray-800 text-white px-4 py-2.5 flex items-center justify-between print:hidden">
+            <span className="text-sm font-medium">プレビュー：モニタリング報告書</span>
+            <div className="flex gap-2">
+              <button onClick={() => window.print()} className="text-xs bg-blue-500 hover:bg-blue-600 px-3 py-1.5 rounded-lg">印刷</button>
+              <button onClick={onClose} className="text-xs bg-gray-600 hover:bg-gray-700 px-3 py-1.5 rounded-lg">閉じる</button>
+            </div>
+          </div>
+
+          {/* Document */}
+          <div className="p-6 text-[11px] leading-relaxed font-sans space-y-3" style={{ fontFamily: "'MS Gothic', monospace" }}>
+            {/* Header */}
+            <div className="border-2 border-gray-700 p-3 space-y-1">
+              <div className="text-center text-sm font-bold mb-2">福祉用具貸与　モニタリング報告書</div>
+              <div className="flex gap-4">
+                <span className="text-gray-500 w-28 shrink-0">居宅支援事業所</span>
+                <span>{client.care_manager_org ?? ""}</span>
+              </div>
+              <div className="flex gap-4">
+                <span className="text-gray-500 w-28 shrink-0">利用者</span>
+                <span className="font-bold">{client.name} 様</span>
+              </div>
+              <div className="flex gap-4 mt-1">
+                <span className="text-gray-500 w-28 shrink-0">事業所名</span>
+                <span>{companyInfo.companyName}</span>
+                <span className="ml-4 text-gray-500">TEL</span>
+                <span>{companyInfo.tel}</span>
+                {companyInfo.fax && <><span className="ml-2 text-gray-500">FAX</span><span>{companyInfo.fax}</span></>}
+              </div>
+              <div className="flex gap-4">
+                <span className="text-gray-500 w-28 shrink-0">担当者</span>
+                <span>{staffName}</span>
+              </div>
+            </div>
+
+            {/* Visit info */}
+            <div className="border border-gray-400 p-2 flex gap-6 items-center">
+              <div><span className="text-gray-500">訪問日　</span><span className="font-bold">{toJaDate(visitDate)}</span></div>
+              <div><span className="text-gray-500">対象月　</span><span className="font-bold">{toJaMonth(tm)}</span></div>
+              <div><span className="text-gray-500">介護度　</span><span>{client.care_level}</span></div>
+              {(insuranceRecord?.certification_start_date || client.certification_end_date) && (
+                <div>
+                  <span className="text-gray-500">認定期間　</span>
+                  <span>{insuranceRecord?.certification_start_date ?? ""} 〜 {insuranceRecord?.certification_end_date ?? client.certification_end_date ?? ""}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Equipment check table */}
+            <div>
+              <div className="text-xs font-bold mb-1 border-b-2 border-gray-700 pb-0.5">■ 福祉用具チェック</div>
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className={`${TH} w-20`}>種目</th>
+                    <th className={TH}>機種名</th>
+                    <th className={`${TH} w-10`}>数量</th>
+                    <th className={`${TH} w-16`} colSpan={2}>問題なし</th>
+                    <th className={`${TH} w-16`} colSpan={2}>不具合</th>
+                    <th className={`${TH} w-16`} colSpan={2}>劣化</th>
+                    <th className={`${TH} w-16`} colSpan={2}>交換必要</th>
+                  </tr>
+                  <tr>
+                    <th className={TH}></th><th className={TH}></th><th className={TH}></th>
+                    {["問題なし","不具合","劣化","交換必要"].map(h => (
+                      <Fragment key={h}>
+                        <th className={TH}>なし</th>
+                        <th className={TH}>あり</th>
+                      </Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemChecks.slice(0, 8).map((item, idx) => {
+                    const eq = equipment.find(e => e.product_code === item.product_code);
+                    const name = eq?.name ?? item.equipment_name;
+                    const cat = eq?.category ?? item.category;
+                    const prev = idx > 0 ? (equipment.find(e => e.product_code === itemChecks[idx-1].product_code)?.category ?? itemChecks[idx-1].category) : null;
+                    return (
+                      <tr key={item.order_item_id}>
+                        <td className={TD}>{cat !== prev ? cat : ""}</td>
+                        <td className={TD}>{name}</td>
+                        <td className={`${TD} text-center`}>{item.quantity}</td>
+                        <td className={`${TD} text-center`}>{item.no_issue ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{!item.no_issue ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{!item.has_malfunction ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{item.has_malfunction ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{!item.has_deterioration ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{item.has_deterioration ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{!item.needs_replacement ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{item.needs_replacement ? "☑" : "□"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Comments */}
+            <div className="border border-gray-400 p-2 space-y-2">
+              <div>
+                <div className="text-gray-500 font-semibold mb-0.5">■ 継続・必要性</div>
+                <div className="whitespace-pre-wrap min-h-[2.5rem]">{continuityComment}</div>
+              </div>
+              <div className="border-t border-gray-300 pt-2">
+                <div className="text-gray-500 font-semibold mb-0.5">■ 報告内容</div>
+                <div className="whitespace-pre-wrap min-h-[3rem]">{reportComment}</div>
+              </div>
+            </div>
+
+            {/* Report date */}
+            <div className="flex justify-end">
+              <span className="text-gray-500">報告日　</span>
+              <span className="font-bold">{toJaDate(reportDate)}</span>
+            </div>
+
+            {/* Previous comment */}
+            {previousComment && (
+              <div className="border border-dashed border-gray-400 p-2">
+                <div className="text-gray-500 font-semibold mb-0.5">■ 前回コメント</div>
+                <div className="whitespace-pre-wrap">{previousComment}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── MonitoringFormModal ──────────────────────────────────────────────────────
 
 type MonitoringItemCheck = {
@@ -7981,6 +8152,7 @@ function MonitoringFormModal({
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(existingRecord?.id ?? null);
   const [downloading, setDownloading] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [insuranceRecord, setInsuranceRecord] = useState<ClientInsuranceRecord | null>(null);
 
   const [itemChecks, setItemChecks] = useState<MonitoringItemCheck[]>(() => {
@@ -8261,6 +8433,13 @@ function MonitoringFormModal({
           保存
         </button>
         <button
+          onClick={() => setShowPreview(true)}
+          className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 px-4 py-2.5 rounded-xl hover:bg-gray-50"
+        >
+          <Eye size={16} />
+          プレビュー
+        </button>
+        <button
           onClick={handleDownload}
           disabled={downloading}
           className="flex items-center gap-1.5 text-sm text-blue-600 border border-blue-200 px-4 py-2.5 rounded-xl hover:bg-blue-50 disabled:opacity-50"
@@ -8269,6 +8448,24 @@ function MonitoringFormModal({
           Excel
         </button>
       </div>
+
+      {showPreview && (
+        <MonitoringPreview
+          client={client}
+          visitDate={visitDate}
+          reportDate={reportDate}
+          tm={tm}
+          staffName={staffName}
+          companyInfo={companyInfo}
+          itemChecks={itemChecks}
+          equipment={equipment}
+          insuranceRecord={insuranceRecord}
+          continuityComment={continuityComment}
+          reportComment={reportComment}
+          previousComment={previousComment}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   );
 }
