@@ -58,7 +58,7 @@ const STATUS_COLOR: Record<OrderItem["status"], string> = {
 };
 
 const NEXT_STATUSES: Record<OrderItem["status"], OrderItem["status"][]> = {
-  ordered: ["delivered", "cancelled"],
+  ordered: ["delivered", "rental_started", "cancelled"],
   delivered: ["rental_started", "cancelled"], // 試用中は廃止
   trial: ["rental_started", "cancelled"],     // DB後方互換のため残す
   rental_started: ["terminated"],
@@ -228,7 +228,8 @@ type OrderWithItems = Order & { items: OrderItem[] };
 type PendingChange = {
   item: OrderItem;
   newStatus: OrderItem["status"];
-  date?: string; // rental_start_date or rental_end_date
+  date?: string;        // rental_start_date or rental_end_date
+  deliveredAt?: string; // 発注済→レンタル開始ダイレクト時の納品日
 };
 
 // ─── Main Page ──────────────────────────────────────────────────────────────
@@ -434,6 +435,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
     item: OrderItem;
     nextStatus: OrderItem["status"];
     date: string;
+    deliveredAt?: string;
   } | null>(null);
   // 未保存変更ステージング
   const [pendingChanges, setPendingChanges] = useState<Map<string, PendingChange>>(new Map());
@@ -544,23 +546,27 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
   const today = new Date().toISOString().split("T")[0];
 
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"], parentOrder?: OrderWithItems) => {
-    // 納品済・レンタル中・解約済は日付入力
     if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
       let defaultDate = today;
       if (nextStatus === "rental_started" && parentOrder) {
         defaultDate = parentOrder.delivery_date ?? item.delivered_at ?? parentOrder.ordered_at?.split("T")[0] ?? today;
       }
-      setDateInput({ item, nextStatus, date: defaultDate });
+      // 発注済→レンタル開始ダイレクト：納品日も同時入力
+      if (nextStatus === "rental_started" && item.status === "ordered") {
+        setDateInput({ item, nextStatus, date: today, deliveredAt: today });
+      } else {
+        setDateInput({ item, nextStatus, date: defaultDate });
+      }
     } else {
       stageChange(item, nextStatus);
     }
   };
 
   /** ステータス変更をステージング（DBには保存しない） */
-  const stageChange = (item: OrderItem, newStatus: OrderItem["status"], date?: string) => {
+  const stageChange = (item: OrderItem, newStatus: OrderItem["status"], date?: string, deliveredAt?: string) => {
     setPendingChanges((prev) => {
       const next = new Map(prev);
-      next.set(item.id, { item, newStatus, date });
+      next.set(item.id, { item, newStatus, date, deliveredAt });
       return next;
     });
     setDateInput(null);
@@ -582,6 +588,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
         const extra: Record<string, string> = {};
         if (change.newStatus === "delivered" && change.date) extra.delivered_at = change.date;
         if (change.newStatus === "rental_started" && change.date) extra.rental_start_date = change.date;
+        if (change.newStatus === "rental_started" && change.deliveredAt) extra.delivered_at = change.deliveredAt;
         if (change.newStatus === "terminated" && change.date) extra.rental_end_date = change.date;
         await updateOrderItemStatus(
           change.item.id,
@@ -850,29 +857,57 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
                                         <td colSpan={6} className="px-3 pb-2">
                                           <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
                                             <p className="text-xs font-medium text-emerald-700">
-                                              {dateInput.nextStatus === "delivered" ? "納品日（任意）" : dateInput.nextStatus === "rental_started" ? "レンタル開始日" : "解約日"}を入力
+                                              {dateInput.nextStatus === "delivered" ? "納品日（任意）"
+                                                : dateInput.nextStatus === "rental_started" && dateInput.deliveredAt !== undefined ? "納品日・レンタル開始日を入力"
+                                                : dateInput.nextStatus === "rental_started" ? "レンタル開始日"
+                                                : "解約日"}
                                             </p>
-                                            <div className="flex gap-2 items-center">
-                                              <input
-                                                type="date"
-                                                value={dateInput.date}
-                                                onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                                                className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
-                                              />
-                                              <button
-                                                disabled={dateInput.nextStatus !== "delivered" && !dateInput.date}
-                                                onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date || undefined)}
-                                                className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
-                                              >
-                                                確定
-                                              </button>
-                                              <button
-                                                onClick={() => setDateInput(null)}
-                                                className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg"
-                                              >
-                                                戻す
-                                              </button>
-                                            </div>
+                                            {/* ダイレクト（発注→レンタル開始）: 納品日＋開始日 */}
+                                            {dateInput.nextStatus === "rental_started" && dateInput.deliveredAt !== undefined ? (
+                                              <div className="space-y-1.5">
+                                                <div className="flex gap-2 items-center">
+                                                  <span className="text-xs text-gray-500 w-24 shrink-0">納品日</span>
+                                                  <input
+                                                    type="date"
+                                                    value={dateInput.deliveredAt}
+                                                    onChange={(e) => setDateInput({ ...dateInput, deliveredAt: e.target.value })}
+                                                    className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                                  />
+                                                </div>
+                                                <div className="flex gap-2 items-center">
+                                                  <span className="text-xs text-gray-500 w-24 shrink-0">レンタル開始日</span>
+                                                  <input
+                                                    type="date"
+                                                    value={dateInput.date}
+                                                    onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                                                    className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                                  />
+                                                </div>
+                                                <div className="flex gap-2 pt-1">
+                                                  <button
+                                                    disabled={!dateInput.date}
+                                                    onClick={() => stageChange(dateInput.item, dateInput.nextStatus, dateInput.date || undefined, dateInput.deliveredAt || undefined)}
+                                                    className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40"
+                                                  >確定</button>
+                                                  <button onClick={() => setDateInput(null)} className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
+                                                </div>
+                                              </div>
+                                            ) : (
+                                              <div className="flex gap-2 items-center">
+                                                <input
+                                                  type="date"
+                                                  value={dateInput.date}
+                                                  onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
+                                                  className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                                                />
+                                                <button
+                                                  disabled={dateInput.nextStatus !== "delivered" && !dateInput.date}
+                                                  onClick={() => handleStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date || undefined)}
+                                                  className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40"
+                                                >確定</button>
+                                                <button onClick={() => setDateInput(null)} className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
+                                              </div>
+                                            )}
                                           </div>
                                         </td>
                                       </tr>
@@ -2266,6 +2301,7 @@ function ClientDetail({
     item: OrderItem;
     nextStatus: OrderItem["status"];
     date: string;
+    deliveredAt?: string;
   } | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
@@ -3002,8 +3038,8 @@ function ClientDetail({
                       <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
                         <td className="px-2 py-2">
                           <div className="flex items-center">
-                            <span className="w-7 shrink-0">
-                              {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
+                            <span className="w-10 shrink-0 flex items-center">
+                              {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">現在</span>}
                             </span>
                             <span className="flex-1 text-right text-gray-700 tabular-nums">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
                           </div>
