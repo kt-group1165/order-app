@@ -2979,47 +2979,49 @@ function ClientDetail({
             {insuranceRecords.length === 0 && !insuranceForm ? (
               <p className="text-sm text-gray-400 text-center py-6">保険情報がありません</p>
             ) : (
-              <div className="space-y-2">
-                {insuranceRecords.map((rec, idx) => (
-                  <div key={rec.id} className={`bg-white rounded-xl border p-3 space-y-1.5 ${idx === 0 ? "border-emerald-200" : "border-gray-100"}`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">現在</span>}
-                        <span className="text-xs font-medium text-gray-700">
-                          {rec.effective_date ?? "有効期間未設定"}
-                        </span>
-                      </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => {
-                            setEditingInsuranceId(rec.id);
-                            setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_name: rec.insurer_name, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, care_manager: rec.care_manager, care_manager_org: rec.care_manager_org, notes: rec.notes });
-                          }}
-                          className="text-xs text-gray-500 border border-gray-200 px-2 py-0.5 rounded-lg hover:bg-gray-50"
-                        >
-                          編集
-                        </button>
-                        <button onClick={() => handleDeleteInsuranceRecord(rec.id)}
-                          className="text-xs text-red-400 border border-red-100 px-2 py-0.5 rounded-lg hover:bg-red-50">
-                          削除
-                        </button>
-                      </div>
-                    </div>
-                    {([
-                      ["被保険者番号", rec.insured_number],
-                      ["要介護度", rec.care_level],
-                      ["認定開始日", rec.certification_start_date],
-                      ["認定終了日", rec.certification_end_date],
-                      ["負担割合", rec.copay_rate],
-                      ["保険者番号", rec.insurer_number],
-                    ] as [string, string | null][]).filter(([, v]) => v).map(([label, value]) => (
-                      <div key={label} className="flex gap-2 text-xs">
-                        <span className="w-24 shrink-0 text-gray-400">{label}</span>
-                        <span className="text-gray-700">{value}</span>
-                      </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs min-w-[700px]">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500 w-6"></th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">被保険者番号</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">要介護度</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">認定開始日</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">認定終了日</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">負担割合</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">保険者</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">居宅事業所</th>
+                      <th className="text-left px-2 py-2 font-medium text-gray-500">ケアマネ</th>
+                      <th className="px-2 py-2 w-16"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {insuranceRecords.map((rec, idx) => (
+                      <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
+                        <td className="px-2 py-2">
+                          {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
+                        </td>
+                        <td className="px-2 py-2 text-gray-700">{rec.insured_number ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.care_level ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.certification_start_date ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.certification_end_date ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.copay_rate ? `${rec.copay_rate}%` : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.insurer_name ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.care_manager_org ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2 text-gray-700">{rec.care_manager ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => { setEditingInsuranceId(rec.id); setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_name: rec.insurer_name, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, care_manager: rec.care_manager, care_manager_org: rec.care_manager_org, notes: rec.notes }); }}
+                              className="text-gray-400 hover:text-gray-600"
+                            >編集</button>
+                            <button onClick={() => handleDeleteInsuranceRecord(rec.id)} className="text-red-300 hover:text-red-500">削除</button>
+                          </div>
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-                ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </section>
