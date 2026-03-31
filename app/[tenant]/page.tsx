@@ -7671,11 +7671,11 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [clientsRes, ordersRes, monRes, eqRes, tenantData] = await Promise.all([
+      const [clientsRes, ordersRes, monRes, eqData, tenantData] = await Promise.all([
         supabase.from("clients").select("*").eq("tenant_id", tenantId),
         supabase.from("orders").select("id, client_id").eq("tenant_id", tenantId),
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
-        supabase.from("equipment").select("*").eq("tenant_id", tenantId),
+        getEquipment(tenantId),
         getTenantById(tenantId),
       ]);
       const cls = (clientsRes.data ?? []) as Client[];
@@ -7683,7 +7683,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
       setClients(cls);
       setClientOrders(ords);
       setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
-      setEquipment((eqRes.data ?? []) as Equipment[]);
+      setEquipment(eqData);
       if (tenantData) {
         setCompanyInfo({
           businessNumber:      tenantData.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
@@ -7711,7 +7711,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
           .from("order_items")
           .select("*")
           .eq("tenant_id", tenantId)
-          .eq("status", "rental_started")
+          .in("status", ["rental_started", "delivered", "trial"])
           .range(itemFrom, itemFrom + 999);
         if (!chunk || chunk.length === 0) break;
         items.push(...(chunk as OrderItem[]));
