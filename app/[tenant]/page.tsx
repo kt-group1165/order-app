@@ -3294,32 +3294,40 @@ function PostSaveModal({
               <div key={gi} className="bg-gray-50 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-bold text-gray-800">{clientName(g.clientId)}</span>
-                  {order && (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => onSendEmail(order)}
-                        className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
-                          supplierSentIds.has(order.id)
-                            ? "opacity-30 text-blue-500 border-blue-200"
-                            : "text-blue-600 border-blue-200 hover:bg-blue-50"
-                        }`}
-                      >
-                        <Mail size={12} /> 卸会社にメール
-                      </button>
-                      {!g.changes.every((c) => c.newStatus === "cancelled") && (
-                        <button
-                          onClick={() => onCareManagerEmail(order)}
-                          className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
-                            careSentIds.has(order.id)
-                              ? "opacity-30 text-emerald-500 border-emerald-200"
-                              : "text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                          }`}
-                        >
-                          <Mail size={12} /> ケアマネにメール
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  {order && (() => {
+                    const statuses = g.changes.map((c) => c.newStatus);
+                    const needsSupplierMail = statuses.some((s) => s === "rental_started" || s === "terminated" || s === "cancelled");
+                    const needsCareMail = statuses.some((s) => s === "rental_started" || s === "terminated");
+                    if (!needsSupplierMail && !needsCareMail) return null;
+                    return (
+                      <div className="flex items-center gap-1.5">
+                        {needsSupplierMail && (
+                          <button
+                            onClick={() => onSendEmail(order)}
+                            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
+                              supplierSentIds.has(order.id)
+                                ? "opacity-30 text-blue-500 border-blue-200"
+                                : "text-blue-600 border-blue-200 hover:bg-blue-50"
+                            }`}
+                          >
+                            <Mail size={12} /> 卸会社にメール
+                          </button>
+                        )}
+                        {needsCareMail && (
+                          <button
+                            onClick={() => onCareManagerEmail(order)}
+                            className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-xl transition-opacity ${
+                              careSentIds.has(order.id)
+                                ? "opacity-30 text-emerald-500 border-emerald-200"
+                                : "text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                            }`}
+                          >
+                            <Mail size={12} /> ケアマネにメール
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <ul className="space-y-1">
                   {g.changes.map((c, ci) => (
