@@ -2065,20 +2065,24 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
             {insuranceFiltered.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-16">該当なし</p>
             ) : (
-              <table className="w-full text-xs min-w-[600px]">
+              <table className="w-full text-xs min-w-[900px]">
                 <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">氏名</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">氏名</th>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-20">要介護度</th>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">被保険者番号</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-20">負担割合</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">認定開始日</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">認定終了日</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-16">負担割合</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">保険者</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">認定開始日</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">認定終了日</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">居宅事業所</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">ケアマネ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {insuranceFiltered.map((client) => {
                     const rec = insuranceByClient.get(client.id);
+                    const dash = <span className="text-gray-300">—</span>;
                     return (
                       <tr
                         key={client.id}
@@ -2086,11 +2090,14 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                         onClick={() => { setSelectedClientInitialViewMode("insurance"); setSelectedClient(client); }}
                       >
                         <td className="px-3 py-2 font-medium text-gray-800">{client.name}</td>
-                        <td className="px-3 py-2 text-gray-600">{rec?.care_level ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-3 py-2 text-gray-600">{rec?.insured_number ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-3 py-2 text-gray-600">{rec?.copay_rate ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-3 py-2 text-gray-600">{rec?.certification_start_date ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-3 py-2 text-gray-600">{rec?.certification_end_date ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.care_level ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.insured_number ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.copay_rate ? `${rec.copay_rate}%` : dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.insurer_name ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.certification_start_date ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.certification_end_date ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.care_manager_org ?? dash}</td>
+                        <td className="px-3 py-2 text-gray-600">{rec?.care_manager ?? dash}</td>
                       </tr>
                     );
                   })}
@@ -2878,7 +2885,7 @@ function ClientDetail({
                 <button
                   onClick={() => {
                     setEditingInsuranceId(null);
-                    setInsuranceForm({ effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null, certification_start_date: null, certification_end_date: null, insurer_number: null, copay_rate: null, public_expense: null, notes: null });
+                    setInsuranceForm({ effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null, certification_start_date: null, certification_end_date: null, insurer_name: null, insurer_number: null, copay_rate: null, public_expense: null, care_manager: null, care_manager_org: null, notes: null });
                   }}
                   className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
                 >
@@ -2972,7 +2979,7 @@ function ClientDetail({
                         <button
                           onClick={() => {
                             setEditingInsuranceId(rec.id);
-                            setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, notes: rec.notes });
+                            setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_name: rec.insurer_name, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, care_manager: rec.care_manager, care_manager_org: rec.care_manager_org, notes: rec.notes });
                           }}
                           className="text-xs text-gray-500 border border-gray-200 px-2 py-0.5 rounded-lg hover:bg-gray-50"
                         >
