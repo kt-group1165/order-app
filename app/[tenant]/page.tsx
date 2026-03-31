@@ -197,8 +197,11 @@ const normalizeSearch = (str: string) =>
     .replace(/[ｦ-ﾟ]/g, (c) => HW_KANA[c] ?? c)          // 半角カナ→全角カナ
     .replace(/[\u3041-\u3096]/g, (c) =>                   // ひらがな→カタカナ
       String.fromCharCode(c.charCodeAt(0) + 0x60))
+    .replace(/[\uFF01-\uFF5E]/g, (c) =>                   // 全角英数字・記号→半角
+      String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/\u3000/g, " ")                              // 全角スペース→半角
     .toLowerCase()
-    .replace(/[\s　]+/g, "");                              // 全角・半角スペース除去
+    .replace(/[\s　]+/g, "");                              // スペース除去
 
 /** 用具名・コード・TAISコード・カテゴリに対してキーワード検索 */
 const matchEquipment = (e: Equipment, raw: string): boolean => {
