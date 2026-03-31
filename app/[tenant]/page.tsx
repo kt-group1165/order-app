@@ -7677,7 +7677,8 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
         getTenantById(tenantId),
-        supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).is("end_date", null),
+        supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
+          .or(`end_date.is.null,end_date.gte.${new Date().toISOString().split("T")[0]}`),
       ]);
       const cls = (clientsRes.data ?? []) as Client[];
       // orders をページングで全件取得
@@ -7733,6 +7734,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         itemFrom += 1000;
       }
       setActiveItems(items);
+      console.log("[Monitoring] clients:", cls.length, "orders:", allOrders.length, "activeItems:", items.length, "rentalHistory:", (rentalHistRes.data ?? []).length);
     } finally {
       setLoading(false);
     }
