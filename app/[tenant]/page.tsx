@@ -7703,19 +7703,22 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
           staffAdminPart:      tenantData.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
         });
       }
-      const orderIds = ords.map(o => o.id);
-      if (orderIds.length > 0) {
-        const items: OrderItem[] = [];
-        for (let i = 0; i < orderIds.length; i += 500) {
-          const { data } = await supabase
-            .from("order_items")
-            .select("*")
-            .in("order_id", orderIds.slice(i, i + 500))
-            .eq("status", "rental_started");
-          if (data) items.push(...(data as OrderItem[]));
-        }
-        setActiveItems(items);
+      // order_items を tenant_id で直接取得（URLの長さ制限を回避）
+      const items: OrderItem[] = [];
+      let itemFrom = 0;
+      while (true) {
+        const { data: chunk } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("tenant_id", tenantId)
+          .eq("status", "rental_started")
+          .range(itemFrom, itemFrom + 999);
+        if (!chunk || chunk.length === 0) break;
+        items.push(...(chunk as OrderItem[]));
+        if (chunk.length < 1000) break;
+        itemFrom += 1000;
       }
+      setActiveItems(items);
     } finally {
       setLoading(false);
     }
@@ -7751,9 +7754,12 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
       });
   }, [clients, clientItemsMap, monitoringRecords, selectedMonth]);
 
-  const dueThisMonth = schedule.filter(s => s.nextDue === selectedMonth && !s.doneThisMonth);
+  const todayMonth = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; })();
+  const overdue       = schedule.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth);
+  const dueThisMonth  = schedule.filter(s => s.nextDue === selectedMonth && !s.doneThisMonth);
   const completedThisMonth = schedule.filter(s => s.doneThisMonth);
-  const overdue = schedule.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth);
+  const upcoming      = schedule.filter(s => s.nextDue && s.nextDue > selectedMonth && !s.doneThisMonth)
+    .sort((a, b) => (a.nextDue ?? "").localeCompare(b.nextDue ?? ""));
 
   const changeMonth = (delta: number) => {
     const [y, m] = selectedMonth.split("-").map(Number);
@@ -7780,6 +7786,34 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
     );
   }
 
+  const RowCard = ({ client, nextDue, rec, color, onRecord }: {
+    client: Client; nextDue?: string | null; rec?: MonitoringRecord | null;
+    color: "red" | "amber" | "emerald" | "gray"; onRecord?: () => void;
+  }) => {
+    const bg = color === "red" ? "bg-red-50 border-red-100" : color === "amber" ? "bg-amber-50 border-amber-100" : color === "emerald" ? "bg-emerald-50 border-emerald-100" : "bg-white border-gray-100";
+    return (
+      <div className={`border rounded-xl px-3 py-2.5 flex items-center justify-between ${bg}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium text-gray-800 truncate">{client.name}</span>
+          {client.gender && <span className="text-xs text-gray-400 shrink-0">{client.gender}</span>}
+          <span className="text-xs text-gray-500 shrink-0">{client.care_level}</span>
+          {nextDue && color !== "emerald" && (
+            <span className={`text-xs shrink-0 ${color === "red" ? "text-red-500" : color === "amber" ? "text-amber-600" : "text-gray-400"}`}>
+              {nextDue.replace("-", "年")}月
+            </span>
+          )}
+          {rec?.visit_date && <span className="text-xs text-gray-400 shrink-0">訪問:{rec.visit_date}</span>}
+        </div>
+        {onRecord ? (
+          <button onClick={onRecord}
+            className={`shrink-0 text-xs text-white px-3 py-1 rounded-lg ${color === "red" ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}>
+            記録入力
+          </button>
+        ) : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Header */}
@@ -7790,18 +7824,20 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
             <button onClick={() => changeMonth(-1)} className="p-1.5 hover:bg-gray-100 rounded-lg">
               <ChevronLeft size={16} className="text-gray-500" />
             </button>
-            <span className="text-sm font-medium text-gray-700 w-20 text-center">
+            <button onClick={() => setSelectedMonth(todayMonth)}
+              className="text-sm font-medium text-gray-700 w-20 text-center hover:text-emerald-600">
               {selectedMonth.replace("-", "年")}月
-            </span>
+            </button>
             <button onClick={() => changeMonth(1)} className="p-1.5 hover:bg-gray-100 rounded-lg">
               <ChevronRight size={16} className="text-gray-500" />
             </button>
           </div>
         </div>
-        <div className="flex gap-3 mt-2 text-xs">
-          <span className="text-amber-600 font-medium">未実施 {dueThisMonth.length}名</span>
-          <span className="text-emerald-600 font-medium">完了 {completedThisMonth.length}名</span>
+        <div className="flex gap-3 mt-1.5 text-xs">
           {overdue.length > 0 && <span className="text-red-500 font-medium">期限超過 {overdue.length}名</span>}
+          <span className="text-amber-600 font-medium">今月対象 {dueThisMonth.length}名</span>
+          <span className="text-emerald-600 font-medium">完了 {completedThisMonth.length}名</span>
+          <span className="text-gray-400">今後 {upcoming.length}名</span>
         </div>
       </div>
 
@@ -7809,72 +7845,45 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         <div className="flex items-center justify-center flex-1">
           <Loader2 size={28} className="animate-spin text-emerald-400" />
         </div>
+      ) : schedule.length === 0 ? (
+        <p className="text-sm text-gray-400 text-center py-16">レンタル中の利用者がいません</p>
       ) : (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* 期限超過 */}
           {overdue.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-red-500 mb-2">期限超過</h3>
               <div className="space-y-1">
                 {overdue.map(({ client, nextDue }) => (
-                  <div key={client.id} className="bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
-                    <div>
-                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
-                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
-                      <span className="ml-2 text-xs text-red-500">予定: {nextDue?.replace("-", "年")}月</span>
-                    </div>
-                    <button
-                      onClick={() => setFormClient(client)}
-                      className="text-xs text-white bg-red-500 px-3 py-1 rounded-lg hover:bg-red-600"
-                    >
-                      記録入力
-                    </button>
-                  </div>
+                  <RowCard key={client.id} client={client} nextDue={nextDue} color="red"
+                    onRecord={() => setFormClient(client)} />
                 ))}
               </div>
             </section>
           )}
 
-          {/* 今月対象（未実施） */}
-          {dueThisMonth.length > 0 ? (
-            <section>
-              <h3 className="text-xs font-semibold text-amber-600 mb-2">今月対象（未実施）</h3>
-              <div className="space-y-1">
-                {dueThisMonth.map(({ client }) => (
-                  <div key={client.id} className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
-                    <div>
-                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
-                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
-                      {client.gender && <span className="ml-1 text-xs text-gray-400">{client.gender}</span>}
-                    </div>
-                    <button
-                      onClick={() => setFormClient(client)}
-                      className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg hover:bg-emerald-600"
-                    >
-                      記録入力
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : (
-            <p className="text-sm text-gray-400 text-center py-4">今月の対象者はいません</p>
-          )}
+          <section>
+            <h3 className="text-xs font-semibold text-amber-600 mb-2">
+              {selectedMonth.replace("-", "年")}月の対象者
+              {dueThisMonth.length === 0 && <span className="ml-2 font-normal text-gray-400">（なし）</span>}
+            </h3>
+            <div className="space-y-1">
+              {dueThisMonth.map(({ client, nextDue }) => (
+                <RowCard key={client.id} client={client} nextDue={nextDue} color="amber"
+                  onRecord={() => setFormClient(client)} />
+              ))}
+              {completedThisMonth.map(({ client, doneThisMonth: rec }) => (
+                <RowCard key={client.id} client={client} rec={rec} color="emerald" />
+              ))}
+            </div>
+          </section>
 
-          {/* 今月完了済み */}
-          {completedThisMonth.length > 0 && (
+          {upcoming.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-emerald-600 mb-2">完了済み</h3>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">今後の予定</h3>
               <div className="space-y-1">
-                {completedThisMonth.map(({ client, doneThisMonth: rec }) => (
-                  <div key={client.id} className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
-                    <div>
-                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
-                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
-                      {rec?.visit_date && <span className="ml-2 text-xs text-gray-400">訪問: {rec.visit_date}</span>}
-                    </div>
-                    <CheckCircle2 size={18} className="text-emerald-500" />
-                  </div>
+                {upcoming.map(({ client, nextDue }) => (
+                  <RowCard key={client.id} client={client} nextDue={nextDue} color="gray"
+                    onRecord={() => setFormClient(client)} />
                 ))}
               </div>
             </section>
