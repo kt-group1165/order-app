@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, useCallback, Fragment, useRef } from "react";
+import { useState, useEffect, use, useCallback, Fragment, useRef, useMemo } from "react";
 import {
   Package,
   ClipboardList,
@@ -26,8 +26,9 @@ import {
   FileText,
   Lock,
   Download,
+  ClipboardCheck,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
@@ -221,9 +222,16 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
+
+// 6ヶ月後の月を計算 "YYYY-MM" → "YYYY-MM"
+function calcNextDueMonth(base: string): string {
+  const [y, m] = base.split("-").map(Number);
+  const total = y * 12 + m - 1 + 6;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
 
 type PendingChange = {
   item: OrderItem;
@@ -350,6 +358,7 @@ export default function TenantPage({
         {activeTab === "orders" && <OrdersTab tenantId={tenantId} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
+        {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
       </div>
 
@@ -360,6 +369,7 @@ export default function TenantPage({
             { id: "orders", icon: ClipboardList, label: "発注管理" },
             { id: "equipment", icon: Package, label: "用具マスタ" },
             { id: "clients", icon: Users, label: "利用者別" },
+            { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
             { id: "settings", icon: Settings, label: "設定" },
           ] as { id: Tab; icon: React.ElementType; label: string }[]
         ).map(({ id, icon: Icon, label }) => (
@@ -2096,6 +2106,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           insurer_number: cols[col("保険者番号")]?.trim() || null,
           copay_rate: cols[col("利用者負担割合")]?.trim() || null,
           public_expense: cols[col("公費負担情報")]?.trim() || null,
+          gender: null,
         };
         const existing = userNumber ? clients.find((c) => c.user_number === userNumber) : null;
         if (existing) toUpdate.push({ id: existing.id, data });
@@ -2214,6 +2225,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                 <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">氏名</th>
+                    <th className="text-left px-3 py-2 font-medium text-gray-600 w-10">性別</th>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-20">要介護度</th>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-28">被保険者番号</th>
                     <th className="text-left px-3 py-2 font-medium text-gray-600 w-16">負担割合</th>
@@ -2235,6 +2247,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                         onClick={() => { setSelectedClientInitialViewMode("insurance"); setSelectedClient(client); }}
                       >
                         <td className="px-3 py-2 font-medium text-gray-800">{client.name}</td>
+                        <td className="px-3 py-2 text-gray-600">{client.gender ?? dash}</td>
                         <td className="px-3 py-2 text-gray-600">{rec?.care_level ?? dash}</td>
                         <td className="px-3 py-2 text-gray-600">{rec?.insured_number ?? dash}</td>
                         <td className="px-3 py-2 text-gray-600">{rec?.copay_rate ? `${rec.copay_rate}%` : dash}</td>
@@ -2302,6 +2315,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                     <div className="flex-1 min-w-0 flex items-center gap-1">
                       <span className="w-20 shrink-0 text-sm font-medium text-gray-800 truncate">{client.name}</span>
                       <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
+                      {client.gender && <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{client.gender}</span>}
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
                           <span className="text-xs px-1 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">介護</span>
@@ -2682,7 +2696,10 @@ function ClientDetail({
           <ChevronLeft size={20} className="text-gray-500" />
         </button>
         <div className="flex-1">
-          <h2 className="font-semibold text-gray-800">{client.name}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="font-semibold text-gray-800">{client.name}</h2>
+            {client.gender && <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md">{client.gender}</span>}
+          </div>
           {client.furigana && <p className="text-xs text-gray-400">{client.furigana}</p>}
         </div>
         <button
@@ -3023,6 +3040,26 @@ function ClientDetail({
             </div>
           </section>
 
+          {/* 利用者情報 */}
+          <section>
+            <h3 className="text-xs font-semibold text-gray-500 mb-2">利用者情報</h3>
+            <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+              {[
+                ["氏名", client.name],
+                ["フリガナ", client.furigana],
+                ["性別", client.gender],
+                ["生年月日", insuranceRecords[0]?.birth_date ?? null],
+                ["住所", client.address],
+                ["電話番号", client.phone ?? client.mobile],
+              ].map(([label, value]) => (
+                <div key={label} className="flex gap-2 text-xs">
+                  <span className="w-24 shrink-0 text-gray-500">{label}</span>
+                  <span className="text-gray-800">{value || "—"}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
           {/* 保険情報一覧 */}
           <section>
             <div className="flex items-center justify-between mb-2">
@@ -3130,11 +3167,9 @@ function ClientDetail({
                     {insuranceRecords.map((rec, idx) => (
                       <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
                         <td className="px-2 py-2">
-                          <div className="flex items-center">
-                            <span className="w-10 shrink-0 flex items-center">
-                              {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">現在</span>}
-                            </span>
-                            <span className="flex-1 text-right text-gray-700 tabular-nums">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
+                          <div className="flex items-center gap-1.5">
+                            {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">現在</span>}
+                            <span className="text-gray-700 tabular-nums">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
                           </div>
                         </td>
                         <td className="px-2 py-2 text-gray-700">{rec.care_level ?? <span className="text-gray-300">—</span>}</td>
@@ -5542,7 +5577,7 @@ function CarePlanModal({
   });
 
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
-  const [gender, setGender] = useState((initialParams?.gender as string) ?? "");
+  const [gender, setGender] = useState((initialParams?.gender as string) ?? client.gender ?? "");
   const [birthDate, setBirthDate] = useState((initialParams?.birthDate as string) ?? "");
   const [certStartDate, setCertStartDate] = useState((initialParams?.certStartDate as string) ?? "");
   const [consultantName, setConsultantName] = useState((initialParams?.consultantName as string) ?? "");
@@ -5694,21 +5729,10 @@ function CarePlanModal({
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-500 block mb-1">性別</label>
-                  <select value={gender} onChange={(e) => setGender(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400">
-                    <option value="">未選択</option>
-                    <option value="男">男</option>
-                    <option value="女">女</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 block mb-1">生年月日</label>
-                  <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
-                </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">生年月日</label>
+                <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">認定期間（開始日）</label>
@@ -5792,7 +5816,6 @@ function ProposalModal({
     return new Set(selectableItems.map((i) => i.id));
   });
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
-  const [height, setHeight] = useState((initialParams?.height as string) ?? "");
   const [saving, setSaving] = useState(false);
 
   const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
@@ -5820,7 +5843,7 @@ function ProposalModal({
       await saveClientDocument({
         tenant_id: tenantId, client_id: client.id, type: "proposal",
         title: `選定提案書 ${creationDate}`,
-        params: { creationDate, selectedIds: [...selectedIds], height },
+        params: { creationDate, selectedIds: [...selectedIds] },
       });
       onSaved?.();
     } finally { setSaving(false); }
@@ -5895,11 +5918,6 @@ function ProposalModal({
                 <input type="date" value={creationDate} onChange={(e) => setCreationDate(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
               </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">身長（cm）</label>
-                <input value={height} onChange={(e) => setHeight(e.target.value)} placeholder="例：155"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
-              </div>
             </div>
           </div>
         ) : (
@@ -5930,14 +5948,12 @@ function ProposalModal({
                   <tr>
                     <th style={TH}>介護度</th>
                     <td style={{ ...TD, width: "80px" }}>{client.care_level ?? ""}</td>
-                    <th style={TH}>身長</th>
-                    <td style={TD}>{height ? `${height} cm` : ""}</td>
-                  </tr>
-                  <tr>
                     <th style={TH}>担当者</th>
                     <td style={TD}>{companyInfo.staffName}</td>
+                  </tr>
+                  <tr>
                     <th style={TH}>居宅支援事業所</th>
-                    <td style={TD}>{client.care_manager_org ?? ""}</td>
+                    <td style={TD} colSpan={3}>{client.care_manager_org ?? ""}</td>
                   </tr>
                   <tr>
                     <th style={TH}>担当CM</th>
@@ -7629,6 +7645,541 @@ function RentalReportModal({
           </div>
 
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MonitoringTab ────────────────────────────────────────────────────────────
+
+function MonitoringTab({ tenantId }: { tenantId: string }) {
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientOrders, setClientOrders] = useState<{ id: string; client_id: string }[]>([]);
+  const [activeItems, setActiveItems] = useState<OrderItem[]>([]);
+  const [monitoringRecords, setMonitoringRecords] = useState<MonitoringRecord[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+  const [loading, setLoading] = useState(true);
+  const [formClient, setFormClient] = useState<Client | null>(null);
+
+  useEffect(() => { loadData(); }, [tenantId]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [clientsRes, ordersRes, monRes, eqRes, tenantData] = await Promise.all([
+        supabase.from("clients").select("*").eq("tenant_id", tenantId),
+        supabase.from("orders").select("id, client_id").eq("tenant_id", tenantId),
+        supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
+        supabase.from("equipment").select("*").eq("tenant_id", tenantId),
+        getTenantById(tenantId),
+      ]);
+      const cls = (clientsRes.data ?? []) as Client[];
+      const ords = (ordersRes.data ?? []) as { id: string; client_id: string }[];
+      setClients(cls);
+      setClientOrders(ords);
+      setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
+      setEquipment((eqRes.data ?? []) as Equipment[]);
+      if (tenantData) {
+        setCompanyInfo({
+          businessNumber:      tenantData.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
+          companyName:         tenantData.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
+          companyAddress:      tenantData.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
+          tel:                 tenantData.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
+          fax:                 tenantData.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
+          staffName:           tenantData.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
+          serviceArea:         tenantData.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
+          businessDays:        tenantData.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
+          businessHours:       tenantData.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
+          staffManagerFull:    tenantData.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+          staffManagerPart:    tenantData.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+          staffSpecialistFull: tenantData.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+          staffSpecialistPart: tenantData.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+          staffAdminFull:      tenantData.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+          staffAdminPart:      tenantData.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
+        });
+      }
+      const orderIds = ords.map(o => o.id);
+      if (orderIds.length > 0) {
+        const items: OrderItem[] = [];
+        for (let i = 0; i < orderIds.length; i += 500) {
+          const { data } = await supabase
+            .from("order_items")
+            .select("*")
+            .in("order_id", orderIds.slice(i, i + 500))
+            .eq("status", "rental_started");
+          if (data) items.push(...(data as OrderItem[]));
+        }
+        setActiveItems(items);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clientItemsMap = useMemo(() => {
+    const orderToClient = new Map(clientOrders.map(o => [o.id, o.client_id]));
+    const map = new Map<string, OrderItem[]>();
+    for (const item of activeItems) {
+      const clientId = orderToClient.get(item.order_id);
+      if (!clientId) continue;
+      if (!map.has(clientId)) map.set(clientId, []);
+      map.get(clientId)!.push(item);
+    }
+    return map;
+  }, [clientOrders, activeItems]);
+
+  const schedule = useMemo(() => {
+    return clients
+      .filter(c => (clientItemsMap.get(c.id) ?? []).length > 0)
+      .map(client => {
+        const items = clientItemsMap.get(client.id)!;
+        const earliestStart = items
+          .map(i => i.rental_start_date)
+          .filter((d): d is string => !!d)
+          .sort()[0] ?? null;
+        const clientRecords = monitoringRecords.filter(r => r.client_id === client.id);
+        const lastRecord = clientRecords[0] ?? null;
+        const base = lastRecord?.target_month ?? earliestStart?.slice(0, 7) ?? null;
+        const nextDue = base ? calcNextDueMonth(base) : null;
+        const doneThisMonth = clientRecords.find(r => r.target_month === selectedMonth) ?? null;
+        return { client, items, nextDue, lastRecord, doneThisMonth };
+      });
+  }, [clients, clientItemsMap, monitoringRecords, selectedMonth]);
+
+  const dueThisMonth = schedule.filter(s => s.nextDue === selectedMonth && !s.doneThisMonth);
+  const completedThisMonth = schedule.filter(s => s.doneThisMonth);
+  const overdue = schedule.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth);
+
+  const changeMonth = (delta: number) => {
+    const [y, m] = selectedMonth.split("-").map(Number);
+    const total = y * 12 + m - 1 + delta;
+    setSelectedMonth(`${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`);
+  };
+
+  if (formClient) {
+    const clientItems = clientItemsMap.get(formClient.id) ?? [];
+    const clientRecords = monitoringRecords.filter(r => r.client_id === formClient.id);
+    const lastRecord = clientRecords[0] ?? null;
+    return (
+      <MonitoringFormModal
+        client={formClient}
+        clientItems={clientItems}
+        equipment={equipment}
+        companyInfo={companyInfo}
+        tenantId={tenantId}
+        lastRecord={lastRecord}
+        targetMonth={selectedMonth}
+        onClose={() => setFormClient(null)}
+        onSaved={() => { setFormClient(null); loadData(); }}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-800">モニタリング管理</h2>
+          <div className="flex items-center gap-2">
+            <button onClick={() => changeMonth(-1)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+              <ChevronLeft size={16} className="text-gray-500" />
+            </button>
+            <span className="text-sm font-medium text-gray-700 w-20 text-center">
+              {selectedMonth.replace("-", "年")}月
+            </span>
+            <button onClick={() => changeMonth(1)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+              <ChevronRight size={16} className="text-gray-500" />
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-3 mt-2 text-xs">
+          <span className="text-amber-600 font-medium">未実施 {dueThisMonth.length}名</span>
+          <span className="text-emerald-600 font-medium">完了 {completedThisMonth.length}名</span>
+          {overdue.length > 0 && <span className="text-red-500 font-medium">期限超過 {overdue.length}名</span>}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center flex-1">
+          <Loader2 size={28} className="animate-spin text-emerald-400" />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* 期限超過 */}
+          {overdue.length > 0 && (
+            <section>
+              <h3 className="text-xs font-semibold text-red-500 mb-2">期限超過</h3>
+              <div className="space-y-1">
+                {overdue.map(({ client, nextDue }) => (
+                  <div key={client.id} className="bg-red-50 border border-red-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
+                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
+                      <span className="ml-2 text-xs text-red-500">予定: {nextDue?.replace("-", "年")}月</span>
+                    </div>
+                    <button
+                      onClick={() => setFormClient(client)}
+                      className="text-xs text-white bg-red-500 px-3 py-1 rounded-lg hover:bg-red-600"
+                    >
+                      記録入力
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 今月対象（未実施） */}
+          {dueThisMonth.length > 0 ? (
+            <section>
+              <h3 className="text-xs font-semibold text-amber-600 mb-2">今月対象（未実施）</h3>
+              <div className="space-y-1">
+                {dueThisMonth.map(({ client }) => (
+                  <div key={client.id} className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
+                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
+                      {client.gender && <span className="ml-1 text-xs text-gray-400">{client.gender}</span>}
+                    </div>
+                    <button
+                      onClick={() => setFormClient(client)}
+                      className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg hover:bg-emerald-600"
+                    >
+                      記録入力
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <p className="text-sm text-gray-400 text-center py-4">今月の対象者はいません</p>
+          )}
+
+          {/* 今月完了済み */}
+          {completedThisMonth.length > 0 && (
+            <section>
+              <h3 className="text-xs font-semibold text-emerald-600 mb-2">完了済み</h3>
+              <div className="space-y-1">
+                {completedThisMonth.map(({ client, doneThisMonth: rec }) => (
+                  <div key={client.id} className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">{client.name}</span>
+                      <span className="ml-2 text-xs text-gray-500">{client.care_level}</span>
+                      {rec?.visit_date && <span className="ml-2 text-xs text-gray-400">訪問: {rec.visit_date}</span>}
+                    </div>
+                    <CheckCircle2 size={18} className="text-emerald-500" />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MonitoringFormModal ──────────────────────────────────────────────────────
+
+type MonitoringItemCheck = {
+  order_item_id: string;
+  product_code: string;
+  equipment_name: string;
+  category: string;
+  quantity: number;
+  no_issue: boolean;
+  has_malfunction: boolean;
+  has_deterioration: boolean;
+  needs_replacement: boolean;
+};
+
+function MonitoringFormModal({
+  client, clientItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, onClose, onSaved,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  lastRecord: MonitoringRecord | null;
+  targetMonth: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [visitDate, setVisitDate] = useState(todayStr);
+  const [reportDate, setReportDate] = useState(todayStr);
+  const [staffName, setStaffName] = useState(companyInfo.staffName ?? "");
+  const [tm, setTm] = useState(targetMonth);
+  const [continuityComment, setContinuityComment] = useState(
+    "怪我無く、安全にお過ごし頂く為に、継続して福祉用具の利用が必要と思われます。"
+  );
+  const [reportComment, setReportComment] = useState("");
+  const [previousComment, setPreviousComment] = useState(lastRecord?.report_comment ?? "");
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [insuranceRecord, setInsuranceRecord] = useState<ClientInsuranceRecord | null>(null);
+
+  const [itemChecks, setItemChecks] = useState<MonitoringItemCheck[]>(() =>
+    clientItems.map(item => {
+      const eq = equipment.find(e => e.product_code === item.product_code);
+      return {
+        order_item_id: item.id,
+        product_code: item.product_code,
+        equipment_name: eq?.name ?? item.product_code,
+        category: eq?.category ?? "",
+        quantity: item.quantity ?? 1,
+        no_issue: true,
+        has_malfunction: false,
+        has_deterioration: false,
+        needs_replacement: false,
+      };
+    })
+  );
+
+  useEffect(() => {
+    supabase.from("client_insurance_records")
+      .select("*").eq("tenant_id", tenantId).eq("client_id", client.id)
+      .order("effective_date", { ascending: false }).limit(1)
+      .then(({ data }) => {
+        if (data && data.length > 0) setInsuranceRecord(data[0] as ClientInsuranceRecord);
+      });
+  }, [client.id, tenantId]);
+
+  const updateCheck = (idx: number, field: keyof MonitoringItemCheck, value: boolean) => {
+    setItemChecks(prev => prev.map((c, i) => i === idx ? { ...c, [field]: value } : c));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { data: rec, error } = await supabase.from("monitoring_records").insert({
+        tenant_id: tenantId,
+        client_id: client.id,
+        visit_date: visitDate || null,
+        target_month: tm || null,
+        report_date: reportDate || null,
+        staff_name: staffName || null,
+        continuity_comment: continuityComment || null,
+        report_comment: reportComment || null,
+        previous_comment: previousComment || null,
+        status: "completed",
+      }).select().single();
+      if (error || !rec) { console.error(error); return; }
+      for (const check of itemChecks) {
+        await supabase.from("monitoring_items").insert({
+          monitoring_id: rec.id,
+          tenant_id: tenantId,
+          order_item_id: check.order_item_id,
+          product_code: check.product_code,
+          equipment_name: check.equipment_name,
+          category: check.category,
+          quantity: check.quantity,
+          no_issue: check.no_issue,
+          has_malfunction: check.has_malfunction,
+          has_deterioration: check.has_deterioration,
+          needs_replacement: check.needs_replacement,
+        });
+      }
+      setSavedId(rec.id);
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const payload = {
+        client: {
+          name: client.name,
+          care_level: client.care_level,
+          care_manager_org: client.care_manager_org,
+          certification_start_date: insuranceRecord?.certification_start_date ?? null,
+          certification_end_date: insuranceRecord?.certification_end_date ?? client.certification_end_date ?? null,
+        },
+        visit_date: visitDate,
+        target_month: tm,
+        report_date: reportDate,
+        staff_name: staffName,
+        company: {
+          name: companyInfo.companyName,
+          tel: companyInfo.tel,
+          fax: companyInfo.fax,
+        },
+        items: itemChecks.map(c => ({
+          category: c.category,
+          equipment_name: c.equipment_name,
+          quantity: c.quantity,
+          no_issue: c.no_issue,
+          has_malfunction: c.has_malfunction,
+          has_deterioration: c.has_deterioration,
+          needs_replacement: c.needs_replacement,
+        })),
+        continuity_comment: continuityComment,
+        report_comment: reportComment,
+        previous_comment: previousComment,
+      };
+      const res = await fetch("/api/monitoring-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) { console.error("Excel生成エラー"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `モニタリング_${client.name}_${tm}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const CHECK_COLS: { key: keyof MonitoringItemCheck; label: string }[] = [
+    { key: "no_issue", label: "問題なし" },
+    { key: "has_malfunction", label: "不具合" },
+    { key: "has_deterioration", label: "劣化" },
+    { key: "needs_replacement", label: "交換" },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-white">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 shrink-0">
+        <button onClick={onClose}><ChevronLeft size={20} className="text-gray-500" /></button>
+        <div className="flex-1">
+          <h2 className="font-semibold text-gray-800">モニタリング記録</h2>
+          <p className="text-xs text-gray-400">{client.name}　{client.care_level}</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* 基本情報 */}
+        <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">基本情報</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">訪問日</label>
+              <input type="date" value={visitDate} onChange={e => setVisitDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">対象月</label>
+              <input type="month" value={tm} onChange={e => setTm(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">報告日</label>
+              <input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">担当者</label>
+              <input value={staffName} onChange={e => setStaffName(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+            </div>
+          </div>
+        </div>
+
+        {/* 用具チェック */}
+        <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">用具チェック</p>
+          {itemChecks.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-4">レンタル中の用具がありません</p>
+          )}
+          {itemChecks.map((check, idx) => (
+            <div key={check.order_item_id} className="bg-white rounded-lg p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <span className="text-xs text-gray-400 w-16 shrink-0 pt-0.5">{check.category}</span>
+                <span className="text-sm text-gray-800 font-medium leading-tight">{check.equipment_name}</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={check.no_issue}
+                    onChange={e => updateCheck(idx, "no_issue", e.target.checked)}
+                    className="w-3.5 h-3.5 accent-emerald-500" />
+                  <span className="text-xs text-gray-600">問題なし</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={check.has_malfunction}
+                    onChange={e => updateCheck(idx, "has_malfunction", e.target.checked)}
+                    className="w-3.5 h-3.5 accent-red-500" />
+                  <span className="text-xs text-gray-600">不具合</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={check.has_deterioration}
+                    onChange={e => updateCheck(idx, "has_deterioration", e.target.checked)}
+                    className="w-3.5 h-3.5 accent-amber-500" />
+                  <span className="text-xs text-gray-600">劣化</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={check.needs_replacement}
+                    onChange={e => updateCheck(idx, "needs_replacement", e.target.checked)}
+                    className="w-3.5 h-3.5 accent-blue-500" />
+                  <span className="text-xs text-gray-600">交換</span>
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* コメント */}
+        <div className="bg-gray-50 rounded-xl p-3 space-y-3">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">コメント</p>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">継続・必要性</label>
+            <textarea value={continuityComment} onChange={e => setContinuityComment(e.target.value)}
+              rows={2}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">報告コメント</label>
+            <textarea value={reportComment} onChange={e => setReportComment(e.target.value)}
+              rows={4}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
+              placeholder="モニタリング内容を入力..." />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">前回コメント（引継ぎ）</label>
+            <textarea value={previousComment} onChange={e => setPreviousComment(e.target.value)}
+              rows={3}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
+              placeholder="前回のコメントが自動入力されます" />
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="bg-white border-t border-gray-100 px-4 py-3 flex gap-2 shrink-0">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex-1 bg-emerald-500 text-white text-sm font-medium py-2.5 rounded-xl hover:bg-emerald-600 disabled:opacity-50 flex items-center justify-center gap-1"
+        >
+          {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+          保存
+        </button>
+        <button
+          onClick={handleDownload}
+          disabled={downloading}
+          className="flex items-center gap-1.5 text-sm text-blue-600 border border-blue-200 px-4 py-2.5 rounded-xl hover:bg-blue-50 disabled:opacity-50"
+        >
+          {downloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          Excel
+        </button>
       </div>
     </div>
   );

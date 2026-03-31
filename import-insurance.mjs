@@ -61,6 +61,7 @@ async function main() {
   // 列インデックス
   const C = {
     user_number:             col("利用者番号"),
+    gender:                  col("性別"),
     birth_date:              col("生年月日"),
     insured_number:          col("被保険者番号"),
     insurer_name:            col("保険者"),
@@ -96,15 +97,22 @@ async function main() {
   }
   console.log(`利用者数: ${clients.length}`);
 
-  // データ行をパース
+  // データ行をパース（利用者ごとに最初の行の性別を使う）
   const rows = [];
+  const genderMap = new Map(); // client_id → gender
   for (const line of lines.slice(1)) {
     if (!line.trim()) continue;
     const cols = parseCsvRow(line);
     const userNum = val(cols[C.user_number]);
     if (!userNum) continue;
     const client = clientMap.get(userNum);
-    if (!client) continue; // マッチする利用者がいない場合はスキップ
+    if (!client) continue;
+
+    // 性別は利用者ごとに1回だけ記録
+    if (!genderMap.has(client.id)) {
+      const g = val(cols[C.gender]);
+      if (g) genderMap.set(client.id, g);
+    }
 
     const certStart = toDate(cols[C.certification_start]);
     const certEnd   = toDate(cols[C.certification_end]);
@@ -153,6 +161,18 @@ async function main() {
     else inserted += chunk.length;
   }
   console.log(`挿入完了: ${inserted}件`);
+
+  // clients.genderを更新
+  let genderUpdated = 0;
+  for (const [clientId, gender] of genderMap) {
+    const { error } = await supabase
+      .from("clients")
+      .update({ gender })
+      .eq("id", clientId);
+    if (error) console.warn(`性別更新エラー(${clientId}):`, error);
+    else genderUpdated++;
+  }
+  console.log(`性別更新完了: ${genderUpdated}件`);
 }
 
 main().catch(console.error);

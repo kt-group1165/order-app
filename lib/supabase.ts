@@ -15,6 +15,7 @@ export type Client = {
   phone: string | null;
   mobile: string | null;
   address: string | null;
+  gender: string | null;
   care_level: string | null;
   benefit_rate: string | null;
   care_manager: string | null;
@@ -184,4 +185,38 @@ export type OrderItem = {
   notes: string | null;
   created_at: string;
   updated_at: string;
+};
+
+// モニタリング記録
+export type MonitoringRecord = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  visit_date: string | null;
+  target_month: string | null;
+  report_date: string | null;
+  staff_name: string | null;
+  continuity_comment: string | null;
+  report_comment: string | null;
+  previous_comment: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+// モニタリング用具チェック
+export type MonitoringItem = {
+  id: string;
+  monitoring_id: string;
+  tenant_id: string;
+  order_item_id: string | null;
+  product_code: string;
+  equipment_name: string | null;
+  category: string | null;
+  quantity: number;
+  no_issue: boolean;
+  has_malfunction: boolean;
+  has_deterioration: boolean;
+  needs_replacement: boolean;
+  created_at: string;
 };
