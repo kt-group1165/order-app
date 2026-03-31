@@ -75,11 +75,20 @@ async function main() {
 
   console.log("列インデックス:", C);
 
-  // 全テナントの利用者を取得（user_number → {id, tenant_id} のマップ）
-  const { data: clients, error: clientsErr } = await supabase
-    .from("clients")
-    .select("id, tenant_id, user_number");
-  if (clientsErr) { console.error("clients取得エラー:", clientsErr); process.exit(1); }
+  // 全テナントの利用者を全件取得（1000件上限を回避してページング）
+  const clients = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("clients")
+      .select("id, tenant_id, user_number")
+      .range(from, from + 999);
+    if (error) { console.error("clients取得エラー:", error); process.exit(1); }
+    if (!data || data.length === 0) break;
+    clients.push(...data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
 
   const clientMap = new Map();
   for (const c of clients) {

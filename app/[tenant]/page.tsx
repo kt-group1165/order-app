@@ -1768,14 +1768,13 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq, ords, sup, mem, insurResult] = await Promise.all([
+        const [c, items, eq, ords, sup, mem] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
           getOrders(tenantId),
           getSuppliers(),
           getMembers(tenantId),
-          supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).order("effective_date", { ascending: false }),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -1783,7 +1782,22 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         setOrders(ords);
         setSuppliers(sup);
         setMembers(mem);
-        setAllInsuranceRecords((insurResult.data ?? []) as ClientInsuranceRecord[]);
+        // 保険レコードは件数が多いので全件ページング取得
+        const allInsur: ClientInsuranceRecord[] = [];
+        let insurFrom = 0;
+        while (true) {
+          const { data: insurChunk } = await supabase
+            .from("client_insurance_records")
+            .select("*")
+            .eq("tenant_id", tenantId)
+            .order("effective_date", { ascending: false })
+            .range(insurFrom, insurFrom + 999);
+          if (!insurChunk || insurChunk.length === 0) break;
+          allInsur.push(...(insurChunk as ClientInsuranceRecord[]));
+          if (insurChunk.length < 1000) break;
+          insurFrom += 1000;
+        }
+        setAllInsuranceRecords(allInsur);
         if (initialClientId) {
           const target = c.find((cl) => cl.id === initialClientId);
           if (target) setSelectedClient(target);
