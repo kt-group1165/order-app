@@ -437,6 +437,13 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
     date: string;
     deliveredAt?: string;
   } | null>(null);
+  // 一括ステータス変更
+  const [bulkDateInput, setBulkDateInput] = useState<{
+    orderId: string;
+    nextStatus: OrderItem["status"];
+    date: string;
+    deliveredAt?: string;
+  } | null>(null);
   // 未保存変更ステージング
   const [pendingChanges, setPendingChanges] = useState<Map<string, PendingChange>>(new Map());
   // 保存後メールモーダル用
@@ -758,6 +765,50 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
                               <ChevronRight size={16} className="text-gray-400 shrink-0 ml-1" />
                             )}
                           </button>
+                          {/* 一括操作ボタン */}
+                          {(() => {
+                            const bulkTargets = (ns: OrderItem["status"]) =>
+                              order.items.filter((i) => NEXT_STATUSES[i.status]?.includes(ns));
+                            const buttons: { ns: OrderItem["status"]; label: string; count: number }[] = (
+                              [
+                                { ns: "delivered"      as const, label: "納品済",       count: bulkTargets("delivered").length },
+                                { ns: "rental_started" as const, label: "レンタル開始", count: bulkTargets("rental_started").length },
+                                { ns: "terminated"     as const, label: "解約",         count: bulkTargets("terminated").length },
+                                { ns: "cancelled"      as const, label: "キャンセル",   count: bulkTargets("cancelled").length },
+                              ] as { ns: OrderItem["status"]; label: string; count: number }[]
+                            ).filter((b) => b.count >= 2);
+                            if (buttons.length === 0) return null;
+                            return (
+                              <div className="flex gap-1 shrink-0">
+                                {buttons.map(({ ns, label, count }) => (
+                                  <button
+                                    key={ns}
+                                    disabled={updatingId === "__saving__"}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (bulkDateInput?.orderId === order.id && bulkDateInput?.nextStatus === ns) {
+                                        setBulkDateInput(null);
+                                      } else if (ns === "delivered" || ns === "rental_started" || ns === "terminated") {
+                                        const isDirect = ns === "rental_started" && bulkTargets("rental_started").some((i) => i.status === "ordered");
+                                        setBulkDateInput({ orderId: order.id, nextStatus: ns, date: today, deliveredAt: isDirect ? today : undefined });
+                                        setExpandedIds((prev) => { const n = new Set(prev); n.add(order.id); return n; });
+                                      } else {
+                                        // キャンセルは日付不要
+                                        for (const i of bulkTargets(ns)) stageChange(i, ns);
+                                      }
+                                    }}
+                                    className={`text-xs px-2.5 py-0.5 rounded-full border font-medium transition-colors disabled:opacity-50 ${
+                                      ns === "cancelled" || ns === "terminated"
+                                        ? "border-red-200 text-red-500 hover:bg-red-50"
+                                        : "border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                                    }`}
+                                  >
+                                    全{count}点→{label}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
                           {/* メールアイコン（ツールチップ付き） */}
                           <button
                             onClick={(e) => { e.stopPropagation(); setPreviewOrder({ order, items: order.items }); }}
@@ -767,6 +818,51 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
                             <Mail size={15} />
                           </button>
                         </div>
+                        {/* 一括日付入力パネル */}
+                        {bulkDateInput?.orderId === order.id && (
+                          <div className="min-w-[600px] px-4 pb-2">
+                            <div className="bg-emerald-50 rounded-xl p-3 space-y-2">
+                              <p className="text-xs font-medium text-emerald-700">
+                                {bulkDateInput.deliveredAt !== undefined ? "納品日・レンタル開始日を入力（一括）"
+                                  : bulkDateInput.nextStatus === "delivered" ? "納品日を入力（一括）"
+                                  : bulkDateInput.nextStatus === "rental_started" ? "レンタル開始日を入力（一括）"
+                                  : "解約日を入力（一括）"}
+                              </p>
+                              {bulkDateInput.deliveredAt !== undefined ? (
+                                <div className="space-y-1.5">
+                                  <div className="flex gap-2 items-center">
+                                    <span className="text-xs text-gray-500 w-24 shrink-0">納品日</span>
+                                    <input type="date" value={bulkDateInput.deliveredAt}
+                                      onChange={(e) => setBulkDateInput({ ...bulkDateInput, deliveredAt: e.target.value })}
+                                      className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white" />
+                                  </div>
+                                  <div className="flex gap-2 items-center">
+                                    <span className="text-xs text-gray-500 w-24 shrink-0">レンタル開始日</span>
+                                    <input type="date" value={bulkDateInput.date}
+                                      onChange={(e) => setBulkDateInput({ ...bulkDateInput, date: e.target.value })}
+                                      className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white" />
+                                  </div>
+                                </div>
+                              ) : (
+                                <input type="date" value={bulkDateInput.date}
+                                  onChange={(e) => setBulkDateInput({ ...bulkDateInput, date: e.target.value })}
+                                  className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white" />
+                              )}
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  disabled={!bulkDateInput.date}
+                                  onClick={() => {
+                                    const targets = order.items.filter((i) => NEXT_STATUSES[i.status]?.includes(bulkDateInput.nextStatus));
+                                    for (const i of targets) stageChange(i, bulkDateInput.nextStatus, bulkDateInput.date || undefined, bulkDateInput.deliveredAt || undefined);
+                                    setBulkDateInput(null);
+                                  }}
+                                  className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40"
+                                >確定</button>
+                                <button onClick={() => setBulkDateInput(null)} className="px-3 py-1.5 text-xs text-gray-400 border border-gray-200 rounded-lg">戻す</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                         {isOpen && (
                           <div className="px-3 pb-3 bg-gray-50">
