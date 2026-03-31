@@ -7660,6 +7660,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [clientOrders, setClientOrders] = useState<{ id: string; client_id: string }[]>([]);
   const [activeItems, setActiveItems] = useState<OrderItem[]>([]);
+  const [rentalHistory, setRentalHistory] = useState<ClientRentalHistory[]>([]);
   const [monitoringRecords, setMonitoringRecords] = useState<MonitoringRecord[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
@@ -7671,11 +7672,12 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [clientsRes, monRes, eqData, tenantData] = await Promise.all([
+      const [clientsRes, monRes, eqData, tenantData, rentalHistRes] = await Promise.all([
         supabase.from("clients").select("*").eq("tenant_id", tenantId),
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
         getTenantById(tenantId),
+        supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).is("end_date", null),
       ]);
       const cls = (clientsRes.data ?? []) as Client[];
       // orders をページングで全件取得
@@ -7695,6 +7697,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
       setClientOrders(allOrders);
       setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
       setEquipment(eqData);
+      setRentalHistory((rentalHistRes.data ?? []) as ClientRentalHistory[]);
       if (tenantData) {
         setCompanyInfo({
           businessNumber:      tenantData.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
@@ -7747,23 +7750,41 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
     return map;
   }, [clientOrders, activeItems]);
 
+  // client_rental_history を client_id でグループ化
+  const rentalHistoryMap = useMemo(() => {
+    const map = new Map<string, ClientRentalHistory[]>();
+    for (const h of rentalHistory) {
+      if (!map.has(h.client_id)) map.set(h.client_id, []);
+      map.get(h.client_id)!.push(h);
+    }
+    return map;
+  }, [rentalHistory]);
+
   const schedule = useMemo(() => {
+    // order_items で有効な利用者 OR rental_history で有効な利用者を対象
+    const activeClientIds = new Set([
+      ...Array.from(clientItemsMap.keys()),
+      ...Array.from(rentalHistoryMap.keys()),
+    ]);
     return clients
-      .filter(c => (clientItemsMap.get(c.id) ?? []).length > 0)
+      .filter(c => activeClientIds.has(c.id))
       .map(client => {
-        const items = clientItemsMap.get(client.id)!;
-        const earliestStart = items
-          .map(i => i.rental_start_date)
-          .filter((d): d is string => !!d)
-          .sort()[0] ?? null;
+        const items = clientItemsMap.get(client.id) ?? [];
+        const histItems = rentalHistoryMap.get(client.id) ?? [];
+        // 開始日の候補（order_items + rental_history）
+        const startDates: string[] = [
+          ...items.map(i => i.rental_start_date ?? i.delivered_at?.slice(0, 10) ?? i.created_at?.slice(0, 10) ?? null).filter((d): d is string => !!d),
+          ...histItems.map(h => h.start_date).filter((d): d is string => !!d),
+        ];
+        const earliestStart = startDates.sort()[0] ?? null;
         const clientRecords = monitoringRecords.filter(r => r.client_id === client.id);
         const lastRecord = clientRecords[0] ?? null;
         const base = lastRecord?.target_month ?? earliestStart?.slice(0, 7) ?? null;
         const nextDue = base ? calcNextDueMonth(base) : null;
         const doneThisMonth = clientRecords.find(r => r.target_month === selectedMonth) ?? null;
-        return { client, items, nextDue, lastRecord, doneThisMonth };
+        return { client, items, histItems, nextDue, lastRecord, doneThisMonth };
       });
-  }, [clients, clientItemsMap, monitoringRecords, selectedMonth]);
+  }, [clients, clientItemsMap, rentalHistoryMap, monitoringRecords, selectedMonth]);
 
   const todayMonth = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; })();
   const overdue       = schedule.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth);
@@ -7780,12 +7801,14 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
 
   if (formClient) {
     const clientItems = clientItemsMap.get(formClient.id) ?? [];
+    const clientHistItems = rentalHistoryMap.get(formClient.id) ?? [];
     const clientRecords = monitoringRecords.filter(r => r.client_id === formClient.id);
     const lastRecord = clientRecords[0] ?? null;
     return (
       <MonitoringFormModal
         client={formClient}
         clientItems={clientItems}
+        clientHistItems={clientHistItems}
         equipment={equipment}
         companyInfo={companyInfo}
         tenantId={tenantId}
@@ -7920,10 +7943,11 @@ type MonitoringItemCheck = {
 };
 
 function MonitoringFormModal({
-  client, clientItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, onClose, onSaved,
+  client, clientItems, clientHistItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, onClose, onSaved,
 }: {
   client: Client;
   clientItems: OrderItem[];
+  clientHistItems: ClientRentalHistory[];
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   tenantId: string;
@@ -7947,8 +7971,8 @@ function MonitoringFormModal({
   const [downloading, setDownloading] = useState(false);
   const [insuranceRecord, setInsuranceRecord] = useState<ClientInsuranceRecord | null>(null);
 
-  const [itemChecks, setItemChecks] = useState<MonitoringItemCheck[]>(() =>
-    clientItems.map(item => {
+  const [itemChecks, setItemChecks] = useState<MonitoringItemCheck[]>(() => {
+    const fromOrders = clientItems.map(item => {
       const eq = equipment.find(e => e.product_code === item.product_code);
       return {
         order_item_id: item.id,
@@ -7956,13 +7980,19 @@ function MonitoringFormModal({
         equipment_name: eq?.name ?? item.product_code,
         category: eq?.category ?? "",
         quantity: item.quantity ?? 1,
-        no_issue: true,
-        has_malfunction: false,
-        has_deterioration: false,
-        needs_replacement: false,
+        no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false,
       };
-    })
-  );
+    });
+    const fromHistory = clientHistItems.map(h => ({
+      order_item_id: h.id,
+      product_code: "",
+      equipment_name: h.equipment_name,
+      category: "",
+      quantity: 1,
+      no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false,
+    }));
+    return [...fromOrders, ...fromHistory];
+  });
 
   useEffect(() => {
     supabase.from("client_insurance_records")
