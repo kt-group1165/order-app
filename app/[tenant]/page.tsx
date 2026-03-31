@@ -8024,15 +8024,18 @@ function MonitoringFormModal({
           tel: companyInfo.tel,
           fax: companyInfo.fax,
         },
-        items: itemChecks.map(c => ({
-          category: c.category,
-          equipment_name: c.equipment_name,
+        items: itemChecks.map(c => {
+          const eq = equipment.find(e => e.product_code === c.product_code);
+          return {
+          category: eq?.category ?? c.category,
+          equipment_name: eq?.name ?? c.equipment_name,
           quantity: c.quantity,
           no_issue: c.no_issue,
           has_malfunction: c.has_malfunction,
           has_deterioration: c.has_deterioration,
           needs_replacement: c.needs_replacement,
-        })),
+          };
+        }),
         continuity_comment: continuityComment,
         report_comment: reportComment,
         previous_comment: previousComment,
@@ -8109,40 +8112,43 @@ function MonitoringFormModal({
           {itemChecks.length === 0 && (
             <p className="text-sm text-gray-400 text-center py-4">レンタル中の用具がありません</p>
           )}
-          {itemChecks.map((check, idx) => (
-            <div key={check.order_item_id} className="bg-white rounded-lg p-3 space-y-2">
-              <div className="flex items-start gap-2">
-                <span className="text-xs text-gray-400 w-16 shrink-0 pt-0.5">{check.category}</span>
-                <span className="text-sm text-gray-800 font-medium leading-tight">{check.equipment_name}</span>
+          {itemChecks.map((check, idx) => {
+            const eq = equipment.find(e => e.product_code === check.product_code);
+            const displayName = eq?.name ?? check.equipment_name;
+            const displayCategory = eq?.category ?? check.category;
+            return (
+              <div key={check.order_item_id} className="bg-white rounded-lg px-3 py-2 flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 w-14 shrink-0 truncate">{displayCategory}</span>
+                <span className="text-xs text-gray-800 font-medium flex-1 min-w-0 truncate">{displayName}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <label className="flex items-center gap-0.5 cursor-pointer">
+                    <input type="checkbox" checked={check.no_issue}
+                      onChange={e => updateCheck(idx, "no_issue", e.target.checked)}
+                      className="w-3.5 h-3.5 accent-emerald-500" />
+                    <span className="text-[10px] text-gray-600">問題なし</span>
+                  </label>
+                  <label className="flex items-center gap-0.5 cursor-pointer">
+                    <input type="checkbox" checked={check.has_malfunction}
+                      onChange={e => updateCheck(idx, "has_malfunction", e.target.checked)}
+                      className="w-3.5 h-3.5 accent-red-500" />
+                    <span className="text-[10px] text-gray-600">不具合</span>
+                  </label>
+                  <label className="flex items-center gap-0.5 cursor-pointer">
+                    <input type="checkbox" checked={check.has_deterioration}
+                      onChange={e => updateCheck(idx, "has_deterioration", e.target.checked)}
+                      className="w-3.5 h-3.5 accent-amber-500" />
+                    <span className="text-[10px] text-gray-600">劣化</span>
+                  </label>
+                  <label className="flex items-center gap-0.5 cursor-pointer">
+                    <input type="checkbox" checked={check.needs_replacement}
+                      onChange={e => updateCheck(idx, "needs_replacement", e.target.checked)}
+                      className="w-3.5 h-3.5 accent-blue-500" />
+                    <span className="text-[10px] text-gray-600">交換</span>
+                  </label>
+                </div>
               </div>
-              <div className="grid grid-cols-4 gap-1">
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" checked={check.no_issue}
-                    onChange={e => updateCheck(idx, "no_issue", e.target.checked)}
-                    className="w-3.5 h-3.5 accent-emerald-500" />
-                  <span className="text-xs text-gray-600">問題なし</span>
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" checked={check.has_malfunction}
-                    onChange={e => updateCheck(idx, "has_malfunction", e.target.checked)}
-                    className="w-3.5 h-3.5 accent-red-500" />
-                  <span className="text-xs text-gray-600">不具合</span>
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" checked={check.has_deterioration}
-                    onChange={e => updateCheck(idx, "has_deterioration", e.target.checked)}
-                    className="w-3.5 h-3.5 accent-amber-500" />
-                  <span className="text-xs text-gray-600">劣化</span>
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" checked={check.needs_replacement}
-                    onChange={e => updateCheck(idx, "needs_replacement", e.target.checked)}
-                    className="w-3.5 h-3.5 accent-blue-500" />
-                  <span className="text-xs text-gray-600">交換</span>
-                </label>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* コメント */}
