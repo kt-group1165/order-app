@@ -7666,6 +7666,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
   const [loading, setLoading] = useState(true);
   const [formClient, setFormClient] = useState<Client | null>(null);
+  const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
 
   useEffect(() => { loadData(); }, [tenantId]);
 
@@ -7815,8 +7816,9 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         tenantId={tenantId}
         lastRecord={lastRecord}
         targetMonth={selectedMonth}
-        onClose={() => setFormClient(null)}
-        onSaved={() => { setFormClient(null); loadData(); }}
+        existingRecord={openRecord}
+        onClose={() => { setFormClient(null); setOpenRecord(null); }}
+        onSaved={() => { setFormClient(null); setOpenRecord(null); loadData(); }}
       />
     );
   }
@@ -7837,12 +7839,17 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
               {nextDue.replace("-", "年")}月
             </span>
           )}
-          {rec?.visit_date && <span className="text-xs text-gray-400 shrink-0">訪問:{rec.visit_date}</span>}
+          {color === "emerald" && rec?.visit_date && (
+            <span className="text-xs text-gray-400 shrink-0">訪問:{rec.visit_date}</span>
+          )}
+          {color === "emerald" && nextDue && (
+            <span className="text-xs text-emerald-600 shrink-0">次回:{nextDue.replace("-", "年")}月</span>
+          )}
         </div>
         {onRecord ? (
           <button onClick={onRecord}
-            className={`shrink-0 text-xs text-white px-3 py-1 rounded-lg ${color === "red" ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"}`}>
-            記録入力
+            className={`shrink-0 text-xs text-white px-3 py-1 rounded-lg ${color === "red" ? "bg-red-500 hover:bg-red-600" : color === "emerald" ? "bg-gray-400 hover:bg-gray-500" : "bg-emerald-500 hover:bg-emerald-600"}`}>
+            {color === "emerald" ? "確認" : "記録入力"}
           </button>
         ) : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
       </div>
@@ -7906,8 +7913,9 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
                 <RowCard key={client.id} client={client} nextDue={nextDue} color="amber"
                   onRecord={() => setFormClient(client)} />
               ))}
-              {completedThisMonth.map(({ client, doneThisMonth: rec }) => (
-                <RowCard key={client.id} client={client} rec={rec} color="emerald" />
+              {completedThisMonth.map(({ client, doneThisMonth: rec, nextDue }) => (
+                <RowCard key={client.id} client={client} rec={rec} nextDue={nextDue} color="emerald"
+                  onRecord={() => { setOpenRecord(rec ?? null); setFormClient(client); }} />
               ))}
             </div>
           </section>
@@ -7944,7 +7952,7 @@ type MonitoringItemCheck = {
 };
 
 function MonitoringFormModal({
-  client, clientItems, clientHistItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, onClose, onSaved,
+  client, clientItems, clientHistItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, existingRecord, onClose, onSaved,
 }: {
   client: Client;
   clientItems: OrderItem[];
@@ -7954,21 +7962,24 @@ function MonitoringFormModal({
   tenantId: string;
   lastRecord: MonitoringRecord | null;
   targetMonth: string;
+  existingRecord: MonitoringRecord | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const todayStr = new Date().toISOString().split("T")[0];
-  const [visitDate, setVisitDate] = useState(todayStr);
-  const [reportDate, setReportDate] = useState(todayStr);
-  const [staffName, setStaffName] = useState(companyInfo.staffName ?? "");
-  const [tm, setTm] = useState(targetMonth);
+  const [visitDate, setVisitDate] = useState(existingRecord?.visit_date ?? todayStr);
+  const [reportDate, setReportDate] = useState(existingRecord?.report_date ?? todayStr);
+  const [staffName, setStaffName] = useState(existingRecord?.staff_name ?? companyInfo.staffName ?? "");
+  const [tm, setTm] = useState(existingRecord?.target_month ?? targetMonth);
+  const [reportComment, setReportComment] = useState(existingRecord?.report_comment ?? "");
   const [continuityComment, setContinuityComment] = useState(
-    "怪我無く、安全にお過ごし頂く為に、継続して福祉用具の利用が必要と思われます。"
+    existingRecord?.continuity_comment ?? "怪我無く、安全にお過ごし頂く為に、継続して福祉用具の利用が必要と思われます。"
   );
-  const [reportComment, setReportComment] = useState("");
-  const [previousComment, setPreviousComment] = useState(lastRecord?.report_comment ?? "");
+  const [previousComment, setPreviousComment] = useState(
+    existingRecord ? (existingRecord.previous_comment ?? "") : (lastRecord?.report_comment ?? "")
+  );
   const [saving, setSaving] = useState(false);
-  const [savedId, setSavedId] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(existingRecord?.id ?? null);
   const [downloading, setDownloading] = useState(false);
   const [insuranceRecord, setInsuranceRecord] = useState<ClientInsuranceRecord | null>(null);
 
@@ -7994,6 +8005,26 @@ function MonitoringFormModal({
     }));
     return [...fromOrders, ...fromHistory];
   });
+
+  // 既存レコードがある場合、monitoring_itemsを読み込んでitemChecksを上書き
+  useEffect(() => {
+    if (!existingRecord?.id) return;
+    supabase.from("monitoring_items").select("*").eq("monitoring_id", existingRecord.id)
+      .then(({ data }) => {
+        if (!data || data.length === 0) return;
+        setItemChecks(data.map((item: MonitoringItem) => ({
+          order_item_id: item.order_item_id ?? item.id,
+          product_code: item.product_code ?? "",
+          equipment_name: item.equipment_name ?? "",
+          category: item.category ?? "",
+          quantity: item.quantity ?? 1,
+          no_issue: item.no_issue ?? true,
+          has_malfunction: item.has_malfunction ?? false,
+          has_deterioration: item.has_deterioration ?? false,
+          needs_replacement: item.needs_replacement ?? false,
+        })));
+      });
+  }, [existingRecord?.id]);
 
   useEffect(() => {
     supabase.from("client_insurance_records")
