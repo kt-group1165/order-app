@@ -2998,9 +2998,11 @@ function ClientDetail({
                     {insuranceRecords.map((rec, idx) => (
                       <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
                         <td className="px-2 py-2">
-                          <div className="flex items-center gap-1.5 whitespace-nowrap">
-                            {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
-                            <span className="text-gray-700">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
+                          <div className="flex items-center">
+                            <span className="w-10 shrink-0">
+                              {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">現在</span>}
+                            </span>
+                            <span className="flex-1 text-right text-gray-700 tabular-nums">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
                           </div>
                         </td>
                         <td className="px-2 py-2 text-gray-700">{rec.care_level ?? <span className="text-gray-300">—</span>}</td>
