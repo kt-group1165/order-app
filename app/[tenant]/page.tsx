@@ -3121,46 +3121,57 @@ function ClientDetail({
                 <p className="text-sm text-gray-400 text-center py-6">レンタル履歴がありません</p>
               );
               return (
-                <div className="space-y-2">
-                  {combined.map((item) => (
-                    <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-3 space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          {item.source === "manual" && (
-                            <span className="shrink-0 text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">手動</span>
-                          )}
-                          <span className="text-sm font-medium text-gray-800 truncate">{item.equipment_name}</span>
-                          {item.model_number && <span className="shrink-0 text-xs text-gray-400">{item.model_number}</span>}
-                        </div>
-                        {item.source === "manual" && (
-                          <div className="flex gap-1 shrink-0 ml-2">
-                            <button
-                              onClick={() => {
-                                const rec = rentalHistoryRecords.find((r) => r.id === item.id);
-                                if (!rec) return;
-                                setEditingRentalHistoryId(rec.id);
-                                setRentalHistoryForm({ equipment_name: rec.equipment_name, model_number: rec.model_number, start_date: rec.start_date, end_date: rec.end_date, monthly_price: rec.monthly_price, notes: rec.notes });
-                              }}
-                              className="text-xs text-gray-500 border border-gray-200 px-2 py-0.5 rounded-lg hover:bg-gray-50"
-                            >
-                              編集
-                            </button>
-                            <button onClick={() => handleDeleteRentalHistory(item.id)}
-                              className="text-xs text-red-400 border border-red-100 px-2 py-0.5 rounded-lg hover:bg-red-50">
-                              削除
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-3 text-xs text-gray-500">
-                        <span>{item.start_date ?? "—"} 〜 {item.end_date ?? "継続中"}</span>
-                        {item.monthly_price != null && (
-                          <span className="font-medium text-emerald-600">¥{item.monthly_price.toLocaleString()}/月</span>
-                        )}
-                      </div>
-                      {item.notes && <p className="text-xs text-gray-400">{item.notes}</p>}
-                    </div>
-                  ))}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs min-w-[500px]">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">用具名</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">型番</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">開始日</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">終了日</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">月額</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">備考</th>
+                        <th className="px-2 py-2 w-16"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {combined.map((item) => (
+                        <tr key={item.id} className="bg-white">
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1.5">
+                              {item.source === "manual" && (
+                                <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full whitespace-nowrap">手動</span>
+                              )}
+                              <span className="text-gray-800 font-medium">{item.equipment_name}</span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-gray-500">{item.model_number ?? <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-2 text-gray-600 whitespace-nowrap">{item.start_date ?? <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-2 text-gray-600 whitespace-nowrap">{item.end_date ?? "継続中"}</td>
+                          <td className="px-2 py-2 text-emerald-600 whitespace-nowrap">
+                            {item.monthly_price != null ? `¥${item.monthly_price.toLocaleString()}/月` : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-2 py-2 text-gray-400">{item.notes ?? ""}</td>
+                          <td className="px-2 py-2">
+                            {item.source === "manual" && (
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => {
+                                    const rec = rentalHistoryRecords.find((r) => r.id === item.id);
+                                    if (!rec) return;
+                                    setEditingRentalHistoryId(rec.id);
+                                    setRentalHistoryForm({ equipment_name: rec.equipment_name, model_number: rec.model_number, start_date: rec.start_date, end_date: rec.end_date, monthly_price: rec.monthly_price, notes: rec.notes });
+                                  }}
+                                  className="text-gray-400 hover:text-gray-600"
+                                >編集</button>
+                                <button onClick={() => handleDeleteRentalHistory(item.id)} className="text-red-300 hover:text-red-500">削除</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               );
             })()}
