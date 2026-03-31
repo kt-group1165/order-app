@@ -747,25 +747,22 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
                         <div className="overflow-x-auto">
                         {/* 発注ヘッダー行 */}
                         <div className="min-w-[600px] px-4 py-0.5 flex items-center gap-2 hover:bg-gray-50 transition-colors">
-                          {/* 折りたたみボタン（大部分） */}
+                          {/* 折りたたみボタン（固定幅） */}
                           <button
                             onClick={toggleExpand}
-                            className="flex-1 text-left flex items-center gap-2 min-w-0"
+                            className="w-44 shrink-0 text-left flex items-center gap-2 min-w-0"
                           >
-                            <span className="text-xs text-gray-500">
+                            <span className="text-xs text-gray-500 whitespace-nowrap">
                               {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
                             </span>
-                            <span className="text-xs text-gray-400">{activeItems.length}点</span>
-                            {order.notes && (
-                              <span className="text-xs text-gray-400 truncate max-w-[100px]">{order.notes}</span>
-                            )}
+                            <span className="text-xs text-gray-400 whitespace-nowrap">{activeItems.length}点</span>
                             {isOpen ? (
-                              <ChevronDown size={16} className="text-gray-400 shrink-0 ml-1" />
+                              <ChevronDown size={16} className="text-gray-400 shrink-0" />
                             ) : (
-                              <ChevronRight size={16} className="text-gray-400 shrink-0 ml-1" />
+                              <ChevronRight size={16} className="text-gray-400 shrink-0" />
                             )}
                           </button>
-                          {/* 一括操作ボタン */}
+                          {/* 一括操作ボタン（左寄せ） */}
                           {(() => {
                             const bulkTargets = (ns: OrderItem["status"]) =>
                               order.items.filter((i) => NEXT_STATUSES[i.status]?.includes(ns));
@@ -809,11 +806,11 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
                               </div>
                             );
                           })()}
-                          {/* メールアイコン（ツールチップ付き） */}
+                          {/* メールアイコン（右端） */}
                           <button
                             onClick={(e) => { e.stopPropagation(); setPreviewOrder({ order, items: order.items }); }}
                             title={(order.email_sent_count ?? 0) > 0 ? `メール再送（${order.email_sent_count}回送信済）` : "発注メールを送信・印刷"}
-                            className="shrink-0 p-1.5 rounded-lg text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                            className="ml-auto shrink-0 p-1.5 rounded-lg text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
                           >
                             <Mail size={15} />
                           </button>
