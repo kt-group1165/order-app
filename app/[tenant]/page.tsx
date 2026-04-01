@@ -3799,12 +3799,15 @@ function NewOrderModal({
             {/* 利用者 */}
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1.5">利用者 <span className="text-red-400">*必須</span></label>
-              {clientId ? (
+              {clientId && !showClientList ? (
                 <div className="flex items-center justify-between border border-emerald-300 bg-emerald-50 rounded-xl px-3 py-2">
-                  <span className="text-sm font-medium text-emerald-800">
+                  <button
+                    onClick={() => { setClientSearch(""); setShowClientList(true); }}
+                    className="text-sm font-medium text-emerald-800 flex-1 text-left"
+                  >
                     {clients.find((c) => c.id === clientId)?.name ?? ""}
-                  </span>
-                  <button onClick={() => { setClientId(""); setClientSearch(""); }} className="text-emerald-400 hover:text-red-400">
+                  </button>
+                  <button onClick={() => { setClientId(""); setClientSearch(""); setShowClientList(false); }} className="text-emerald-400 hover:text-red-400 ml-2">
                     <X size={14} />
                   </button>
                 </div>
