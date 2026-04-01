@@ -441,7 +441,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
   const [showEnded, setShowEnded] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
-  const [previewOrder, setPreviewOrder] = useState<{ order: Order; items: OrderItem[]; emailType?: "new_order" | "rental_started" | "terminated" | "cancelled" } | null>(null);
+  const [previewOrder, setPreviewOrder] = useState<{ order: Order; items: OrderItem[]; emailType?: "new_order" | "rental_started" | "terminated" | "cancelled"; isNewlyCreated?: boolean } | null>(null);
   const [dateInput, setDateInput] = useState<{
     item: OrderItem;
     nextStatus: OrderItem["status"];
@@ -636,6 +636,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
         suppliers={suppliers}
         members={members}
         emailType={previewOrder.emailType ?? "new_order"}
+        isNewlyCreated={previewOrder.isNewlyCreated}
         tenantId={tenantId}
         onClose={() => { setPreviewOrder(null); load(); }}
         onBack={() => setPreviewOrder(null)}
@@ -1043,7 +1044,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
           onClose={() => setShowNewOrder(false)}
           onDone={(order, items) => {
             setShowNewOrder(false);
-            setPreviewOrder({ order, items });
+            setPreviewOrder({ order, items, isNewlyCreated: true });
             // load() はプレビューモーダルを閉じた後に呼ばれる
           }}
         />
@@ -4517,6 +4518,7 @@ function OrderEmailPreviewModal({
   suppliers,
   members,
   emailType = "new_order",
+  isNewlyCreated,
   tenantId,
   sentAt,
   onClose,
@@ -4530,6 +4532,7 @@ function OrderEmailPreviewModal({
   suppliers: Supplier[];
   members: Member[];
   emailType?: "new_order" | "rental_started" | "terminated" | "cancelled";
+  isNewlyCreated?: boolean;
   tenantId?: string;
   sentAt?: string;
   onClose: () => void;
@@ -4691,6 +4694,16 @@ function OrderEmailPreviewModal({
           </div>
           <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
         </div>
+
+        {isNewlyCreated && (
+          <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-3 flex items-center gap-2 shrink-0">
+            <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-emerald-700">発注情報を登録しました</p>
+              <p className="text-xs text-emerald-600">卸会社にメールを送信しますか？</p>
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {emailType === "new_order" ? (
