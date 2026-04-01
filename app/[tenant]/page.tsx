@@ -351,7 +351,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.1</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.2</span>
       </header>
 
       {/* Content */}
@@ -4280,23 +4280,39 @@ function NewOrderModal({
                   {notes && <Row label="備考" value={notes} />}
                 </div>
 
-                {/* 用具 */}
-                <div className="bg-gray-50 rounded-xl p-3 space-y-2">
-                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">発注用具（{items.length}件）</p>
-                  {items.map((item, i) => {
-                    const price = item.rental_price ? parseFloat(item.rental_price) : null;
-                    const itemSupplier = suppliers.find((s) => s.id === item.supplier_id);
+                {/* 用具（種別ごとに分割） */}
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-1">発注用具（{items.length}件）</p>
+                  {PAYMENT_KINDS.filter(k => selectedKinds.has(k)).map(kind => {
+                    const kindItems = items.filter(item => item.payment_type === kind);
+                    if (kindItems.length === 0) return null;
+                    const kindColor = kind === "介護" ? "emerald" : kind === "自費" ? "blue" : "amber";
+                    const colorCls = {
+                      emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700", price: "text-emerald-600" },
+                      blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-700",    price: "text-blue-600" },
+                      amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-700",   price: "text-amber-600" },
+                    }[kindColor];
                     return (
-                      <div key={i} className="flex items-start justify-between gap-2 py-1 border-b border-gray-100 last:border-0">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{item.equipment.name}</p>
-                          <p className="text-[10px] text-gray-400">{item.equipment.product_code}{itemSupplier ? `　${itemSupplier.name}` : ""}</p>
+                      <div key={kind} className={`border ${colorCls.border} rounded-xl overflow-hidden`}>
+                        <div className={`px-3 py-1.5 ${colorCls.bg} border-b ${colorCls.border}`}>
+                          <span className={`text-xs font-semibold ${colorCls.text}`}>{kind}</span>
                         </div>
-                        <div className="text-right shrink-0">
-                          <p className={`text-sm font-semibold ${price ? "text-emerald-600" : "text-amber-500"}`}>
-                            {price ? `¥${price.toLocaleString()}/月` : "価格未入力"}
-                          </p>
-                          <p className="text-[10px] text-gray-400">{item.quantity > 1 ? `×${item.quantity}` : ""}{item.payment_type ? `　${item.payment_type}` : ""}</p>
+                        <div className="bg-white px-3 divide-y divide-gray-100">
+                          {kindItems.map((item, i) => {
+                            const price = item.rental_price ? parseFloat(item.rental_price) : null;
+                            const itemSupplier = suppliers.find((s) => s.id === item.supplier_id);
+                            return (
+                              <div key={i} className="flex items-start justify-between gap-2 py-2">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-800 truncate">{item.equipment.name}</p>
+                                  <p className="text-[10px] text-gray-400">{item.equipment.product_code}{itemSupplier ? `　${itemSupplier.name}` : ""}{item.quantity > 1 ? `　×${item.quantity}` : ""}</p>
+                                </div>
+                                <p className={`text-sm font-semibold shrink-0 ${price ? colorCls.price : "text-amber-500"}`}>
+                                  {price ? `¥${price.toLocaleString()}/月` : "価格未入力"}
+                                </p>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -4307,7 +4323,7 @@ function NewOrderModal({
                       return sum + p * item.quantity;
                     }, 0);
                     return total > 0 ? (
-                      <div className="flex justify-between items-center pt-2 mt-1 border-t border-emerald-200">
+                      <div className="flex justify-between items-center px-1 pt-1">
                         <span className="text-xs font-semibold text-gray-600">月額合計</span>
                         <span className="text-base font-bold text-emerald-600">¥{total.toLocaleString()}/月</span>
                       </div>
