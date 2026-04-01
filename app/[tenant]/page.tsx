@@ -351,7 +351,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.2</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.3</span>
       </header>
 
       {/* Content */}
@@ -4288,10 +4288,13 @@ function NewOrderModal({
                     if (kindItems.length === 0) return null;
                     const kindColor = kind === "介護" ? "emerald" : kind === "自費" ? "blue" : "amber";
                     const colorCls = {
-                      emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700", price: "text-emerald-600" },
-                      blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-700",    price: "text-blue-600" },
-                      amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-700",   price: "text-amber-600" },
+                      emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700", price: "text-emerald-600", subtotal: "text-emerald-700 bg-emerald-50" },
+                      blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-700",    price: "text-blue-600",    subtotal: "text-blue-700 bg-blue-50" },
+                      amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-700",   price: "text-amber-600",   subtotal: "text-amber-700 bg-amber-50" },
                     }[kindColor];
+                    const kindTotal = kindItems.reduce((sum, item) => {
+                      return sum + (item.rental_price ? parseFloat(item.rental_price) : 0) * item.quantity;
+                    }, 0);
                     return (
                       <div key={kind} className={`border ${colorCls.border} rounded-xl overflow-hidden`}>
                         <div className={`px-3 py-1.5 ${colorCls.bg} border-b ${colorCls.border}`}>
@@ -4314,6 +4317,12 @@ function NewOrderModal({
                             );
                           })}
                         </div>
+                        {kindTotal > 0 && (
+                          <div className={`flex justify-between items-center px-3 py-1.5 border-t ${colorCls.border} ${colorCls.subtotal}`}>
+                            <span className="text-[11px] font-semibold">{kind}合計</span>
+                            <span className="text-sm font-bold">¥{kindTotal.toLocaleString()}/月</span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -4323,8 +4332,8 @@ function NewOrderModal({
                       return sum + p * item.quantity;
                     }, 0);
                     return total > 0 ? (
-                      <div className="flex justify-between items-center px-1 pt-1">
-                        <span className="text-xs font-semibold text-gray-600">月額合計</span>
+                      <div className="flex justify-between items-center px-1 pt-1 border-t border-gray-200 mt-1">
+                        <span className="text-xs font-semibold text-gray-600">月額総合計</span>
                         <span className="text-base font-bold text-emerald-600">¥{total.toLocaleString()}/月</span>
                       </div>
                     ) : null;
