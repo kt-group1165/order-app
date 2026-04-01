@@ -351,7 +351,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.0</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v3.1</span>
       </header>
 
       {/* Content */}
@@ -3355,11 +3355,14 @@ function ClientDetail({
 
 // ─── New Order Modal ─────────────────────────────────────────────────────────
 
+type PaymentKind = "介護" | "自費" | "特価自費";
+const PAYMENT_KINDS: PaymentKind[] = ["介護", "自費", "特価自費"];
+
 type NewOrderItem = {
   equipment: Equipment;
   rental_price: string;
   notes: string;
-  payment_type: "介護" | "自費" | null;
+  payment_type: PaymentKind;
   supplier_id: string | null;
   quantity: number;
 };
@@ -3521,9 +3524,10 @@ function NewOrderModal({
   const [equipModalSearch, setEquipModalSearch] = useState("");
   const [equipModalCategory, setEquipModalCategory] = useState<string | null>(null);
   const [equipModalSelected, setEquipModalSelected] = useState<{ equipment: Equipment; quantity: number }[]>([]);
+  const [activeModalKind, setActiveModalKind] = useState<PaymentKind>("介護");
 
   // 新規フィールド
-  const [paymentType, setPaymentType] = useState<"介護" | "自費">("介護");
+  const [selectedKinds, setSelectedKinds] = useState<Set<PaymentKind>>(new Set(["介護"]));
   const [deliveryDate, setDeliveryDate] = useState("");
   const [deliveryHour, setDeliveryHour] = useState("");
   const [deliveryMinute, setDeliveryMinute] = useState("");
@@ -3588,15 +3592,15 @@ function NewOrderModal({
     return () => window.removeEventListener("popstate", handlePop);
   }, []);
 
-  const addItem = (eq: Equipment) => {
-    if (items.find((i) => i.equipment.id === eq.id)) return;
+  const addItem = (eq: Equipment, kind: PaymentKind) => {
+    if (items.find((i) => i.equipment.id === eq.id && i.payment_type === kind)) return;
     setItems([
       ...items,
       {
         equipment: eq,
         rental_price: eq.rental_price ? String(eq.rental_price) : "",
         notes: "",
-        payment_type: null,
+        payment_type: kind,
         supplier_id: supplierId || null,
         quantity: 1,
       },
@@ -3613,15 +3617,18 @@ function NewOrderModal({
     setItems(items.map((item, i) => i === idx ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item));
   };
 
-  const toggleItemPaymentType = (idx: number) => {
-    setItems(items.map((item, i) => {
-      if (i !== idx) return item;
-      if (item.payment_type === null) {
-        // null → 反対の種別に固定
-        return { ...item, payment_type: paymentType === "介護" ? "自費" : "介護" };
+  const toggleKind = (kind: PaymentKind) => {
+    setSelectedKinds(prev => {
+      const next = new Set(prev);
+      if (next.has(kind)) {
+        if (next.size === 1) return prev; // 最低1つ選択
+        next.delete(kind);
+        setItems(cur => cur.filter(i => i.payment_type !== kind)); // その種別の用具も削除
+      } else {
+        next.add(kind);
       }
-      return { ...item, payment_type: null }; // 固定解除
-    }));
+      return next;
+    });
   };
 
   const toggleAttendee = (id: string) => {
@@ -3651,7 +3658,7 @@ function NewOrderModal({
         tenantId,
         clientId: clientId || undefined,
         notes: notes || undefined,
-        paymentType,
+        paymentType: Array.from(selectedKinds)[0],
         deliveryDate: deliveryDate || undefined,
         deliveryTime: deliveryTime || undefined,
         deliveryAddress: deliveryAddress || undefined,
@@ -3698,16 +3705,16 @@ function NewOrderModal({
 
             {/* 種別 + 卸会社 + 納品方法 横並び */}
             <div className="flex gap-2 items-end flex-wrap">
-              {/* 介護 / 自費 */}
+              {/* 介護 / 自費 / 特価自費（複数選択可） */}
               <div className="shrink-0">
-                <label className="text-xs font-medium text-gray-600 block mb-1.5">種別</label>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5">種別 <span className="text-gray-400 font-normal">（複数選択可）</span></label>
                 <div className="flex gap-1.5">
-                  {(["介護", "自費"] as const).map((t) => (
+                  {PAYMENT_KINDS.map((t) => (
                     <button
                       key={t}
-                      onClick={() => setPaymentType(t)}
+                      onClick={() => toggleKind(t)}
                       className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
-                        paymentType === t
+                        selectedKinds.has(t)
                           ? "bg-emerald-500 text-white border-emerald-500"
                           : "bg-white text-gray-600 border-gray-200"
                       }`}
@@ -3931,109 +3938,102 @@ function NewOrderModal({
               />
             </div>
 
-            {/* 用具追加ボタン */}
-            <div>
-              <button
-                onClick={() => { setShowEquipModal(true); setEquipModalSearch(""); setEquipModalCategory(null); setEquipModalSelected([]); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-300 text-emerald-700 text-sm font-medium bg-emerald-50 hover:bg-emerald-100 transition-colors"
-              >
-                <Plus size={15} />
-                用具を追加
-              </button>
-              {equipment.length === 0 && (
-                <p className="text-xs text-amber-500 mt-2 px-1">用具マスタにデータがありません。先にCSVインポートしてください。</p>
-              )}
-            </div>
-
-            {/* 選択済み用具 */}
-            {items.length > 0 && (
-              <div className="bg-white border border-emerald-200 rounded-xl overflow-hidden">
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-emerald-100 bg-emerald-50">
-                  <span className="text-xs font-semibold text-emerald-700">✓ 選択中の用具</span>
-                  <span className="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{items.length}件</span>
-                </div>
-                <table className="w-full table-fixed text-left">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
-                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">個数</th>
-                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[6.5rem]">卸会社</th>
-                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5.5rem]">価格(円/月)</th>
-                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">備考</th>
-                      <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[3rem]">種別</th>
-                      <th className="w-7"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {items.map((item, idx) => {
-                      const effectiveType = item.payment_type ?? paymentType;
-                      const isTypeOverridden = item.payment_type !== null;
-                      return (
-                        <tr key={idx}>
-                          <td className="pl-3 py-2 max-w-0">
-                            <p className="text-xs font-semibold text-gray-800 truncate">{item.equipment.name}</p>
-                            <p className="text-[10px] text-gray-400">{item.equipment.product_code}</p>
-                          </td>
-                          <td className="py-2 px-1 w-[5rem]">
-                            <div className="flex items-center gap-0.5">
-                              <button onClick={() => updateQuantity(idx, -1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">−</button>
-                              <span className="w-5 text-center text-xs font-semibold text-gray-800">{item.quantity}</span>
-                              <button onClick={() => updateQuantity(idx, 1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">＋</button>
-                            </div>
-                          </td>
-                          <td className="py-2 px-1 w-[6.5rem]">
-                            <select
-                              value={item.supplier_id ?? ""}
-                              onChange={(e) => updateItem(idx, "supplier_id", e.target.value || null)}
-                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white text-gray-600"
-                            >
-                              <option value="">なし</option>
-                              {suppliers.map((s) => (
-                                <option key={s.id} value={s.id}>{s.name}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2 px-1 w-[5.5rem]">
-                            <input
-                              value={item.rental_price}
-                              onChange={(e) => updateItem(idx, "rental_price", e.target.value)}
-                              placeholder="—"
-                              type="number"
-                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
-                            />
-                          </td>
-                          <td className="py-2 px-1 w-[5rem]">
-                            <input
-                              value={item.notes}
-                              onChange={(e) => updateItem(idx, "notes", e.target.value)}
-                              placeholder="—"
-                              className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
-                            />
-                          </td>
-                          <td className="py-2 px-1 w-[3rem]">
-                            <button
-                              onClick={() => toggleItemPaymentType(idx)}
-                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium border transition-colors whitespace-nowrap ${
-                                isTypeOverridden
-                                  ? "bg-amber-100 text-amber-700 border-amber-200"
-                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
-                              }`}
-                            >
-                              {effectiveType}
-                            </button>
-                          </td>
-                          <td className="py-2 pr-2 w-7 text-right">
-                            <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-400 transition-colors">
-                              <X size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            {/* 種別ごとの用具セクション */}
+            {equipment.length === 0 && (
+              <p className="text-xs text-amber-500 px-1">用具マスタにデータがありません。先にCSVインポートしてください。</p>
             )}
+            {PAYMENT_KINDS.filter(k => selectedKinds.has(k)).map(kind => {
+              const kindItems = items.map((item, idx) => ({ item, idx })).filter(({ item }) => item.payment_type === kind);
+              const kindColor = kind === "介護" ? "emerald" : kind === "自費" ? "blue" : "amber";
+              const colorCls = {
+                emerald: { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700", btn: "border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100", badge: "bg-emerald-500" },
+                blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-700",    btn: "border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100",       badge: "bg-blue-500" },
+                amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-700",   btn: "border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100",    badge: "bg-amber-500" },
+              }[kindColor];
+              return (
+                <div key={kind} className={`border ${colorCls.border} rounded-xl overflow-hidden`}>
+                  <div className={`flex items-center gap-2 px-3 py-2 border-b ${colorCls.border} ${colorCls.bg}`}>
+                    <span className={`text-xs font-semibold ${colorCls.text}`}>{kind}</span>
+                    {kindItems.length > 0 && <span className={`${colorCls.badge} text-white text-[10px] font-bold px-2 py-0.5 rounded-full`}>{kindItems.length}件</span>}
+                  </div>
+                  <div className="p-2 space-y-2">
+                    <button
+                      onClick={() => { setActiveModalKind(kind); setShowEquipModal(true); setEquipModalSearch(""); setEquipModalCategory(null); setEquipModalSelected([]); }}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-medium transition-colors ${colorCls.btn}`}
+                    >
+                      <Plus size={14} />
+                      {kind}の用具を追加
+                    </button>
+                    {kindItems.length > 0 && (
+                      <table className="w-full table-fixed text-left">
+                        <thead className="bg-gray-50 border-b border-gray-100">
+                          <tr>
+                            <th className="pl-3 py-1.5 text-[10px] font-semibold text-gray-400">用具名</th>
+                            <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">個数</th>
+                            <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[6.5rem]">卸会社</th>
+                            <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5.5rem]">価格(円/月)</th>
+                            <th className="py-1.5 px-1 text-[10px] font-semibold text-gray-400 w-[5rem]">備考</th>
+                            <th className="w-7"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {kindItems.map(({ item, idx }) => (
+                            <tr key={idx}>
+                              <td className="pl-3 py-2 max-w-0">
+                                <p className="text-xs font-semibold text-gray-800 truncate">{item.equipment.name}</p>
+                                <p className="text-[10px] text-gray-400">{item.equipment.product_code}</p>
+                              </td>
+                              <td className="py-2 px-1 w-[5rem]">
+                                <div className="flex items-center gap-0.5">
+                                  <button onClick={() => updateQuantity(idx, -1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">−</button>
+                                  <span className="w-5 text-center text-xs font-semibold text-gray-800">{item.quantity}</span>
+                                  <button onClick={() => updateQuantity(idx, 1)} className="w-5 h-5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold flex items-center justify-center hover:bg-gray-200">＋</button>
+                                </div>
+                              </td>
+                              <td className="py-2 px-1 w-[6.5rem]">
+                                <select
+                                  value={item.supplier_id ?? ""}
+                                  onChange={(e) => updateItem(idx, "supplier_id", e.target.value || null)}
+                                  className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white text-gray-600"
+                                >
+                                  <option value="">なし</option>
+                                  {suppliers.map((s) => (
+                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="py-2 px-1 w-[5.5rem]">
+                                <input
+                                  value={item.rental_price}
+                                  onChange={(e) => updateItem(idx, "rental_price", e.target.value)}
+                                  placeholder="—"
+                                  type="number"
+                                  className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
+                                />
+                              </td>
+                              <td className="py-2 px-1 w-[5rem]">
+                                <input
+                                  value={item.notes}
+                                  onChange={(e) => updateItem(idx, "notes", e.target.value)}
+                                  placeholder="—"
+                                  className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white"
+                                />
+                              </td>
+                              <td className="py-2 pr-2 w-7 text-right">
+                                <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-400 transition-colors">
+                                  <X size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
           </div>{/* ── 発注用具 セクション終わり ── */}
 
           {error && (
@@ -4212,7 +4212,7 @@ function NewOrderModal({
                         equipment: sel.equipment,
                         rental_price: sel.equipment.rental_price != null ? String(sel.equipment.rental_price) : "",
                         notes: "",
-                        payment_type: null,
+                        payment_type: activeModalKind,
                         supplier_id: supplierId || null,
                         quantity: sel.quantity,
                       })),
@@ -4268,7 +4268,7 @@ function NewOrderModal({
                 <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
                   <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">基本情報</p>
                   <Row label="利用者" value={clientObj?.name ?? "—"} />
-                  <Row label="種別" value={paymentType} />
+                  <Row label="種別" value={Array.from(selectedKinds).join("・")} />
                   <Row label="卸会社" value={supplierObj?.name ?? "未選択"} warn={!supplierId} />
                   <Row label="納品方法" value={deliveryType} />
                   {deliveryAddress && <Row label="納品先住所" value={deliveryAddress} />}

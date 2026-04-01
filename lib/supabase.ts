@@ -151,7 +151,7 @@ export type Order = {
   created_by: string | null;
   status: "ordered" | "completed" | "cancelled";
   notes: string | null;
-  payment_type: "介護" | "自費";
+  payment_type: "介護" | "自費" | "特価自費";
   delivery_date: string | null;
   delivery_time: string | null;
   delivery_address: string | null;
@@ -174,7 +174,7 @@ export type OrderItem = {
   supplier_id: string | null;
   purchase_price: number | null;
   rental_price: number | null;
-  payment_type: "介護" | "自費" | null;
+  payment_type: "介護" | "自費" | "特価自費" | null;
   status: "ordered" | "delivered" | "trial" | "rental_started" | "cancelled" | "terminated";
   quantity: number;
   rental_start_decided_at: string | null;

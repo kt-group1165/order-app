@@ -86,7 +86,7 @@ export async function createOrder(params: {
   eventId?: string;
   notes?: string;
   createdBy?: string;
-  paymentType?: "介護" | "自費";
+  paymentType?: "介護" | "自費" | "特価自費";
   deliveryDate?: string;
   deliveryTime?: string;
   deliveryAddress?: string;
@@ -128,7 +128,7 @@ export async function createOrderItem(params: {
   purchasePrice?: number;
   rentalPrice?: number;
   notes?: string;
-  paymentType?: "介護" | "自費" | null;
+  paymentType?: "介護" | "自費" | "特価自費" | null;
   quantity?: number;
 }): Promise<OrderItem> {
   const { data, error } = await supabase
