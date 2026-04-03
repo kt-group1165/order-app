@@ -61,6 +61,17 @@ export type ClientRentalHistory = {
   created_at: string;
 };
 
+// 入退院管理
+export type ClientHospitalization = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  admission_date: string;   // 入院日 (YYYY-MM-DD)
+  discharge_date: string | null; // 退院日 (null = 現在入院中)
+  notes: string | null;
+  created_at: string;
+};
+
 // 用具マスタ
 export type Equipment = {
   id: string;
