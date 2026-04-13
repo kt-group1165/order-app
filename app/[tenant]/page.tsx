@@ -28,16 +28,25 @@ import {
   Download,
   ClipboardCheck,
   Eye,
+  CreditCard,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
-import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
+import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
+import {
+  getLateFlags, setLateFlag, removeLateFlag,
+  getUnitOverrides, setUnitOverride, removeUnitOverride,
+  getRebillFlags, setRebillFlag, removeRebillFlag,
+  type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
+} from "@/lib/billing";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -223,7 +232,7 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -351,7 +360,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.4.0</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.0</span>
       </header>
 
       {/* Content */}
@@ -360,6 +369,7 @@ export default function TenantPage({
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} />}
+        {activeTab === "billing" && <BillingTab tenantId={tenantId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
       </div>
 
@@ -371,6 +381,7 @@ export default function TenantPage({
             { id: "equipment", icon: Package, label: "用具マスタ" },
             { id: "clients", icon: Users, label: "利用者別" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
+            { id: "billing", icon: CreditCard, label: "請求" },
             { id: "settings", icon: Settings, label: "設定" },
           ] as { id: Tab; icon: React.ElementType; label: string }[]
         ).map(({ id, icon: Icon, label }) => (
@@ -3911,6 +3922,542 @@ function ClientDetail({
           </section>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ─── Billing Tab ─────────────────────────────────────────────────────────────
+
+function BillingTab({ tenantId }: { tenantId: string }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [tenantInfo, setTenantInfo] = useState<import("@/lib/tenants").Tenant | null>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      getClients(tenantId),
+      getEquipment(tenantId),
+      getAllOrderItemsByTenant(tenantId),
+      getAllOrders(tenantId),
+      getTenantById(tenantId),
+    ]).then(([c, eq, items, ords, tenant]) => {
+      setClients(c);
+      setEquipment(eq);
+      setOrderItems(items);
+      setOrders(ords);
+      setTenantInfo(tenant);
+    }).catch(console.error).finally(() => setDataLoading(false));
+  }, [tenantId]);
+  type SubTab = "late" | "units" | "rebill" | "export";
+  const [subTab, setSubTab] = useState<SubTab>("late");
+  const [billingMonth, setBillingMonth] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  const [lateFlags, setLateFlagsState] = useState<Set<string>>(new Set());
+  const [unitOverrides, setUnitOverridesState] = useState<Map<string, number>>(new Map()); // key: order_item_id
+  const [rebillFlags, setRebillFlagsState] = useState<Map<string, BillingRebillFlag>>(new Map()); // key: "clientId-month"
+  const [loading, setLoading] = useState(false);
+
+  // 当月アクティブレンタルを取得
+  const activeRentals = useMemo(() => {
+    const [y, m] = billingMonth.split("-").map(Number);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0, 23, 59, 59);
+    return orderItems.filter((item) => {
+      if (item.payment_type !== "介護") return false; // 介護保険のみ請求
+      if (!item.rental_start_date) return false;
+      const start = new Date(item.rental_start_date);
+      if (start > monthEnd) return false;
+      if (item.status === "terminated" && item.rental_end_date) {
+        const end = new Date(item.rental_end_date);
+        if (end < monthStart) return false;
+      }
+      if (item.status !== "rental_started" && item.status !== "terminated") return false;
+      return true;
+    });
+  }, [billingMonth, orderItems]);
+
+  // 利用者ごとにグループ化
+  const clientGroups = useMemo(() => {
+    const map = new Map<string, { client: Client; items: OrderItem[] }>();
+    for (const item of activeRentals) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order?.client_id) continue;
+      const client = clients.find((c) => c.id === order.client_id);
+      if (!client) continue;
+      if (!map.has(client.id)) map.set(client.id, { client, items: [] });
+      map.get(client.id)!.items.push(item);
+    }
+    return Array.from(map.values()).sort((a, b) => a.client.name.localeCompare(b.client.name, "ja"));
+  }, [activeRentals, orders, clients]);
+
+  // DBからフラグを読み込む
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      getLateFlags(tenantId, billingMonth),
+      getUnitOverrides(tenantId, billingMonth),
+      getRebillFlags(tenantId),
+    ]).then(([late, units, rebill]) => {
+      setLateFlagsState(new Set(late.map((f) => f.client_id)));
+      const um = new Map<string, number>();
+      units.forEach((u) => um.set(u.order_item_id, u.units_override));
+      setUnitOverridesState(um);
+      const rm = new Map<string, BillingRebillFlag>();
+      rebill.forEach((r) => rm.set(`${r.client_id}-${r.month}`, r));
+      setRebillFlagsState(rm);
+    }).catch(console.error).finally(() => setLoading(false));
+  }, [tenantId, billingMonth]);
+
+  const toggleLateFlag = async (clientId: string) => {
+    if (lateFlags.has(clientId)) {
+      await removeLateFlag(tenantId, clientId, billingMonth);
+      setLateFlagsState((prev) => { const s = new Set(prev); s.delete(clientId); return s; });
+    } else {
+      await setLateFlag(tenantId, clientId, billingMonth);
+      setLateFlagsState((prev) => new Set([...prev, clientId]));
+    }
+  };
+
+  const getUnits = (item: OrderItem, clientId: string) => {
+    if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
+    const eq = equipment.find((e) => e.product_code === item.product_code);
+    return eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+  };
+
+  const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
+    const n = parseInt(value, 10);
+    const eq = equipment.find((e) => e.product_code === item.product_code);
+    const autoUnits = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    if (!value || isNaN(n) || n === autoUnits) {
+      await removeUnitOverride(tenantId, clientId, billingMonth, item.id);
+      setUnitOverridesState((prev) => { const m = new Map(prev); m.delete(item.id); return m; });
+    } else {
+      await setUnitOverride(tenantId, clientId, billingMonth, item.id, n);
+      setUnitOverridesState((prev) => new Map(prev).set(item.id, n));
+    }
+  };
+
+  const toggleRebillFlag = async (clientId: string, month: string, type: "返戻" | "取り下げ") => {
+    const key = `${clientId}-${month}`;
+    const existing = rebillFlags.get(key);
+    if (existing && existing.flag_type === type) {
+      await removeRebillFlag(tenantId, clientId, month);
+      setRebillFlagsState((prev) => { const m = new Map(prev); m.delete(key); return m; });
+    } else {
+      await setRebillFlag(tenantId, clientId, month, type);
+      setRebillFlagsState((prev) => new Map(prev).set(key, {
+        id: "", tenant_id: tenantId, client_id: clientId, month, flag_type: type, created_at: ""
+      }));
+    }
+  };
+
+  // 伝送データ生成
+  const generateTransferData = () => {
+    const [y, m] = billingMonth.split("-").map(Number);
+    const serviceMonth = `${y}${String(m).padStart(2, "0")}`;
+    const officeNumber = tenantInfo?.business_number?.replace(/-/g, "") ?? "0000000000";
+    const lines: string[] = [];
+    const billingGroups = clientGroups.filter((g) => !lateFlags.has(g.client.id));
+
+    // コントロールレコード
+    lines.push([
+      "1", // レコード種別
+      "61", // 交換情報識別番号（居宅系：様式第二の三 福祉用具貸与）
+      serviceMonth,
+      officeNumber,
+      String(billingGroups.length),
+      "", "", "",
+    ].join(","));
+
+    for (const { client, items } of billingGroups) {
+      const insuredNumber = client.user_number ?? "";
+      // 負担割合（benefit_rateから取得）
+      const copayRate = client.benefit_rate?.replace(/割/, "") ?? "1";
+      const benefitRate = 100 - parseInt(copayRate, 10) * 10;
+
+      // 基本情報レコード
+      lines.push([
+        "2", // レコード種別コード（基本情報）
+        "61",
+        serviceMonth,
+        officeNumber,
+        "", // 証記載保険者番号（被保険者証から）
+        insuredNumber,
+        "1", // 居宅サービス
+        "", // 認定有効期間開始
+        "", // 認定有効期間終了
+        client.care_level?.replace("要介護", "").replace("要支援", "") ?? "",
+        String(benefitRate),
+        "", // 生活保護
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ].join(","));
+
+      // 明細情報レコード（用具ごと）
+      let seq = 1;
+      let totalUnits = 0;
+      for (const item of items) {
+        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const units = getUnits(item, client.id) * item.quantity;
+        const taisCode = eq?.tais_code ?? "";
+        totalUnits += units;
+        lines.push([
+          "3", // レコード種別コード（明細情報）
+          "61",
+          serviceMonth,
+          officeNumber,
+          "",
+          insuredNumber,
+          String(seq++).padStart(2, "0"),
+          "17", // サービス種類コード（福祉用具貸与）
+          taisCode, // XXXXX-YYYYYY形式
+          String(units),
+          String(Math.round(units * 10)), // 費用額（単位数×10円概算）
+          "0", // 公費分回数
+          "0",
+          "",
+        ].join(","));
+      }
+
+      // 集計情報レコード
+      lines.push([
+        "4", // レコード種別コード（集計情報）
+        "61",
+        serviceMonth,
+        officeNumber,
+        "",
+        insuredNumber,
+        "17",
+        String(totalUnits),
+        String(Math.round(totalUnits * 10)),
+        "",
+      ].join(","));
+    }
+
+    // エンドレコード
+    lines.push(["99", String(lines.length + 1)].join(","));
+
+    // Shift-JIS CSVとしてダウンロード（ブラウザ側でエンコード対応が必要なため UTF-8 BOM付きで代用）
+    const bom = "\uFEFF";
+    const csv = bom + lines.join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `FKYUFU${serviceMonth}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 再請求対象の過去月を収集
+  const rebillMonths = useMemo(() => {
+    const months = new Set<string>();
+    rebillFlags.forEach((_, key) => {
+      const month = key.split("-").slice(1).join("-");
+      months.add(month);
+    });
+    return Array.from(months).sort().reverse();
+  }, [rebillFlags]);
+
+  // 再請求タブ用：過去12ヶ月リスト
+  const pastMonths = useMemo(() => {
+    const result: string[] = [];
+    const d = new Date();
+    for (let i = 1; i <= 12; i++) {
+      d.setMonth(d.getMonth() - 1);
+      result.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return result;
+  }, []);
+
+  const [rebillTargetMonth, setRebillTargetMonth] = useState(pastMonths[0] ?? "");
+
+  // 再請求タブ用：対象月のアクティブレンタル利用者
+  const rebillClientGroups = useMemo(() => {
+    if (!rebillTargetMonth) return [];
+    const [y, m] = rebillTargetMonth.split("-").map(Number);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0, 23, 59, 59);
+    const targetItems = orderItems.filter((item) => {
+      if (item.payment_type !== "介護") return false;
+      if (!item.rental_start_date) return false;
+      const start = new Date(item.rental_start_date);
+      if (start > monthEnd) return false;
+      if (item.status === "terminated" && item.rental_end_date) {
+        const end = new Date(item.rental_end_date);
+        if (end < monthStart) return false;
+      }
+      if (item.status !== "rental_started" && item.status !== "terminated") return false;
+      return true;
+    });
+    const map = new Map<string, { client: Client; items: OrderItem[] }>();
+    for (const item of targetItems) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order?.client_id) continue;
+      const client = clients.find((c) => c.id === order.client_id);
+      if (!client) continue;
+      if (!map.has(client.id)) map.set(client.id, { client, items: [] });
+      map.get(client.id)!.items.push(item);
+    }
+    return Array.from(map.values()).sort((a, b) => a.client.name.localeCompare(b.client.name, "ja"));
+  }, [rebillTargetMonth, orderItems, orders, clients]);
+
+  const SUB_TABS: { id: SubTab; label: string }[] = [
+    { id: "late", label: "月遅れ" },
+    { id: "units", label: "単位数" },
+    { id: "rebill", label: "再請求" },
+    { id: "export", label: "伝送データ" },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-gray-50">
+      {/* ヘッダー */}
+      <div className="bg-white border-b border-gray-200 px-4 py-3 shrink-0 space-y-2">
+        <div className="flex items-center gap-3">
+          <CreditCard size={18} className="text-indigo-500" />
+          <span className="font-semibold text-gray-800">請求管理</span>
+          <input
+            type="month"
+            value={billingMonth}
+            onChange={(e) => setBillingMonth(e.target.value)}
+            className="ml-auto border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-400 bg-white"
+          />
+        </div>
+        {/* サブタブ */}
+        <div className="flex gap-1">
+          {SUB_TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setSubTab(t.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                subTab === t.id
+                  ? "bg-indigo-500 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {(loading || dataLoading) && (
+          <div className="flex justify-center py-8">
+            <Loader2 size={24} className="animate-spin text-indigo-400" />
+          </div>
+        )}
+
+        {/* ── 月遅れ管理 ── */}
+        {subTab === "late" && !loading && !dataLoading && (
+          <>
+            <p className="text-xs text-gray-400">チェックを入れた利用者は当月の請求・伝送データから除外されます。</p>
+            {clientGroups.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-8">
+                {billingMonth}のアクティブレンタル（介護）がありません
+              </p>
+            )}
+            {clientGroups.map(({ client, items }) => {
+              const isLate = lateFlags.has(client.id);
+              const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
+              return (
+                <div
+                  key={client.id}
+                  className={`bg-white rounded-xl p-3 border transition-colors ${
+                    isLate ? "border-orange-200 bg-orange-50" : "border-gray-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => toggleLateFlag(client.id)}
+                      className={`w-6 h-6 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                        isLate
+                          ? "border-orange-400 bg-orange-400 text-white"
+                          : "border-gray-300 bg-white"
+                      }`}
+                    >
+                      {isLate && <span className="text-xs font-bold">✓</span>}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-gray-800">{client.name}</span>
+                        {isLate && (
+                          <span className="text-[10px] bg-orange-100 text-orange-600 font-bold px-1.5 py-0.5 rounded">月遅れ</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-400">{items.length}件・計{totalUnits}単位</p>
+                    </div>
+                    <span className={`text-sm font-bold ${isLate ? "text-orange-400 line-through" : "text-indigo-600"}`}>
+                      {totalUnits}単位
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* ── 単位数管理 ── */}
+        {subTab === "units" && !loading && !dataLoading && (
+          <>
+            <p className="text-xs text-gray-400">単位数 = レンタル料÷10（自動計算）。修正が必要な場合は直接入力してください。</p>
+            {clientGroups.filter((g) => !lateFlags.has(g.client.id)).length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-8">対象利用者がいません</p>
+            )}
+            {clientGroups.filter((g) => !lateFlags.has(g.client.id)).map(({ client, items }) => {
+              const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
+              return (
+                <div key={client.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 border-b border-indigo-100">
+                    <span className="font-semibold text-sm text-indigo-800">{client.name}</span>
+                    <span className="text-xs font-bold text-indigo-600">計 {totalUnits}単位</span>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {items.map((item) => {
+                      const eq = equipment.find((e) => e.product_code === item.product_code);
+                      const autoUnits = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+                      const units = getUnits(item, client.id);
+                      const isOverridden = unitOverrides.has(item.id);
+                      return (
+                        <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-gray-800 truncate">{eq?.name ?? item.product_code}</p>
+                            <p className="text-[10px] text-gray-400">
+                              ¥{eq?.rental_price?.toLocaleString() ?? "?"}/月 → 自動 {autoUnits}単位
+                              {item.quantity > 1 && ` ×${item.quantity}`}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              type="number"
+                              value={units}
+                              onChange={(e) => handleUnitOverride(client.id, item, e.target.value)}
+                              className={`w-16 text-center border rounded-lg px-2 py-1 text-sm outline-none focus:border-indigo-400 ${
+                                isOverridden ? "border-amber-300 bg-amber-50 font-semibold text-amber-700" : "border-gray-200"
+                              }`}
+                            />
+                            <span className="text-xs text-gray-400">単位</span>
+                            {isOverridden && (
+                              <button
+                                onClick={() => handleUnitOverride(client.id, item, "")}
+                                className="text-gray-300 hover:text-red-400"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* ── 再請求管理 ── */}
+        {subTab === "rebill" && !loading && !dataLoading && (
+          <>
+            <p className="text-xs text-gray-400">返戻・取り下げになった過去月を選択し、利用者にフラグを立てると伝送データに再請求として含まれます。</p>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">対象月</label>
+              <select
+                value={rebillTargetMonth}
+                onChange={(e) => setRebillTargetMonth(e.target.value)}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-400 bg-white"
+              >
+                {pastMonths.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+            {rebillClientGroups.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-8">{rebillTargetMonth}のアクティブレンタルがありません</p>
+            )}
+            {rebillClientGroups.map(({ client, items }) => {
+              const key = `${client.id}-${rebillTargetMonth}`;
+              const flag = rebillFlags.get(key);
+              return (
+                <div key={client.id} className={`bg-white rounded-xl border p-3 ${flag ? "border-red-200 bg-red-50" : "border-gray-100"}`}>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="font-semibold text-sm text-gray-800">{client.name}</span>
+                    <div className="flex gap-1">
+                      {(["返戻", "取り下げ"] as const).map((type) => (
+                        <button
+                          key={type}
+                          onClick={() => toggleRebillFlag(client.id, rebillTargetMonth, type)}
+                          className={`px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                            flag?.flag_type === type
+                              ? "bg-red-500 text-white border-red-500"
+                              : "bg-white text-gray-600 border-gray-200 hover:border-red-300"
+                          }`}
+                        >
+                          {type}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-400">{items.map((i) => {
+                    const eq = equipment.find((e) => e.product_code === i.product_code);
+                    return eq?.name ?? i.product_code;
+                  }).join(" / ")}</p>
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* ── 伝送データ作成 ── */}
+        {subTab === "export" && !loading && !dataLoading && (
+          <>
+            <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3">
+              <h3 className="font-semibold text-sm text-gray-800">伝送データ作成</h3>
+              <div className="space-y-1">
+                <p className="text-xs text-gray-500">対象月：<span className="font-semibold text-gray-800">{billingMonth}</span></p>
+                <p className="text-xs text-gray-500">
+                  請求対象：<span className="font-semibold text-gray-800">
+                    {clientGroups.filter((g) => !lateFlags.has(g.client.id)).length}名
+                  </span>
+                  （月遅れ除外：{lateFlags.size}名）
+                </p>
+                {rebillFlags.size > 0 && (
+                  <p className="text-xs text-amber-600">
+                    <AlertTriangle size={11} className="inline mr-1" />
+                    再請求あり：{rebillFlags.size}件
+                  </p>
+                )}
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500 space-y-1">
+                <p>・ファイル形式：CSV（国保連インタフェース仕様 様式第二の三）</p>
+                <p>・サービス種類：17（福祉用具貸与）</p>
+                <p>・TAISコードをサービスコードとして使用</p>
+                <p className="text-amber-600">※ 被保険者証情報（保険者番号等）は別途ほのぼので補完してください</p>
+              </div>
+              <button
+                onClick={generateTransferData}
+                className="w-full bg-indigo-500 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 hover:bg-indigo-600"
+              >
+                <Download size={16} />
+                CSVダウンロード（FKYUFU{billingMonth.replace("-", "")}.csv）
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
