@@ -4096,10 +4096,11 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
       if (pt !== "介護") return false; // 介護保険のみ請求
       if (!item.rental_start_date) return false;
-      const start = new Date(item.rental_start_date);
+      const pld2 = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+      const start = pld2(item.rental_start_date);
       if (start > monthEnd) return false;
       if (item.status === "terminated" && item.rental_end_date) {
-        const end = new Date(item.rental_end_date);
+        const end = pld2(item.rental_end_date);
         if (end < monthStart) return false;
       }
       if (item.status !== "rental_started" && item.status !== "terminated") return false;
@@ -4160,17 +4161,18 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     const clientHosp = hospitalizations.filter(h => h.client_id === clientId);
-    // 貸与期間のうち入院でない日をカウント
-    const rentalStart = item.rental_start_date ? new Date(item.rental_start_date) : null;
-    const rentalEnd = item.rental_end_date ? new Date(item.rental_end_date) : monthEnd;
+    // 貸与期間のうち入院でない日をカウント（タイムゾーン問題を避けるため文字列分割でパース）
+    const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+    const rentalStart = item.rental_start_date ? parseLocalDate(item.rental_start_date) : null;
+    const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
     if (!rentalStart) return base;
     let billingDays = 0, firstHalf = false, secondHalf = false;
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(y, m - 1, d);
       if (date < rentalStart || date > rentalEnd) continue;
       const inHosp = clientHosp.some(h => {
-        const admit = new Date(h.admission_date);
-        const discharge = h.discharge_date ? new Date(h.discharge_date) : monthEnd;
+        const admit = parseLocalDate(h.admission_date);
+        const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
         return date >= admit && date <= discharge;
       });
       if (!inHosp) {
@@ -4681,11 +4683,13 @@ function RentalGridModal({
   const getDoW = (day: number) => DOW[new Date(y, m - 1, day).getDay()];
   const isWeekend = (day: number) => { const d = new Date(y, m - 1, day).getDay(); return d === 0 || d === 6; };
 
+  const pld = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+
   // 入院期間を日単位のSetで保持
   const hospDays = new Set<number>();
   for (const h of hospitalizations) {
-    const admitDate = new Date(h.admission_date);
-    const dischargeDate = h.discharge_date ? new Date(h.discharge_date) : new Date(y, m, 0);
+    const admitDate = pld(h.admission_date);
+    const dischargeDate = h.discharge_date ? pld(h.discharge_date) : new Date(y, m, 0);
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(y, m - 1, d);
       if (date >= admitDate && date <= dischargeDate) hospDays.add(d);
@@ -4695,8 +4699,8 @@ function RentalGridModal({
   // 各アイテムの貸与日を計算
   const getItemDays = (item: OrderItem) => {
     if (!item.rental_start_date) return new Set<number>();
-    const start = new Date(item.rental_start_date);
-    const end = item.rental_end_date ? new Date(item.rental_end_date) : new Date(y, m, 0);
+    const start = pld(item.rental_start_date);
+    const end = item.rental_end_date ? pld(item.rental_end_date) : new Date(y, m, 0);
     const active = new Set<number>();
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(y, m - 1, d);
@@ -4777,12 +4781,8 @@ function RentalGridModal({
                     {days.map(d => {
                       const isRental = itemDays.has(d);
                       const isHosp = hospDays.has(d);
-                      const isStart = item.rental_start_date && new Date(item.rental_start_date).getDate() === d
-                        && new Date(item.rental_start_date).getMonth() === m - 1
-                        && new Date(item.rental_start_date).getFullYear() === y;
-                      const isEnd = item.rental_end_date && new Date(item.rental_end_date).getDate() === d
-                        && new Date(item.rental_end_date).getMonth() === m - 1
-                        && new Date(item.rental_end_date).getFullYear() === y;
+                      const isStart = item.rental_start_date && (() => { const s = pld(item.rental_start_date!); return s.getDate() === d && s.getMonth() === m - 1 && s.getFullYear() === y; })();
+                      const isEnd = item.rental_end_date && (() => { const e = pld(item.rental_end_date!); return e.getDate() === d && e.getMonth() === m - 1 && e.getFullYear() === y; })();
                       return (
                         <td key={d} className={`border border-gray-200 text-center p-0 h-7 ${
                           !isRental ? "bg-white" :
