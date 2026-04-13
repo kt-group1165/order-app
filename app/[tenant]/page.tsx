@@ -4319,37 +4319,66 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
   const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
+  const [kanaFilter, setKanaFilter] = useState<string | null>(null);
   const billingTarget = clientGroups.filter(g => !autoLateClients.has(g.client.id));
   const totalUnitsAll = billingTarget.reduce((s, { client, items }) => s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
 
+  const KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
+  const KANA_MAP: Record<string, string[]> = {
+    "あ":["ア","イ","ウ","エ","オ"],"か":["カ","キ","ク","ケ","コ"],
+    "さ":["サ","シ","ス","セ","ソ"],"た":["タ","チ","ツ","テ","ト"],
+    "な":["ナ","ニ","ヌ","ネ","ノ"],"は":["ハ","ヒ","フ","ヘ","ホ"],
+    "ま":["マ","ミ","ム","メ","モ"],"や":["ヤ","ユ","ヨ"],
+    "ら":["ラ","リ","ル","レ","ロ"],"わ":["ワ","ヲ","ン"],
+  };
+
+  const filteredGroups = kanaFilter
+    ? clientGroups.filter(({ client }) => {
+        const kana = client.furigana ?? client.name;
+        const first = kana.charAt(0);
+        if (kanaFilter === "他") return !Object.values(KANA_MAP).flat().includes(first);
+        return (KANA_MAP[kanaFilter] ?? []).includes(first);
+      })
+    : clientGroups;
+
+  // 全行（当月 + 再請求）
+  const allRows = [
+    ...filteredGroups.map(g => ({ type: "current" as const, ...g })),
+    ...rebillByMonth.flatMap(([month, entries]) =>
+      entries.map(({ client, items, flag }) => ({ type: "rebill" as const, client, items, flag, month }))
+    ),
+  ];
+
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-white text-xs">
       {/* ── ツールバー ── */}
-      <div className="border-b border-gray-200 px-3 py-2 shrink-0 flex items-center gap-2">
-        <div className="flex items-center gap-0.5 mr-3">
-          <button onClick={prevMonth} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft size={14} /></button>
-          <span className="text-sm font-semibold text-gray-800 px-1">{y}年{m}月</span>
-          <button onClick={nextMonth} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronRight size={14} /></button>
+      <div className="border-b border-gray-300 bg-gray-100 px-2 py-1.5 shrink-0 flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-1.5 py-0.5">
+          <button onClick={prevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={12} /></button>
+          <span className="font-semibold text-gray-800 px-1 text-xs">R{y - 2018}/{m}</span>
+          <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={12} /></button>
         </div>
-        <span className="text-xs text-gray-400 border border-gray-200 rounded px-2 py-1 bg-gray-50">国保対象</span>
+        <span className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 font-medium">請求分</span>
+        <div className="w-px h-4 bg-gray-300 mx-0.5" />
+        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">明細書</button>
+        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">請求書</button>
+        <button className="border border-blue-500 rounded bg-blue-100 px-2 py-0.5 text-blue-800 font-semibold">国保対象</button>
+        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">管理帳票</button>
         {selectedClientIds.size > 0 && (
           <>
-            <span className="text-xs text-gray-500">{selectedClientIds.size}名選択</span>
+            <div className="w-px h-4 bg-gray-300 mx-0.5" />
+            <span className="text-gray-600">{selectedClientIds.size}名選択</span>
             <button onClick={() => handleConfirm("返戻")}
-              className="text-xs px-2.5 py-1 rounded border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors">
-              返戻で確定
-            </button>
+              className="border border-orange-400 rounded bg-orange-50 px-2 py-0.5 text-orange-700 font-semibold hover:bg-orange-100">返戻で確定</button>
             <button onClick={() => handleConfirm("過誤")}
-              className="text-xs px-2.5 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 transition-colors">
-              過誤で確定
-            </button>
+              className="border border-red-400 rounded bg-red-50 px-2 py-0.5 text-red-700 font-semibold hover:bg-red-100">過誤で確定</button>
           </>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-amber-600 text-[10px]">※ 被保険者証情報は別途ほのぼので補完</span>
           <button onClick={generateTransferData}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 transition-colors">
-            <Download size={12} />
-            伝送データ出力
+            className="border border-indigo-500 rounded bg-indigo-500 px-2.5 py-0.5 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1">
+            <Download size={11} />CSV出力
           </button>
         </div>
       </div>
@@ -4358,186 +4387,213 @@ function BillingTab({ tenantId }: { tenantId: string }) {
         <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-indigo-400" /></div>
       ) : (
         <div className="flex flex-1 min-h-0">
-          {/* ── 左：利用者テーブル ── */}
+          {/* ── 行カナ絞り込みサイドバー ── */}
+          <div className="w-8 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
+            <button
+              onClick={() => setKanaFilter(null)}
+              className={`w-7 py-0.5 rounded text-[10px] font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+            >全</button>
+            {KANA_ROWS.map(k => (
+              <button key={k}
+                onClick={() => setKanaFilter(kanaFilter === k ? null : k)}
+                className={`w-7 py-0.5 rounded text-[10px] font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+              >{k}</button>
+            ))}
+          </div>
+
+          {/* ── メインテーブル ── */}
           <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
-            {/* テーブルヘッダー */}
-            <div className="grid grid-cols-[32px_1fr_80px_52px_52px_52px] bg-gray-50 border-b border-gray-200 text-[11px] font-semibold text-gray-500 shrink-0">
-              <div className="px-2 py-2 flex items-center justify-center">
+            {/* ヘッダー行 */}
+            <div className="grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-300 bg-gray-100 text-[10px] font-semibold text-gray-600 shrink-0">
+              <div className="px-1 py-1.5 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
                       ? new Set() : new Set(clientGroups.map(g => g.client.id))
                   )}
-                  className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                  className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
-                      ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
+                      ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
                   }`}
                 >
                   {selectedClientIds.size === clientGroups.length && clientGroups.length > 0 && (
-                    <span className="text-white text-[8px] font-bold">✓</span>
+                    <span className="text-white text-[7px] font-bold leading-none">✓</span>
                   )}
                 </button>
               </div>
-              <div className="px-2 py-2">利用者名</div>
-              <div className="px-2 py-2 text-right">単位数</div>
-              <div className="px-2 py-2 text-center">月遅れ</div>
-              <div className="px-2 py-2 text-center">返戻</div>
-              <div className="px-2 py-2 text-center">過誤</div>
+              <div className="px-1 py-1.5 border-l border-gray-200">状態</div>
+              <div className="px-1 py-1.5 border-l border-gray-200">提供月</div>
+              <div className="px-1 py-1.5 border-l border-gray-200">請求月</div>
+              <div className="px-1 py-1.5 border-l border-gray-200">利用者名</div>
+              <div className="px-1 py-1.5 border-l border-gray-200 text-right">単位数</div>
+              <div className="px-1 py-1.5 border-l border-gray-200 text-center">月遅</div>
+              <div className="px-1 py-1.5 border-l border-gray-200 text-center">返戻</div>
+              <div className="px-1 py-1.5 border-l border-gray-200 text-center">過誤</div>
             </div>
 
-            {/* テーブル本体 */}
+            {/* 行 */}
             <div className="flex-1 overflow-y-auto">
-              {clientGroups.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-10">{billingMonth}のアクティブレンタル（介護）がありません</p>
-              ) : (
-                <>
-                  {clientGroups.map(({ client, items }) => {
-                    const isLate = autoLateClients.has(client.id);
-                    const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
-                    const isSelected = selectedClientIds.has(client.id);
-                    const isDetail = detailClient?.client.id === client.id;
-                    const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
-                    return (
-                      <div
-                        key={client.id}
-                        onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                        className={`grid grid-cols-[32px_1fr_80px_52px_52px_52px] border-b border-gray-100 text-sm cursor-pointer transition-colors ${
-                          isDetail ? "bg-blue-50" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50/50" : "hover:bg-gray-50"
+              {allRows.length === 0 ? (
+                <p className="text-gray-400 text-center py-10">{billingMonth}のアクティブレンタル（介護）がありません</p>
+              ) : allRows.map((row, idx) => {
+                if (row.type === "rebill") {
+                  const [ry, rm] = row.month.split("-").map(Number);
+                  const units = row.items.reduce((s, item) => s + getUnits(item, row.client.id) * item.quantity, 0);
+                  return (
+                    <div key={`rebill-${row.client.id}-${row.month}`}
+                      className="grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-100 bg-amber-50 text-[11px]">
+                      <div className="px-1 py-1" />
+                      <div className="px-1 py-1 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
+                      <div className="px-1 py-1 border-l border-gray-100 text-gray-500">R{ry-2018}/{rm}</div>
+                      <div className="px-1 py-1 border-l border-gray-100 text-gray-500">R{y-2018}/{m}</div>
+                      <div className="px-1 py-1 border-l border-gray-100 text-gray-700 font-medium">{row.client.name}</div>
+                      <div className="px-1 py-1 border-l border-gray-100 text-right font-mono">{units.toLocaleString()}</div>
+                      <div className="py-1 border-l border-gray-100 text-center" />
+                      <div className="py-1 border-l border-gray-100 text-center">
+                        {row.flag.flag_type === "返戻" && (
+                          <button onClick={() => toggleRebillFlag(row.client.id, row.month, "返戻")}
+                            className="text-red-500 underline text-[10px]">返戻</button>
+                        )}
+                      </div>
+                      <div className="py-1 border-l border-gray-100 text-center">
+                        {row.flag.flag_type === "過誤" && (
+                          <button onClick={() => toggleRebillFlag(row.client.id, row.month, "過誤")}
+                            className="text-red-500 underline text-[10px]">過誤</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+                const { client, items } = row;
+                const isLate = autoLateClients.has(client.id);
+                const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
+                const isSelected = selectedClientIds.has(client.id);
+                const isDetail = detailClient?.client.id === client.id;
+                const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
+                return (
+                  <div
+                    key={client.id}
+                    onClick={() => setDetailClient(isDetail ? null : { client, items })}
+                    className={`grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-100 text-[11px] cursor-pointer transition-colors ${
+                      isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
+                    }`}
+                  >
+                    <div className="px-1 py-1 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => setSelectedClientIds(prev => {
+                          const s = new Set(prev); if (s.has(client.id)) s.delete(client.id); else s.add(client.id); return s;
+                        })}
+                        className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
+                          isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
                         }`}
                       >
-                        <div className="px-2 py-2 flex items-center justify-center" onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => setSelectedClientIds(prev => {
-                              const s = new Set(prev);
-                              if (s.has(client.id)) s.delete(client.id); else s.add(client.id);
-                              return s;
-                            })}
-                            className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
-                              isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
-                            }`}
-                          >
-                            {isSelected && <span className="text-white text-[8px] font-bold">✓</span>}
-                          </button>
-                        </div>
-                        <div className="px-2 py-2 flex items-center gap-1.5 min-w-0">
-                          <span className={`font-medium truncate ${isLate ? "text-gray-400" : "text-gray-800"}`}>{client.name}</span>
-                          {client.care_level && <span className="text-[10px] bg-gray-100 text-gray-500 px-1 rounded shrink-0">{client.care_level}</span>}
-                        </div>
-                        <div className="px-2 py-2 text-right font-mono">
-                          {isLate ? <span className="text-gray-300">—</span> : <span className="text-gray-800">{totalUnits.toLocaleString()}</span>}
-                        </div>
-                        <div className="py-2 text-center">
-                          {isLate && <span className="text-[11px] font-semibold text-orange-500">月遅</span>}
-                        </div>
-                        <div className="py-2 text-center">
-                          {flag?.flag_type === "返戻" && <span className="text-[11px] font-semibold text-red-500">返戻</span>}
-                        </div>
-                        <div className="py-2 text-center">
-                          {flag?.flag_type === "過誤" && <span className="text-[11px] font-semibold text-red-500">過誤</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {/* 再請求行 */}
-                  {rebillByMonth.flatMap(([month, entries]) =>
-                    entries.map(({ client, items, flag }) => {
-                      const [ry, rm] = month.split("-").map(Number);
-                      const units = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
-                      return (
-                        <div key={`rebill-${client.id}-${month}`}
-                          className="grid grid-cols-[32px_1fr_80px_52px_52px_52px] border-b border-amber-100 bg-amber-50/40 text-sm">
-                          <div className="px-2 py-2" />
-                          <div className="px-2 py-2 flex items-center gap-1.5">
-                            <span className="text-gray-700 font-medium">{client.name}</span>
-                            <span className="text-[10px] text-amber-600 bg-amber-100 px-1 rounded">{ry}/{String(rm).padStart(2,"0")} 再請求</span>
-                          </div>
-                          <div className="px-2 py-2 text-right font-mono text-gray-600">{units.toLocaleString()}</div>
-                          <div className="py-2 text-center" />
-                          <div className="py-2 text-center">
-                            {flag.flag_type === "返戻" && (
-                              <button onClick={() => toggleRebillFlag(client.id, month, "返戻")}
-                                className="text-[11px] text-red-500 underline">返戻</button>
-                            )}
-                          </div>
-                          <div className="py-2 text-center">
-                            {flag.flag_type === "過誤" && (
-                              <button onClick={() => toggleRebillFlag(client.id, month, "過誤")}
-                                className="text-[11px] text-red-500 underline">過誤</button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </>
-              )}
+                        {isSelected && <span className="text-white text-[7px] font-bold leading-none">✓</span>}
+                      </button>
+                    </div>
+                    <div className="px-1 py-1 border-l border-gray-100">
+                      <span className="text-blue-700 font-semibold">国保対象</span>
+                    </div>
+                    <div className="px-1 py-1 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
+                    <div className="px-1 py-1 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
+                    <div className="px-1 py-1 border-l border-gray-100 font-medium text-gray-800 truncate">{client.name}</div>
+                    <div className="px-1 py-1 border-l border-gray-100 text-right font-mono">
+                      {isLate ? <span className="text-gray-300">—</span> : totalUnits.toLocaleString()}
+                    </div>
+                    <div className="py-1 border-l border-gray-100 text-center text-orange-500 font-semibold">
+                      {isLate ? "月遅" : ""}
+                    </div>
+                    <div className="py-1 border-l border-gray-100 text-center text-red-500 font-semibold">
+                      {flag?.flag_type === "返戻" ? "▼" : ""}
+                    </div>
+                    <div className="py-1 border-l border-gray-100 text-center text-red-500 font-semibold">
+                      {flag?.flag_type === "過誤" ? "▼" : ""}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* ── フッター合計 ── */}
-            <div className="border-t border-gray-200 bg-gray-50 px-3 py-2 shrink-0 flex items-center gap-6 text-xs text-gray-600">
-              <span>合計件数 <strong className="text-gray-800 font-semibold">{clientGroups.length}</strong></span>
-              <span>合計単位数 <strong className="text-gray-800 font-semibold">{(totalUnitsAll + rebillByMonth.reduce((s, [, entries]) => s + entries.reduce((ss, { client, items }) => ss + items.reduce((sss, item) => sss + getUnits(item, client.id) * item.quantity, 0), 0), 0)).toLocaleString()}</strong></span>
-              <span>国保対象件数 <strong className="text-gray-800 font-semibold">{billingTarget.length}</strong></span>
-              <span>国保対象単位数 <strong className="text-gray-800 font-semibold">{totalUnitsAll.toLocaleString()}</strong></span>
-              <span className="ml-auto text-amber-500 text-[10px]">※ 被保険者証情報は別途ほのぼので補完</span>
+            <div className="border-t border-gray-300 bg-gray-100 px-3 py-1 shrink-0 flex items-center gap-6 text-[11px] text-gray-700">
+              <span>合計件数 <strong>{clientGroups.length}</strong></span>
+              <span>合計単位数 <strong>{totalUnitsAll.toLocaleString()}</strong></span>
+              <span>国保件数 <strong>{billingTarget.length}</strong></span>
+              <span>国保対象単位数 <strong>{totalUnitsAll.toLocaleString()}</strong></span>
             </div>
           </div>
 
           {/* ── 右：明細情報 ── */}
-          <div className="w-72 shrink-0 flex flex-col bg-white">
-            <div className="border-b border-gray-200 px-3 py-2 bg-gray-50">
-              <span className="text-xs font-semibold text-gray-600">明細情報</span>
-              {detailClient && <span className="ml-2 text-xs text-gray-500">{detailClient.client.name}</span>}
+          <div className="w-64 shrink-0 flex flex-col bg-white">
+            <div className="border-b border-gray-300 bg-gray-100 px-2 py-1 text-[10px] font-bold text-gray-700 flex items-center gap-2">
+              <span>明細情報</span>
+              {detailClient && <span className="font-normal text-gray-500">{detailClient.client.name}</span>}
             </div>
             {detailClient ? (
               <>
                 <div className="flex-1 overflow-y-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50 border-b border-gray-200">
+                  <table className="w-full text-[10px] border-collapse">
+                    <thead className="bg-gray-100 border-b border-gray-300 sticky top-0">
                       <tr>
-                        <th className="text-left px-2 py-1.5 font-medium text-gray-500 w-auto">用具名</th>
-                        <th className="text-right px-2 py-1.5 font-medium text-gray-500 w-14">単位数</th>
+                        <th className="text-left px-1.5 py-1 font-semibold text-gray-600 border-r border-gray-200">サービス内容</th>
+                        <th className="text-right px-1 py-1 font-semibold text-gray-600 border-r border-gray-200 w-12">単価</th>
+                        <th className="text-right px-1 py-1 font-semibold text-gray-600 border-r border-gray-200 w-8">回数</th>
+                        <th className="text-right px-1 py-1 font-semibold text-gray-600 w-12">単位数</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {detailClient.items.map(item => {
+                    <tbody>
+                      {detailClient.items.map((item, i) => {
                         const eq = equipment.find(e => e.product_code === item.product_code);
-                        const units = getUnits(item, detailClient.client.id) * item.quantity;
+                        const unitPrice = getUnits(item, detailClient.client.id);
+                        const units = unitPrice * item.quantity;
                         return (
-                          <tr key={item.id} className="hover:bg-gray-50">
-                            <td className="px-2 py-1.5 text-gray-700 leading-tight">{eq?.name ?? item.product_code}</td>
-                            <td className="px-2 py-1.5 text-right font-mono text-gray-800">{units.toLocaleString()}</td>
+                          <tr key={item.id} className={`border-b border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
+                            <td className="px-1.5 py-1 text-gray-700 leading-tight border-r border-gray-100">{eq?.name ?? item.product_code}</td>
+                            <td className="px-1 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{unitPrice}</td>
+                            <td className="px-1 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{item.quantity}</td>
+                            <td className="px-1 py-1 text-right font-mono font-semibold text-gray-800">{units}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
-                <div className="border-t border-gray-200 p-3 bg-gray-50 space-y-1.5">
+                <div className="border-t border-gray-300 bg-gray-50 shrink-0">
                   {(() => {
                     const totalU = detailClient.items.reduce((s, item) => s + getUnits(item, detailClient.client.id) * item.quantity, 0);
                     const insuredAmount = totalU * 10;
                     const benefitRate = parseInt(detailClient.client.benefit_rate ?? "90", 10);
                     const copayRate = 100 - benefitRate;
                     const copayAmount = Math.round(insuredAmount * copayRate / 100);
+                    const benefitAmount = insuredAmount - copayAmount;
                     return (
-                      <>
-                        <div className="flex justify-between text-xs text-gray-500">
-                          <span>保険単位数</span><span className="font-mono font-semibold text-gray-700">{totalU.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-gray-500">
-                          <span>保険請求額</span><span className="font-mono font-semibold text-gray-700">¥{insuredAmount.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-gray-500">
-                          <span>利用者負担額（{copayRate}%）</span><span className="font-mono font-semibold text-red-600">¥{copayAmount.toLocaleString()}</span>
-                        </div>
-                      </>
+                      <table className="w-full text-[10px] border-collapse">
+                        <tbody>
+                          <tr className="border-t border-gray-200">
+                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険単位数</td>
+                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-gray-800">{totalU.toLocaleString()}</td>
+                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費単位数</td>
+                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                          </tr>
+                          <tr className="border-t border-gray-200">
+                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険請求額</td>
+                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-gray-800">{benefitAmount.toLocaleString()}</td>
+                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費請求額</td>
+                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                          </tr>
+                          <tr className="border-t border-gray-200">
+                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">利用者負担額</td>
+                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-red-600">{copayAmount.toLocaleString()}</td>
+                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費本人負担</td>
+                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     );
                   })()}
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
+              <div className="flex-1 flex items-center justify-center text-[11px] text-gray-400">
                 利用者を選択してください
               </div>
             )}
