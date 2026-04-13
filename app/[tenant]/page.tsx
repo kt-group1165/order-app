@@ -1910,6 +1910,9 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
   const [showHospModal, setShowHospModal] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  // 入退院日付入力ダイアログ
+  const [hospDateDialog, setHospDateDialog] = useState<{ client: Client; mode: "admit" | "discharge"; currentHospId?: string } | null>(null);
+  const [hospDateInput, setHospDateInput] = useState(() => new Date().toISOString().slice(0, 10));
   // 実績表
   const [showJissekiModal, setShowJissekiModal] = useState(false);
   const [jissekiMonth, setJissekiMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
@@ -2138,25 +2141,30 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
     }
   };
 
-  // 入退院トグル
-  const toggleHospitalization = async (client: Client) => {
+  // 入退院ボタン → 日付入力ダイアログを開く
+  const toggleHospitalization = (client: Client) => {
     const current = hospitalizations.find(h => h.client_id === client.id && h.discharge_date === null);
+    setHospDateInput(new Date().toISOString().slice(0, 10));
+    setHospDateDialog({ client, mode: current ? "discharge" : "admit", currentHospId: current?.id });
+  };
+
+  // 日付確定後にDBへ保存
+  const confirmHospDate = async () => {
+    if (!hospDateDialog) return;
+    const { client, mode, currentHospId } = hospDateDialog;
     setHospLoading(client.id);
+    setHospDateDialog(null);
     try {
-      if (current) {
-        // 退院
-        const today = new Date().toISOString().split("T")[0];
+      if (mode === "discharge" && currentHospId) {
         const { error } = await supabase.from("client_hospitalizations")
-          .update({ discharge_date: today })
-          .eq("id", current.id);
+          .update({ discharge_date: hospDateInput })
+          .eq("id", currentHospId);
         if (!error) {
-          setHospitalizations(prev => prev.map(h => h.id === current.id ? { ...h, discharge_date: today } : h));
+          setHospitalizations(prev => prev.map(h => h.id === currentHospId ? { ...h, discharge_date: hospDateInput } : h));
         }
       } else {
-        // 入院
-        const today = new Date().toISOString().split("T")[0];
         const { data, error } = await supabase.from("client_hospitalizations")
-          .insert({ tenant_id: tenantId, client_id: client.id, admission_date: today })
+          .insert({ tenant_id: tenantId, client_id: client.id, admission_date: hospDateInput })
           .select().single();
         if (!error && data) {
           setHospitalizations(prev => [data as ClientHospitalization, ...prev]);
@@ -2474,6 +2482,42 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
       )}
 
       {/* 入院中一覧モーダル */}
+      {hospDateDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-6">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-5">
+            <p className="text-sm font-semibold text-gray-800 mb-1">
+              {hospDateDialog.client.name}
+            </p>
+            <p className="text-xs text-gray-500 mb-4">
+              {hospDateDialog.mode === "admit" ? "入院日を入力してください" : "退院日を入力してください"}
+            </p>
+            <input
+              type="date"
+              value={hospDateInput}
+              onChange={e => setHospDateInput(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 mb-4 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => setHospDateDialog(null)}
+                className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={confirmHospDate}
+                disabled={!hospDateInput}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium text-white transition-colors disabled:opacity-50 ${
+                  hospDateDialog.mode === "admit" ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"
+                }`}
+              >
+                {hospDateDialog.mode === "admit" ? "入院登録" : "退院登録"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showJissekiModal && (() => {
         const [jYear, jMonth] = jissekiMonth.split("-").map(Number);
         // 令和換算
