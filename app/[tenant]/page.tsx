@@ -4784,10 +4784,10 @@ function RentalGridModal({
                       const isStart = item.rental_start_date && (() => { const s = pld(item.rental_start_date!); return s.getDate() === d && s.getMonth() === m - 1 && s.getFullYear() === y; })();
                       const isEnd = item.rental_end_date && (() => { const e = pld(item.rental_end_date!); return e.getDate() === d && e.getMonth() === m - 1 && e.getFullYear() === y; })();
                       return (
-                        <td key={d} className={`border border-gray-200 text-center p-0 h-7 ${
-                          !isRental ? "bg-white" :
-                          isHosp ? "bg-orange-100" :
-                          "bg-blue-100"
+                        <td key={d} className={`text-center p-0 h-7 ${
+                          !isRental ? "border border-gray-200 bg-white" :
+                          isHosp ? "border border-orange-300 bg-orange-100" :
+                          "border border-blue-300 bg-blue-100"
                         }`}>
                           {isRental && (
                             <span className={`text-[9px] font-bold ${
