@@ -24,7 +24,7 @@ export type BillingRebillFlag = {
   tenant_id: string;
   client_id: string;
   month: string;
-  flag_type: "返戻" | "取り下げ";
+  flag_type: "返戻" | "過誤";
   created_at: string;
 };
 
@@ -124,7 +124,7 @@ export async function setRebillFlag(
   tenantId: string,
   clientId: string,
   month: string,
-  flagType: "返戻" | "取り下げ"
+  flagType: "返戻" | "過誤"
 ): Promise<void> {
   const { error } = await supabase
     .from("billing_rebill_flags")

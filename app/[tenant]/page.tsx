@@ -3634,7 +3634,7 @@ function ClientDetail({
               <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
                 <span className="text-xs font-semibold text-gray-700">介護認定 履歴一覧</span>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto max-h-48 overflow-y-auto">
               <table className="w-full text-xs min-w-[700px]">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
@@ -3715,7 +3715,7 @@ function ClientDetail({
               </div>
 
               {/* 3カラムフォーム */}
-              <div className="grid grid-cols-3 gap-0 divide-x divide-gray-200 px-0">
+              <div className="grid grid-cols-3 gap-0 divide-x divide-gray-200 px-0 bg-white">
                 {/* 左列: 保険証情報 */}
                 <div className="p-4 space-y-3">
                   <p className="text-sm font-semibold text-gray-700 mb-3 pb-1 border-b border-gray-200">保険証情報</p>
@@ -4048,8 +4048,6 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       setTenantInfo(tenant);
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId]);
-  type SubTab = "late" | "units" | "rebill" | "export";
-  const [subTab, setSubTab] = useState<SubTab>("late");
   const [billingMonth, setBillingMonth] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -4142,7 +4140,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     }
   };
 
-  const toggleRebillFlag = async (clientId: string, month: string, type: "返戻" | "取り下げ") => {
+  const toggleRebillFlag = async (clientId: string, month: string, type: "返戻" | "過誤") => {
     const key = `${clientId}-${month}`;
     const existing = rebillFlags.get(key);
     if (existing && existing.flag_type === type) {
@@ -4259,302 +4257,184 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     URL.revokeObjectURL(url);
   };
 
-  // 再請求対象の過去月を収集
-  const rebillMonths = useMemo(() => {
-    const months = new Set<string>();
-    rebillFlags.forEach((_, key) => {
-      const month = key.split("-").slice(1).join("-");
-      months.add(month);
-    });
-    return Array.from(months).sort().reverse();
-  }, [rebillFlags]);
-
-  // 再請求タブ用：過去12ヶ月リスト
-  const pastMonths = useMemo(() => {
-    const result: string[] = [];
-    const d = new Date();
-    for (let i = 1; i <= 12; i++) {
-      d.setMonth(d.getMonth() - 1);
-      result.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-    }
-    return result;
-  }, []);
-
-  const [rebillTargetMonth, setRebillTargetMonth] = useState(pastMonths[0] ?? "");
-
-  // 再請求タブ用：対象月のアクティブレンタル利用者
-  const rebillClientGroups = useMemo(() => {
-    if (!rebillTargetMonth) return [];
-    const [y, m] = rebillTargetMonth.split("-").map(Number);
-    const monthStart = new Date(y, m - 1, 1);
-    const monthEnd = new Date(y, m, 0, 23, 59, 59);
-    const targetItems = orderItems.filter((item) => {
-      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
-      if (pt !== "介護") return false;
-      if (!item.rental_start_date) return false;
-      const start = new Date(item.rental_start_date);
-      if (start > monthEnd) return false;
-      if (item.status === "terminated" && item.rental_end_date) {
-        const end = new Date(item.rental_end_date);
-        if (end < monthStart) return false;
-      }
-      if (item.status !== "rental_started" && item.status !== "terminated") return false;
-      return true;
-    });
-    const map = new Map<string, { client: Client; items: OrderItem[] }>();
-    for (const item of targetItems) {
-      const order = orders.find((o) => o.id === item.order_id);
-      if (!order?.client_id) continue;
-      const client = clients.find((c) => c.id === order.client_id);
+  // 過去月の再請求グループ（返戻・過誤フラグがある月ごとに集計）
+  const rebillByMonth = useMemo(() => {
+    const result = new Map<string, Array<{ client: Client; items: OrderItem[]; flag: BillingRebillFlag }>>();
+    for (const flag of rebillFlags.values()) {
+      if (flag.month === billingMonth) continue;
+      const client = clients.find((c) => c.id === flag.client_id);
       if (!client) continue;
-      if (!map.has(client.id)) map.set(client.id, { client, items: [] });
-      map.get(client.id)!.items.push(item);
+      const [y, m] = flag.month.split("-").map(Number);
+      const monthStart = new Date(y, m - 1, 1);
+      const monthEnd = new Date(y, m, 0, 23, 59, 59);
+      const items = orderItems.filter((item) => {
+        const order = orders.find((o) => o.id === item.order_id);
+        if (order?.client_id !== client.id) return false;
+        const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+        if (pt !== "介護") return false;
+        if (!item.rental_start_date) return false;
+        const start = new Date(item.rental_start_date);
+        if (start > monthEnd) return false;
+        if (item.status === "terminated" && item.rental_end_date) {
+          const end = new Date(item.rental_end_date);
+          if (end < monthStart) return false;
+        }
+        if (item.status !== "rental_started" && item.status !== "terminated") return false;
+        return true;
+      });
+      if (!result.has(flag.month)) result.set(flag.month, []);
+      result.get(flag.month)!.push({ client, items, flag });
     }
-    return Array.from(map.values()).sort((a, b) => a.client.name.localeCompare(b.client.name, "ja"));
-  }, [rebillTargetMonth, orderItems, orders, clients]);
+    return Array.from(result.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [rebillFlags, billingMonth, orderItems, orders, clients]);
 
-  const SUB_TABS: { id: SubTab; label: string }[] = [
-    { id: "late", label: "月遅れ" },
-    { id: "units", label: "単位数" },
-    { id: "rebill", label: "再請求" },
-    { id: "export", label: "伝送データ" },
-  ];
+  const [y, m] = billingMonth.split("-").map(Number);
+  const prevMonth = () => { const d = new Date(y, m - 2, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+  const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* ヘッダー */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3 shrink-0 space-y-2">
-        <div className="flex items-center gap-3">
-          <CreditCard size={18} className="text-indigo-500" />
-          <span className="font-semibold text-gray-800">請求管理</span>
-          <input
-            type="month"
-            value={billingMonth}
-            onChange={(e) => setBillingMonth(e.target.value)}
-            className="ml-auto border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-400 bg-white"
-          />
-        </div>
-        {/* サブタブ */}
-        <div className="flex gap-1">
-          {SUB_TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setSubTab(t.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                subTab === t.id
-                  ? "bg-indigo-500 text-white"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+      <div className="bg-white border-b border-gray-200 px-4 py-3 shrink-0 flex items-center gap-3">
+        <CreditCard size={18} className="text-indigo-500" />
+        <span className="font-semibold text-gray-800">請求管理</span>
+        <div className="ml-auto flex items-center gap-1">
+          <button onClick={prevMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={16} /></button>
+          <span className="text-sm font-medium text-gray-700 w-24 text-center">{y}年{m}月</span>
+          <button onClick={nextMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={16} /></button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {(loading || dataLoading) && (
-          <div className="flex justify-center py-8">
-            <Loader2 size={24} className="animate-spin text-indigo-400" />
+          <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-indigo-400" /></div>
+        )}
+
+        {!loading && !dataLoading && (<>
+          {/* ── 利用者一覧テーブル ── */}
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-700">{y}年{m}月 利用者一覧</span>
+              <span className="text-xs text-gray-400">{clientGroups.filter(g => !lateFlags.has(g.client.id)).length}名請求対象</span>
+            </div>
+            {clientGroups.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">{billingMonth}のアクティブレンタル（介護）がありません</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-600">利用者名</th>
+                    <th className="text-right px-3 py-2 text-xs font-medium text-gray-600">単位数</th>
+                    <th className="text-center px-3 py-2 text-xs font-medium text-gray-600">月遅れ</th>
+                    <th className="text-center px-3 py-2 text-xs font-medium text-gray-600">返戻</th>
+                    <th className="text-center px-3 py-2 text-xs font-medium text-gray-600">過誤</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {clientGroups.map(({ client, items }) => {
+                    const isLate = lateFlags.has(client.id);
+                    const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
+                    const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
+                    return (
+                      <tr key={client.id} className={isLate ? "bg-orange-50" : "hover:bg-gray-50"}>
+                        <td className="px-4 py-2.5">
+                          <span className="font-medium text-gray-800">{client.name}</span>
+                          {isLate && <span className="ml-2 text-[10px] bg-orange-100 text-orange-600 font-bold px-1.5 py-0.5 rounded">月遅れ</span>}
+                          <div className="text-[11px] text-gray-400 mt-0.5">
+                            {items.map(i => { const eq = equipment.find(e => e.product_code === i.product_code); return eq?.name ?? i.product_code; }).join(" / ")}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <span className={`font-bold text-sm ${isLate ? "text-gray-300 line-through" : "text-indigo-600"}`}>{totalUnits}</span>
+                          <span className="text-xs text-gray-400 ml-0.5">単位</span>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <button onClick={() => toggleLateFlag(client.id)}
+                            className={`w-6 h-6 rounded border-2 flex items-center justify-center mx-auto transition-colors ${isLate ? "border-orange-400 bg-orange-400 text-white" : "border-gray-300 bg-white hover:border-orange-300"}`}>
+                            {isLate && <span className="text-[10px] font-bold">✓</span>}
+                          </button>
+                        </td>
+                        {(["返戻", "過誤"] as const).map((type) => (
+                          <td key={type} className="px-3 py-2.5 text-center">
+                            <button onClick={() => toggleRebillFlag(client.id, billingMonth, type)}
+                              className={`w-7 h-7 rounded-full border-2 flex items-center justify-center mx-auto text-xs font-bold transition-colors ${
+                                flag?.flag_type === type
+                                  ? "border-red-500 bg-red-500 text-white"
+                                  : "border-gray-300 bg-white text-gray-300 hover:border-red-300"
+                              }`}>
+                              {flag?.flag_type === type ? "○" : ""}
+                            </button>
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
 
-        {/* ── 月遅れ管理 ── */}
-        {subTab === "late" && !loading && !dataLoading && (
-          <>
-            <p className="text-xs text-gray-400">チェックを入れた利用者は当月の請求・伝送データから除外されます。</p>
-            {clientGroups.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-8">
-                {billingMonth}のアクティブレンタル（介護）がありません
-              </p>
-            )}
-            {clientGroups.map(({ client, items }) => {
-              const isLate = lateFlags.has(client.id);
-              const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
-              return (
-                <div
-                  key={client.id}
-                  className={`bg-white rounded-xl p-3 border transition-colors ${
-                    isLate ? "border-orange-200 bg-orange-50" : "border-gray-100"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => toggleLateFlag(client.id)}
-                      className={`w-6 h-6 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
-                        isLate
-                          ? "border-orange-400 bg-orange-400 text-white"
-                          : "border-gray-300 bg-white"
-                      }`}
-                    >
-                      {isLate && <span className="text-xs font-bold">✓</span>}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-sm text-gray-800">{client.name}</span>
-                        {isLate && (
-                          <span className="text-[10px] bg-orange-100 text-orange-600 font-bold px-1.5 py-0.5 rounded">月遅れ</span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-gray-400">{items.length}件・計{totalUnits}単位</p>
-                    </div>
-                    <span className={`text-sm font-bold ${isLate ? "text-orange-400 line-through" : "text-indigo-600"}`}>
-                      {totalUnits}単位
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* ── 単位数管理 ── */}
-        {subTab === "units" && !loading && !dataLoading && (
-          <>
-            <p className="text-xs text-gray-400">単位数 = レンタル料÷10（自動計算）。修正が必要な場合は直接入力してください。</p>
-            {clientGroups.filter((g) => !lateFlags.has(g.client.id)).length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-8">対象利用者がいません</p>
-            )}
-            {clientGroups.filter((g) => !lateFlags.has(g.client.id)).map(({ client, items }) => {
-              const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
-              return (
-                <div key={client.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 border-b border-indigo-100">
-                    <span className="font-semibold text-sm text-indigo-800">{client.name}</span>
-                    <span className="text-xs font-bold text-indigo-600">計 {totalUnits}単位</span>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {items.map((item) => {
-                      const eq = equipment.find((e) => e.product_code === item.product_code);
-                      const autoUnits = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
-                      const units = getUnits(item, client.id);
-                      const isOverridden = unitOverrides.has(item.id);
+          {/* ── 再請求セクション ── */}
+          {rebillByMonth.length > 0 && (
+            <div className="bg-white border border-amber-200 rounded-lg overflow-hidden">
+              <div className="bg-amber-50 border-b border-amber-200 px-3 py-2">
+                <span className="text-xs font-semibold text-amber-700">再請求（前月以前の返戻・過誤） — 今月の伝送データに含まれます</span>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-amber-50 border-b border-amber-100">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-amber-700">利用者名</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-amber-700">対象月</th>
+                    <th className="text-right px-3 py-2 text-xs font-medium text-amber-700">単位数</th>
+                    <th className="text-center px-3 py-2 text-xs font-medium text-amber-700">種別</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-50">
+                  {rebillByMonth.flatMap(([month, entries]) =>
+                    entries.map(({ client, items, flag }) => {
+                      const [ry, rm] = month.split("-").map(Number);
+                      const units = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
                       return (
-                        <div key={item.id} className="flex items-center gap-2 px-3 py-2">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-gray-800 truncate">{eq?.name ?? item.product_code}</p>
-                            <p className="text-[10px] text-gray-400">
-                              ¥{eq?.rental_price?.toLocaleString() ?? "?"}/月 → 自動 {autoUnits}単位
-                              {item.quantity > 1 && ` ×${item.quantity}`}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <input
-                              type="number"
-                              value={units}
-                              onChange={(e) => handleUnitOverride(client.id, item, e.target.value)}
-                              className={`w-16 text-center border rounded-lg px-2 py-1 text-sm outline-none focus:border-indigo-400 ${
-                                isOverridden ? "border-amber-300 bg-amber-50 font-semibold text-amber-700" : "border-gray-200"
-                              }`}
-                            />
-                            <span className="text-xs text-gray-400">単位</span>
-                            {isOverridden && (
-                              <button
-                                onClick={() => handleUnitOverride(client.id, item, "")}
-                                className="text-gray-300 hover:text-red-400"
-                              >
-                                <X size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                        <tr key={`${client.id}-${month}`} className="hover:bg-amber-50">
+                          <td className="px-4 py-2.5 font-medium text-gray-800">{client.name}</td>
+                          <td className="px-3 py-2.5 text-gray-600">{ry}年{rm}月</td>
+                          <td className="px-3 py-2.5 text-right font-bold text-amber-700">{units}<span className="text-xs font-normal ml-0.5">単位</span></td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-600">{flag.flag_type}</span>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button onClick={() => toggleRebillFlag(client.id, month, flag.flag_type as "返戻" | "過誤")}
+                              className="text-xs text-gray-400 hover:text-red-500 border border-gray-200 rounded px-2 py-0.5 hover:border-red-300">
+                              解除
+                            </button>
+                          </td>
+                        </tr>
                       );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* ── 再請求管理 ── */}
-        {subTab === "rebill" && !loading && !dataLoading && (
-          <>
-            <p className="text-xs text-gray-400">返戻・取り下げになった過去月を選択し、利用者にフラグを立てると伝送データに再請求として含まれます。</p>
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">対象月</label>
-              <select
-                value={rebillTargetMonth}
-                onChange={(e) => setRebillTargetMonth(e.target.value)}
-                className="border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-400 bg-white"
-              >
-                {pastMonths.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
-            {rebillClientGroups.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-8">{rebillTargetMonth}のアクティブレンタルがありません</p>
-            )}
-            {rebillClientGroups.map(({ client, items }) => {
-              const key = `${client.id}-${rebillTargetMonth}`;
-              const flag = rebillFlags.get(key);
-              return (
-                <div key={client.id} className={`bg-white rounded-xl border p-3 ${flag ? "border-red-200 bg-red-50" : "border-gray-100"}`}>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-semibold text-sm text-gray-800">{client.name}</span>
-                    <div className="flex gap-1">
-                      {(["返戻", "取り下げ"] as const).map((type) => (
-                        <button
-                          key={type}
-                          onClick={() => toggleRebillFlag(client.id, rebillTargetMonth, type)}
-                          className={`px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
-                            flag?.flag_type === type
-                              ? "bg-red-500 text-white border-red-500"
-                              : "bg-white text-gray-600 border-gray-200 hover:border-red-300"
-                          }`}
-                        >
-                          {type}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-gray-400">{items.map((i) => {
-                    const eq = equipment.find((e) => e.product_code === i.product_code);
-                    return eq?.name ?? i.product_code;
-                  }).join(" / ")}</p>
-                </div>
-              );
-            })}
-          </>
-        )}
+          )}
 
-        {/* ── 伝送データ作成 ── */}
-        {subTab === "export" && !loading && !dataLoading && (
-          <>
-            <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3">
-              <h3 className="font-semibold text-sm text-gray-800">伝送データ作成</h3>
-              <div className="space-y-1">
-                <p className="text-xs text-gray-500">対象月：<span className="font-semibold text-gray-800">{billingMonth}</span></p>
-                <p className="text-xs text-gray-500">
-                  請求対象：<span className="font-semibold text-gray-800">
-                    {clientGroups.filter((g) => !lateFlags.has(g.client.id)).length}名
-                  </span>
-                  （月遅れ除外：{lateFlags.size}名）
-                </p>
-                {rebillFlags.size > 0 && (
-                  <p className="text-xs text-amber-600">
-                    <AlertTriangle size={11} className="inline mr-1" />
-                    再請求あり：{rebillFlags.size}件
-                  </p>
-                )}
+          {/* ── 伝送データ出力 ── */}
+          <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800">伝送データ出力</h3>
+              <div className="text-xs text-gray-400 space-x-3">
+                <span>請求：{clientGroups.filter(g => !lateFlags.has(g.client.id)).length}名</span>
+                {rebillByMonth.length > 0 && <span className="text-amber-600">再請求：{rebillByMonth.reduce((s, [, e]) => s + e.length, 0)}件</span>}
               </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500 space-y-1">
-                <p>・ファイル形式：CSV（国保連インタフェース仕様 様式第二の三）</p>
-                <p>・サービス種類：17（福祉用具貸与）</p>
-                <p>・TAISコードをサービスコードとして使用</p>
-                <p className="text-amber-600">※ 被保険者証情報（保険者番号等）は別途ほのぼので補完してください</p>
-              </div>
-              <button
-                onClick={generateTransferData}
-                className="w-full bg-indigo-500 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 hover:bg-indigo-600"
-              >
-                <Download size={16} />
-                CSVダウンロード（FKYUFU{billingMonth.replace("-", "")}.csv）
-              </button>
             </div>
-          </>
-        )}
+            <p className="text-[11px] text-amber-600">※ 被保険者証情報（保険者番号等）は別途ほのぼので補完してください</p>
+            <button onClick={generateTransferData}
+              className="w-full bg-indigo-500 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 hover:bg-indigo-600">
+              <Download size={16} />
+              CSVダウンロード（FKYUFU{billingMonth.replace("-", "")}.csv）
+            </button>
+          </div>
+        </>)}
       </div>
     </div>
   );
