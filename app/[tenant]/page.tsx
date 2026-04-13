@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, useCallback, Fragment, useRef, useMemo } from "react";
+import { useState, useEffect, use, useCallback, Fragment, useRef, useMemo, useTransition, memo } from "react";
 import {
   Package,
   ClipboardList,
@@ -4358,6 +4358,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const [showRentalGridView, setShowRentalGridView] = useState(false);
   const [gridSelectedClient, setGridSelectedClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [gridKanaFilter, setGridKanaFilter] = useState<string | null>(null);
+  const [isGridPending, startGridTransition] = useTransition();
   const billingTarget = clientGroups.filter(g => !autoLateClients.has(g.client.id));
   const totalUnitsAll = billingTarget.reduce((s, { client, items }) => s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
 
@@ -4459,7 +4460,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
               {gridFilteredGroups.map(({ client, items }) => (
                 <button
                   key={client.id}
-                  onClick={() => setGridSelectedClient({ client, items })}
+                  onClick={() => startGridTransition(() => setGridSelectedClient({ client, items }))}
                   className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-100 transition-colors ${
                     gridSelectedClient?.client.id === client.id
                       ? "bg-blue-100 text-blue-800 font-semibold"
@@ -4470,7 +4471,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
             </div>
           </div>
           {/* 右：グリッド */}
-          <div className="flex-1 overflow-auto">
+          <div className={`flex-1 overflow-auto transition-opacity duration-100 ${isGridPending ? "opacity-40 pointer-events-none" : "opacity-100"}`}>
             {gridSelectedClient ? (
               <RentalGridPanel
                 client={gridSelectedClient.client}
@@ -4917,7 +4918,7 @@ function RentalGridModal({
 
 // ─── RentalGridPanel (inline, no modal wrapper) ───────────────────────────────
 
-function RentalGridPanel({
+const RentalGridPanel = memo(function RentalGridPanel({
   client, items, equipment, hospitalizations, month,
 }: {
   client: Client;
@@ -5094,7 +5095,7 @@ function RentalGridPanel({
       </div>
     </div>
   );
-}
+});
 
 // ─── New Order Modal ─────────────────────────────────────────────────────────
 
