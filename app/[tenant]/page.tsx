@@ -2911,9 +2911,24 @@ function ClientDetail({
   const [basicSaving, setBasicSaving] = useState(false);
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  const [selectedInsuranceId, setSelectedInsuranceId] = useState<string | null>(null);
   const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
   const [editingInsuranceId, setEditingInsuranceId] = useState<string | null>(null);
   const [insuranceSaving, setInsuranceSaving] = useState(false);
+
+  const emptyInsuranceForm = (): Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> => ({
+    effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null,
+    certification_start_date: null, certification_end_date: null, insurer_name: null, insurer_number: null,
+    copay_rate: null, public_expense: null, care_manager: client.care_manager ?? null, care_manager_org: client.care_manager_org ?? null, notes: null,
+    issued_date: null, insurance_confirmed_date: null, qualification_date: null,
+    insurance_valid_start: null, insurance_valid_end: null,
+    certification_date: null, certification_status: "認定済み",
+    service_limit_period_start: null, service_limit_period_end: null, service_limit_amount: null,
+    service_memo: null, service_restriction: "なし",
+    benefit_type: null, benefit_content: null, benefit_rate: null,
+    benefit_period_start: null, benefit_period_end: null,
+    support_office_date: null, record_status: "認定済み",
+  });
   // レンタル履歴（手動登録）
   const [rentalHistoryRecords, setRentalHistoryRecords] = useState<ClientRentalHistory[]>([]);
   const [rentalHistoryForm, setRentalHistoryForm] = useState<Omit<ClientRentalHistory, "id" | "tenant_id" | "client_id" | "source" | "created_at"> | null>(null);
@@ -3590,185 +3605,251 @@ function ClientDetail({
           )}
         </div>
       ) : topTab === "insurance" ? (
-        /* 介護保険タブ - 複数レコード管理 */
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* 事業所情報（テナント設定から参照） */}
-          <section>
-            <h3 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
-              事業所情報
-              <span className="text-[10px] text-gray-400 font-normal">（設定タブで変更）</span>
-            </h3>
-            <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
-              {[
-                ["事業所番号", companyInfo.businessNumber],
-                ["事業所名", companyInfo.companyName],
-                ["所在地", companyInfo.companyAddress],
-                ["連絡先", companyInfo.tel],
-              ].map(([label, value]) => (
-                <div key={label} className="flex gap-2 text-xs">
-                  <span className="w-24 shrink-0 text-gray-500">{label}</span>
-                  <span className="text-gray-800">{value || "—"}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* 利用者情報 */}
-          <section>
-            <h3 className="text-xs font-semibold text-gray-500 mb-2">利用者情報</h3>
-            <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
-              {[
-                ["氏名", client.name],
-                ["フリガナ", client.furigana],
-                ["性別", client.gender],
-                ["生年月日", insuranceRecords[0]?.birth_date ?? null],
-                ["住所", client.address],
-                ["電話番号", client.phone ?? client.mobile],
-              ].map(([label, value]) => (
-                <div key={label} className="flex gap-2 text-xs">
-                  <span className="w-24 shrink-0 text-gray-500">{label}</span>
-                  <span className="text-gray-800">{value || "—"}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* 保険情報一覧 */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-gray-500">保険情報</h3>
-              {!insuranceForm && (
-                <button
-                  onClick={() => {
-                    setEditingInsuranceId(null);
-                    setInsuranceForm({ effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null, certification_start_date: null, certification_end_date: null, insurer_name: null, insurer_number: null, copay_rate: null, public_expense: null, care_manager: null, care_manager_org: null, notes: null });
-                  }}
-                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
-                >
-                  ＋ 新規追加
-                </button>
-              )}
-            </div>
-
-            {/* 編集フォーム */}
-            {insuranceForm && (
-              <div className="bg-emerald-50 rounded-xl p-4 mb-3 space-y-2.5">
-                <p className="text-xs font-semibold text-emerald-700">{editingInsuranceId ? "保険情報を編集" : "保険情報を追加"}</p>
-                {([
-                  { label: "有効期間開始日", key: "effective_date", type: "date" },
-                  { label: "被保険者番号", key: "insured_number" },
-                  { label: "生年月日", key: "birth_date", type: "date" },
-                  { label: "保険者番号", key: "insurer_number" },
-                ] as { label: string; key: keyof typeof insuranceForm; type?: string }[]).map(({ label, key, type }) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="w-28 shrink-0 text-xs text-gray-500">{label}</span>
-                    <input type={type ?? "text"} value={(insuranceForm[key] as string) ?? ""}
-                      onChange={(e) => setInsuranceForm((f) => f && { ...f, [key]: e.target.value || null })}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
-                  </div>
-                ))}
-                <div className="flex items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-gray-500">要介護度</span>
-                  <select value={insuranceForm.care_level ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, care_level: e.target.value || null })}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
-                    <option value="">未設定</option>
-                    {["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"].map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                </div>
-                {([
-                  { label: "認定開始日", key: "certification_start_date" },
-                  { label: "認定終了日", key: "certification_end_date" },
-                ] as { label: string; key: keyof typeof insuranceForm }[]).map(({ label, key }) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="w-28 shrink-0 text-xs text-gray-500">{label}</span>
-                    <input type="date" value={(insuranceForm[key] as string) ?? ""}
-                      onChange={(e) => setInsuranceForm((f) => f && { ...f, [key]: e.target.value || null })}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
-                  </div>
-                ))}
-                <div className="flex items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-gray-500">利用者負担割合</span>
-                  <select value={insuranceForm.copay_rate ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, copay_rate: e.target.value || null })}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white">
-                    <option value="">未設定</option>
-                    {["1割","2割","3割"].map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">公費負担情報</span>
-                  <textarea value={insuranceForm.public_expense ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, public_expense: e.target.value || null })} rows={2}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="w-28 shrink-0 text-xs text-gray-500 pt-0.5">メモ</span>
-                  <textarea value={insuranceForm.notes ?? ""} onChange={(e) => setInsuranceForm((f) => f && { ...f, notes: e.target.value || null })} rows={2}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
-                </div>
-                <div className="flex gap-2 justify-end pt-1">
-                  <button onClick={() => { setInsuranceForm(null); setEditingInsuranceId(null); }}
-                    className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-white">
-                    キャンセル
-                  </button>
-                  <button onClick={handleSaveInsuranceRecord} disabled={insuranceSaving}
-                    className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">
-                    {insuranceSaving ? "保存中..." : "保存"}
-                  </button>
-                </div>
+        /* 介護保険タブ */
+        (() => {
+          const selRec = insuranceRecords.find(r => r.id === selectedInsuranceId) ?? insuranceRecords[0] ?? null;
+          const F = insuranceForm;
+          const fv = (key: string) => F ? ((F as Record<string, unknown>)[key] as string) ?? "" : "";
+          const sf = (key: string, val: string) => setInsuranceForm(f => f ? { ...f, [key]: val || null } : f);
+          const CARE_LEVELS = ["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"];
+          return (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* 履歴一覧テーブル */}
+            <div className="shrink-0 border-b border-gray-200 overflow-x-auto">
+              <div className="flex items-center justify-between px-4 pt-3 pb-1">
+                <span className="text-xs font-semibold text-gray-700">介護認定 履歴一覧</span>
               </div>
-            )}
-
-            {/* レコード一覧 */}
-            {insuranceRecords.length === 0 && !insuranceForm ? (
-              <p className="text-sm text-gray-400 text-center py-6">保険情報がありません</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[700px]">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">被保険者番号</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">要介護度</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">認定開始日</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">認定終了日</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">負担割合</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">保険者</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">居宅事業所</th>
-                      <th className="text-left px-2 py-2 font-medium text-gray-500">ケアマネ</th>
-                      <th className="px-2 py-2 w-16"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {insuranceRecords.map((rec, idx) => (
-                      <tr key={rec.id} className={idx === 0 ? "bg-emerald-50" : "bg-white"}>
-                        <td className="px-2 py-2">
-                          <div className="flex items-center gap-1.5">
-                            {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">現在</span>}
-                            <span className="text-gray-700 tabular-nums">{rec.insured_number ?? <span className="text-gray-300">—</span>}</span>
-                          </div>
+              <table className="w-full text-xs min-w-[700px]">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {["保険者","被保険者番号","保険有効期間","要介護度","認定年月日","認定有効期間",""].map(h => (
+                      <th key={h} className="text-left px-3 py-2 font-medium text-gray-500 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {insuranceRecords.length === 0 ? (
+                    <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">保険情報がありません</td></tr>
+                  ) : insuranceRecords.map((rec, idx) => {
+                    const isSelected = (selectedInsuranceId ? rec.id === selectedInsuranceId : idx === 0) && !insuranceForm;
+                    const careColor = rec.care_level?.includes("支援") ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700";
+                    return (
+                      <tr key={rec.id}
+                        onClick={() => { if (!insuranceForm) { setSelectedInsuranceId(rec.id); } }}
+                        className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50 border-l-2 border-blue-500" : "hover:bg-gray-50"}`}>
+                        <td className="px-3 py-2 text-gray-700">{rec.insurer_number ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 tabular-nums text-gray-700">{rec.insured_number ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-600">
+                          {rec.insurance_valid_start && rec.insurance_valid_end
+                            ? `${rec.insurance_valid_start} 〜 ${rec.insurance_valid_end}`
+                            : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-2 py-2 text-gray-700">{rec.care_level ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.certification_start_date ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.certification_end_date ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.copay_rate ? `${rec.copay_rate}%` : <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.insurer_name ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.care_manager_org ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2 text-gray-700">{rec.care_manager ?? <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-2">
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => { setEditingInsuranceId(rec.id); setInsuranceForm({ effective_date: rec.effective_date, insured_number: rec.insured_number, birth_date: rec.birth_date, care_level: rec.care_level, certification_start_date: rec.certification_start_date, certification_end_date: rec.certification_end_date, insurer_name: rec.insurer_name, insurer_number: rec.insurer_number, copay_rate: rec.copay_rate, public_expense: rec.public_expense, care_manager: rec.care_manager, care_manager_org: rec.care_manager_org, notes: rec.notes }); }}
-                              className="text-gray-400 hover:text-gray-600"
-                            >編集</button>
-                            <button onClick={() => handleDeleteInsuranceRecord(rec.id)} className="text-red-300 hover:text-red-500">削除</button>
-                          </div>
+                        <td className="px-3 py-2">
+                          {rec.care_level
+                            ? <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${careColor}`}>{rec.care_level}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">{rec.certification_date ?? <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-600">
+                          {rec.certification_start_date && rec.certification_end_date
+                            ? `${rec.certification_start_date} 〜 ${rec.certification_end_date}`
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteInsuranceRecord(rec.id); }} className="text-red-300 hover:text-red-500">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 詳細フォーム */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 bg-white sticky top-0">
+                <span className="text-xs font-semibold text-gray-700">介護認定 詳細</span>
+                <div className="flex gap-2">
+                  {insuranceForm ? (
+                    <>
+                      <button onClick={() => { setInsuranceForm(null); setEditingInsuranceId(null); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50">キャンセル</button>
+                      <button onClick={handleSaveInsuranceRecord} disabled={insuranceSaving} className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">{insuranceSaving ? "保存中…" : "保存"}</button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setEditingInsuranceId(null); setInsuranceForm(emptyInsuranceForm()); }}
+                        className="flex items-center gap-1 text-xs text-blue-600 border border-blue-300 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100">
+                        保険変更
+                      </button>
+                      <button
+                        onClick={() => {
+                          const base = selRec ? { ...emptyInsuranceForm(), insured_number: selRec.insured_number, insurer_number: selRec.insurer_number, insurer_name: selRec.insurer_name, copay_rate: selRec.copay_rate, benefit_rate: selRec.benefit_rate } : emptyInsuranceForm();
+                          setEditingInsuranceId(null); setInsuranceForm(base);
+                        }}
+                        className="flex items-center gap-1 text-xs text-white bg-emerald-500 border border-emerald-500 px-3 py-1.5 rounded-lg hover:bg-emerald-600">
+                        認定更新
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            )}
-          </section>
-        </div>
+
+              {/* 3カラムフォーム */}
+              <div className="grid grid-cols-3 gap-0 divide-x divide-gray-100 px-0">
+                {/* 左列: 保険証情報 */}
+                <div className="p-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-3">保険証情報</p>
+                  {[
+                    ["被保険者番号","insured_number"],
+                    ["交付年月日","issued_date"],
+                    ["保険者番号","insurer_number"],
+                    ["保険者名","insurer_name"],
+                  ].map(([label, key]) => (
+                    <div key={key} className="space-y-1">
+                      <label className="text-[11px] text-gray-500">{label}</label>
+                      {insuranceForm
+                        ? <input type="text" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                    </div>
+                  ))}
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">給付率（%）</label>
+                    {insuranceForm
+                      ? <input type="text" value={fv("benefit_rate")} onChange={e => sf("benefit_rate", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.benefit_rate || selRec?.copay_rate || "—"}</div>}
+                  </div>
+                  {[
+                    ["保険証確認日","insurance_confirmed_date"],
+                    ["資格取得日","qualification_date"],
+                  ].map(([label, key]) => (
+                    <div key={key} className="space-y-1">
+                      <label className="text-[11px] text-gray-500">{label}</label>
+                      {insuranceForm
+                        ? <input type="date" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                    </div>
+                  ))}
+                  <div className="space-y-1">
+                    <div className="bg-amber-100 text-amber-700 text-[11px] font-medium px-2 py-1 rounded">保険証有効期間</div>
+                    <div className="flex items-center gap-1">
+                      {insuranceForm
+                        ? <><input type="date" value={fv("insurance_valid_start")} onChange={e => sf("insurance_valid_start", e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /><span className="text-gray-400 text-xs">〜</span><input type="date" value={fv("insurance_valid_end")} onChange={e => sf("insurance_valid_end", e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /></>
+                        : <div className="text-sm text-gray-800 px-2.5 py-1.5">{selRec?.insurance_valid_start && selRec?.insurance_valid_end ? `${selRec.insurance_valid_start} 〜 ${selRec.insurance_valid_end}` : "—"}</div>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 中列: 認定情報 */}
+                <div className="p-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-3">認定情報</p>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">要介護状態等</label>
+                    <div className="flex gap-4">
+                      {["認定済み","申請中"].map(v => (
+                        <label key={v} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                          <input type="radio" value={v} checked={(insuranceForm ? fv("certification_status") : selRec?.certification_status) === v || (!insuranceForm && !selRec?.certification_status && v === "認定済み")} onChange={() => insuranceForm && sf("certification_status", v)} disabled={!insuranceForm} className="accent-blue-500" />
+                          {v}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">介護度</label>
+                    {insuranceForm
+                      ? <select value={fv("care_level")} onChange={e => sf("care_level", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white"><option value="">未設定</option>{CARE_LEVELS.map(v => <option key={v} value={v}>{v}</option>)}</select>
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.care_level || "—"}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">認定年月日</label>
+                    {insuranceForm
+                      ? <input type="date" value={fv("certification_date")} onChange={e => sf("certification_date", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.certification_date || "—"}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="bg-amber-100 text-amber-700 text-[11px] font-medium px-2 py-1 rounded">認定有効期間</div>
+                    <div className="flex items-center gap-1">
+                      {insuranceForm
+                        ? <><input type="date" value={fv("certification_start_date")} onChange={e => sf("certification_start_date", e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /><span className="text-gray-400 text-xs">〜</span><input type="date" value={fv("certification_end_date")} onChange={e => sf("certification_end_date", e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /></>
+                        : <div className="text-sm text-gray-800 px-2.5 py-1.5">{selRec?.certification_start_date && selRec?.certification_end_date ? `${selRec.certification_start_date} 〜 ${selRec.certification_end_date}` : "—"}</div>}
+                    </div>
+                  </div>
+                  <div className="border border-gray-200 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] font-semibold text-gray-600">居宅サービス区分</p>
+                    <div className="space-y-1">
+                      <div className="bg-amber-100 text-amber-700 text-[11px] font-medium px-2 py-1 rounded">適用期間</div>
+                      <div className="flex items-center gap-1">
+                        {insuranceForm
+                          ? <><input type="date" value={fv("service_limit_period_start")} onChange={e => sf("service_limit_period_start", e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /><span className="text-gray-400 text-xs">〜</span><input type="date" value={fv("service_limit_period_end")} onChange={e => sf("service_limit_period_end", e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /></>
+                          : <div className="text-sm text-gray-800">{selRec?.service_limit_period_start && selRec?.service_limit_period_end ? `${selRec.service_limit_period_start} 〜 ${selRec.service_limit_period_end}` : "—"}</div>}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] text-gray-500">区分支給限度額（円）</label>
+                      {insuranceForm
+                        ? <input type="number" value={F?.service_limit_amount ?? ""} onChange={e => setInsuranceForm(f => f ? {...f, service_limit_amount: e.target.value ? Number(e.target.value) : null} : f)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                        : <div className="text-sm text-gray-800">{selRec?.service_limit_amount?.toLocaleString() || "—"}</div>}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">留意事項</label>
+                    {insuranceForm
+                      ? <textarea value={fv("service_memo")} onChange={e => sf("service_memo", e.target.value)} rows={3} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 resize-none" />
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5 min-h-[60px]">{selRec?.service_memo || "—"}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">サービス限定</label>
+                    {insuranceForm
+                      ? <select value={fv("service_restriction")} onChange={e => sf("service_restriction", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white"><option value="なし">なし</option><option value="あり">あり</option></select>
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.service_restriction || "なし"}</div>}
+                  </div>
+                </div>
+
+                {/* 右列: 介護保険負担割合証・給付制限等 */}
+                <div className="p-4 space-y-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-3">介護保険負担割合証・給付制限等</p>
+                  {[["給付種類","benefit_type"],["内容","benefit_content"],["給付率（%）","benefit_rate"]].map(([label, key]) => (
+                    <div key={key} className="space-y-1">
+                      <label className="text-[11px] text-gray-500">{label}</label>
+                      {insuranceForm
+                        ? <input type="text" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                    </div>
+                  ))}
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">期間</label>
+                    <div className="flex items-center gap-1">
+                      {insuranceForm
+                        ? <><input type="date" value={fv("benefit_period_start")} onChange={e => sf("benefit_period_start", e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /><span className="text-gray-400 text-xs">〜</span><input type="date" value={fv("benefit_period_end")} onChange={e => sf("benefit_period_end", e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400" /></>
+                        : <div className="text-sm text-gray-800 px-2.5 py-1.5">{selRec?.benefit_period_start && selRec?.benefit_period_end ? `${selRec.benefit_period_start} 〜 ${selRec.benefit_period_end}` : "—"}</div>}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">支援事業所届出日</label>
+                    {insuranceForm
+                      ? <input type="date" value={fv("support_office_date")} onChange={e => sf("support_office_date", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.support_office_date || "—"}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">担当ケアマネージャー</label>
+                    {insuranceForm
+                      ? <input type="text" value={fv("care_manager")} onChange={e => sf("care_manager", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.care_manager || "—"}</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">ステータス</label>
+                    {insuranceForm
+                      ? <select value={fv("record_status")} onChange={e => sf("record_status", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white"><option value="認定済み">認定済み</option><option value="申請中">申請中</option><option value="暫定">暫定</option></select>
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.record_status || "認定済み"}</div>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          );
+        })()
       ) : viewMode === "rental_history" ? (
         /* レンタル履歴タブ */
         <div className="flex-1 overflow-y-auto p-4 space-y-4">

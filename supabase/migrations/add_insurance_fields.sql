@@ -1,0 +1,21 @@
+-- 保険情報テーブルに新規フィールド追加
+ALTER TABLE client_insurance_records
+  ADD COLUMN IF NOT EXISTS issued_date DATE,
+  ADD COLUMN IF NOT EXISTS insurance_confirmed_date DATE,
+  ADD COLUMN IF NOT EXISTS qualification_date DATE,
+  ADD COLUMN IF NOT EXISTS insurance_valid_start DATE,
+  ADD COLUMN IF NOT EXISTS insurance_valid_end DATE,
+  ADD COLUMN IF NOT EXISTS certification_date DATE,
+  ADD COLUMN IF NOT EXISTS certification_status TEXT DEFAULT '認定済み',
+  ADD COLUMN IF NOT EXISTS service_limit_period_start DATE,
+  ADD COLUMN IF NOT EXISTS service_limit_period_end DATE,
+  ADD COLUMN IF NOT EXISTS service_limit_amount INTEGER,
+  ADD COLUMN IF NOT EXISTS service_memo TEXT,
+  ADD COLUMN IF NOT EXISTS service_restriction TEXT DEFAULT 'なし',
+  ADD COLUMN IF NOT EXISTS benefit_type TEXT,
+  ADD COLUMN IF NOT EXISTS benefit_content TEXT,
+  ADD COLUMN IF NOT EXISTS benefit_rate TEXT,
+  ADD COLUMN IF NOT EXISTS benefit_period_start DATE,
+  ADD COLUMN IF NOT EXISTS benefit_period_end DATE,
+  ADD COLUMN IF NOT EXISTS support_office_date DATE,
+  ADD COLUMN IF NOT EXISTS record_status TEXT DEFAULT '認定済み';

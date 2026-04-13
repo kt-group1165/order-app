@@ -43,6 +43,26 @@ export type ClientInsuranceRecord = {
   care_manager: string | null;
   care_manager_org: string | null;
   notes: string | null;
+  // 追加フィールド
+  issued_date: string | null;
+  insurance_confirmed_date: string | null;
+  qualification_date: string | null;
+  insurance_valid_start: string | null;
+  insurance_valid_end: string | null;
+  certification_date: string | null;
+  certification_status: string | null;
+  service_limit_period_start: string | null;
+  service_limit_period_end: string | null;
+  service_limit_amount: number | null;
+  service_memo: string | null;
+  service_restriction: string | null;
+  benefit_type: string | null;
+  benefit_content: string | null;
+  benefit_rate: string | null;
+  benefit_period_start: string | null;
+  benefit_period_end: string | null;
+  support_office_date: string | null;
+  record_status: string | null;
   created_at: string;
 };
 
