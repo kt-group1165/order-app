@@ -4363,6 +4363,11 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
         </div>
         <span className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 font-medium">請求分</span>
+        <button
+          onClick={() => detailClient && setRentalGridClient(detailClient)}
+          className={`border rounded px-2.5 py-1 font-medium transition-colors ${detailClient ? "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-gray-300 bg-gray-50 text-gray-300 cursor-not-allowed"}`}
+          title={detailClient ? `${detailClient.client.name}の提供表を開く` : "利用者を選択してください"}
+        >提供表</button>
         <div className="w-px h-5 bg-gray-300 mx-1" />
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">明細書</button>
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">請求書</button>
