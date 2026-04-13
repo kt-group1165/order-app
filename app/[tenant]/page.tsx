@@ -2482,41 +2482,60 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
       )}
 
       {/* 入院中一覧モーダル */}
-      {hospDateDialog && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-6">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-5">
-            <p className="text-sm font-semibold text-gray-800 mb-1">
-              {hospDateDialog.client.name}
-            </p>
-            <p className="text-xs text-gray-500 mb-4">
-              {hospDateDialog.mode === "admit" ? "入院日を入力してください" : "退院日を入力してください"}
-            </p>
-            <input
-              type="date"
-              value={hospDateInput}
-              onChange={e => setHospDateInput(e.target.value)}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 mb-4 focus:outline-none focus:ring-2 focus:ring-emerald-300"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={() => setHospDateDialog(null)}
-                className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors"
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={confirmHospDate}
-                disabled={!hospDateInput}
-                className={`flex-1 py-2 rounded-xl text-sm font-medium text-white transition-colors disabled:opacity-50 ${
-                  hospDateDialog.mode === "admit" ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"
-                }`}
-              >
-                {hospDateDialog.mode === "admit" ? "入院登録" : "退院登録"}
-              </button>
+      {hospDateDialog && (() => {
+        const day = hospDateInput ? parseInt(hospDateInput.split("-")[2]) : null;
+        // 入院：16日以降 → その月は前半分のみ（半月請求）
+        // 退院：15日以前 → その月は後半分のみ（半月請求）
+        const isFirstHalf = day !== null && day <= 15;
+        const isHalfBilling =
+          hospDateDialog.mode === "admit" ? !isFirstHalf   // 入院が後半→半月
+          : isFirstHalf;                                    // 退院が前半→半月
+        const halfLabel = isFirstHalf ? "前半（1〜15日）" : "後半（16日〜月末）";
+        const billingLabel = isHalfBilling ? "半月分の請求" : "1か月分の請求";
+        const billingColor = isHalfBilling ? "text-amber-600 bg-amber-50" : "text-emerald-700 bg-emerald-50";
+
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-6">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-5">
+              <p className="text-sm font-semibold text-gray-800 mb-1">
+                {hospDateDialog.client.name}
+              </p>
+              <p className="text-xs text-gray-500 mb-3">
+                {hospDateDialog.mode === "admit" ? "入院日を入力してください" : "退院日を入力してください"}
+              </p>
+              <input
+                type="date"
+                value={hospDateInput}
+                onChange={e => setHospDateInput(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 mb-3 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+              {day !== null && (
+                <div className={`rounded-xl px-3 py-2 mb-4 flex items-center justify-between ${billingColor}`}>
+                  <span className="text-xs font-medium">{halfLabel}</span>
+                  <span className="text-xs font-bold">{billingLabel}</span>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setHospDateDialog(null)}
+                  className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={confirmHospDate}
+                  disabled={!hospDateInput}
+                  className={`flex-1 py-2 rounded-xl text-sm font-medium text-white transition-colors disabled:opacity-50 ${
+                    hospDateDialog.mode === "admit" ? "bg-red-500 hover:bg-red-600" : "bg-emerald-500 hover:bg-emerald-600"
+                  }`}
+                >
+                  {hospDateDialog.mode === "admit" ? "入院登録" : "退院登録"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {showJissekiModal && (() => {
         const [jYear, jMonth] = jissekiMonth.split("-").map(Number);
