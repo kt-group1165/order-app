@@ -4153,7 +4153,36 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const getUnits = (item: OrderItem, clientId: string) => {
     if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
     const eq = equipment.find((e) => e.product_code === item.product_code);
-    return eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    // 入院による半月判定
+    const [y, m] = billingMonth.split("-").map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0, 23, 59, 59);
+    const clientHosp = hospitalizations.filter(h => h.client_id === clientId);
+    // 貸与期間のうち入院でない日をカウント
+    const rentalStart = item.rental_start_date ? new Date(item.rental_start_date) : null;
+    const rentalEnd = item.rental_end_date ? new Date(item.rental_end_date) : monthEnd;
+    if (!rentalStart) return base;
+    let billingDays = 0, firstHalf = false, secondHalf = false;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(y, m - 1, d);
+      if (date < rentalStart || date > rentalEnd) continue;
+      const inHosp = clientHosp.some(h => {
+        const admit = new Date(h.admission_date);
+        const discharge = h.discharge_date ? new Date(h.discharge_date) : monthEnd;
+        return date >= admit && date <= discharge;
+      });
+      if (!inHosp) {
+        billingDays++;
+        if (d <= 15) firstHalf = true; else secondHalf = true;
+      }
+    }
+    if (billingDays === 0) return 0;
+    // 前半か後半のみ → 半月分
+    if (firstHalf && !secondHalf) return Math.round(base / 2);
+    if (secondHalf && !firstHalf) return Math.round(base / 2);
+    return base;
   };
 
   const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
