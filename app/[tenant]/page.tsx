@@ -1919,6 +1919,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   const [jissekiCmOrg, setJissekiCmOrg] = useState<string>("__ALL__");
   const [jissekiRentals, setJissekiRentals] = useState<ClientRentalHistory[]>([]);
   const [jissekiLoading, setJissekiLoading] = useState(false);
+  const [jissekiPreview, setJissekiPreview] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -2616,6 +2617,116 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           .map(c => ({ client: c, rentals: rentalByClient.get(c.id) ?? [] as JissekiRow[] }))
           .filter(r => r.rentals.length > 0);
 
+        // 各利用者カードの共通レンダラー
+        const renderClientCard = (client: Client, rentals: JissekiRow[], preview: boolean) => {
+          const isHosp = hospInMonth.has(client.id);
+          const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
+          const totalTani = Math.round(totalPrice / 10);
+          const benefitRate = client.benefit_rate ? parseInt(client.benefit_rate) : null;
+          const copayRate = benefitRate !== null ? 100 - benefitRate : null;
+          const copayAmount = copayRate !== null ? Math.ceil(totalPrice * copayRate / 100) : null;
+
+          return (
+            <div key={client.id} className={preview
+              ? "mb-6 break-inside-avoid"
+              : "border border-gray-200 rounded-xl overflow-hidden"
+            }>
+              {/* 利用者ヘッダー */}
+              <div className={`px-3 py-1.5 flex items-center gap-3 ${preview ? "border-b border-gray-300" : (isHosp ? "bg-red-50" : "bg-gray-50")}`}>
+                <span className={`${preview ? "text-sm font-bold" : "text-sm font-bold"} ${isHosp ? "text-red-700" : "text-gray-800"}`}>
+                  {client.name}
+                  {isHosp && <span className="ml-2 text-xs font-normal text-red-500">（入院中）</span>}
+                </span>
+                {!preview && <><span className="text-xs text-gray-500">{client.care_manager_org}</span><span className="text-xs text-gray-400">{client.care_manager}</span></>}
+                {benefitRate !== null && (
+                  <span className={`text-xs text-gray-500 ${preview ? "" : "ml-auto"}`}>給付率 {benefitRate}%　自己負担 {copayRate}%</span>
+                )}
+              </div>
+              {/* 用具テーブル */}
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className={preview ? "bg-gray-100" : "bg-blue-50 text-blue-800"}>
+                    <th className="text-left px-2 py-1 font-medium border border-gray-300 w-[90px]">コード</th>
+                    <th className="text-left px-2 py-1 font-medium border border-gray-300">サービス項目名</th>
+                    <th className="text-left px-2 py-1 font-medium border border-gray-300">レンタル商品名</th>
+                    <th className="text-right px-2 py-1 font-medium border border-gray-300 w-[60px]">単位数</th>
+                    <th className="text-right px-2 py-1 font-medium border border-gray-300 w-[70px]">金額</th>
+                    <th className="text-left px-2 py-1 font-medium border border-gray-300 w-[100px]">備考</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rentals.map((r, ri) => {
+                    const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
+                    return (
+                      <tr key={ri}>
+                        <td className="px-2 py-1 border border-gray-300 font-mono">{r.code}</td>
+                        <td className="px-2 py-1 border border-gray-300">{r.category}</td>
+                        <td className="px-2 py-1 border border-gray-300">{r.equipName}</td>
+                        <td className="px-2 py-1 border border-gray-300 text-right">{tani !== null ? tani.toLocaleString() : "−"}</td>
+                        <td className="px-2 py-1 border border-gray-300 text-right">{r.monthlyPrice !== null ? `¥${r.monthlyPrice.toLocaleString()}` : "−"}</td>
+                        <td className="px-2 py-1 border border-gray-300 text-gray-500">{r.modelNumber ?? ""}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className={preview ? "bg-gray-50 font-medium" : "bg-gray-50 font-medium"}>
+                    <td colSpan={3} className="px-2 py-1 border border-gray-300 text-right text-gray-600">合計</td>
+                    <td className="px-2 py-1 border border-gray-300 text-right font-bold">{totalTani.toLocaleString()} 単位</td>
+                    <td className="px-2 py-1 border border-gray-300 text-right font-bold">¥{totalPrice.toLocaleString()}</td>
+                    <td className="px-2 py-1 border border-gray-300 text-right">
+                      {copayAmount !== null && <span className="text-blue-700">自己負担 ¥{copayAmount.toLocaleString()}</span>}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          );
+        };
+
+        // ── プレビュー画面 ──────────────────────────────────────────
+        if (jissekiPreview) {
+          return (
+            <div className="fixed inset-0 bg-gray-300 z-50 flex flex-col">
+              {/* プレビューツールバー */}
+              <div className="bg-gray-800 text-white px-4 py-2 flex items-center gap-3 shrink-0 print:hidden">
+                <button
+                  onClick={() => setJissekiPreview(false)}
+                  className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors"
+                >
+                  <ChevronLeft size={16} />
+                  戻る
+                </button>
+                <span className="text-sm font-medium flex-1">{reiwaLabel}　{jissekiCmOrg !== "__ALL__" ? jissekiCmOrg : "全事業所"}　{jissekiRows.length}名</span>
+                <button
+                  onClick={() => window.print()}
+                  className="px-4 py-1.5 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-400 transition-colors"
+                >
+                  印刷
+                </button>
+              </div>
+              {/* A4用紙風プレビュー */}
+              <div className="flex-1 overflow-y-auto py-6 flex flex-col items-center print:py-0 print:block">
+                <div className="bg-white shadow-xl w-[210mm] min-h-[297mm] px-10 py-10 print:shadow-none print:w-full print:px-8 print:py-6">
+                  {/* 文書タイトル */}
+                  <div className="text-center mb-6">
+                    <h1 className="text-xl font-bold tracking-wide">サービス利用実績表</h1>
+                    <p className="text-sm mt-1 text-gray-600">
+                      {reiwaLabel}
+                      {jissekiCmOrg !== "__ALL__" && `　${jissekiCmOrg}`}
+                    </p>
+                  </div>
+                  {/* 利用者カード一覧 */}
+                  <div className="space-y-5">
+                    {jissekiRows.map(({ client, rentals }) => renderClientCard(client, rentals, true))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // ── 通常モーダル ────────────────────────────────────────────
         return (
           <div className="fixed inset-0 bg-black/60 flex items-end z-50">
             <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
@@ -2646,12 +2757,13 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => window.print()}
-                    className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                    onClick={() => setJissekiPreview(true)}
+                    disabled={jissekiRows.length === 0}
+                    className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors disabled:opacity-40"
                   >
-                    印刷
+                    プレビュー
                   </button>
-                  <button onClick={() => setShowJissekiModal(false)}><X size={20} className="text-gray-400" /></button>
+                  <button onClick={() => { setShowJissekiModal(false); setJissekiPreview(false); }}><X size={20} className="text-gray-400" /></button>
                 </div>
               </div>
 
@@ -2664,76 +2776,8 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                 ) : jissekiRows.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-16">該当する用具レンタルがありません</p>
                 ) : (
-                  <div className="space-y-6 print:space-y-4">
-                    {/* 印刷ヘッダー（print時のみ表示） */}
-                    <div className="hidden print:block text-center mb-4">
-                      <h1 className="text-lg font-bold">サービス利用実績表</h1>
-                      <p className="text-sm">{reiwaLabel}{jissekiCmOrg !== "__ALL__" ? `　${jissekiCmOrg}` : ""}</p>
-                    </div>
-
-                    {jissekiRows.map(({ client, rentals }) => {
-                      const isHosp = hospInMonth.has(client.id);
-                      const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
-                      const totalTani = Math.round(totalPrice / 10);
-                      const benefitRate = client.benefit_rate ? parseInt(client.benefit_rate) : null;
-                      const copayRate = benefitRate !== null ? 100 - benefitRate : null;
-                      const copayAmount = copayRate !== null ? Math.ceil(totalPrice * copayRate / 100) : null;
-
-                      return (
-                        <div key={client.id} className="border border-gray-200 rounded-xl overflow-hidden print:break-inside-avoid print:rounded-none print:border-gray-400">
-                          {/* 利用者ヘッダー */}
-                          <div className={`px-3 py-2 flex items-center gap-3 ${isHosp ? "bg-red-50" : "bg-gray-50"}`}>
-                            <span className={`text-sm font-bold ${isHosp ? "text-red-700" : "text-gray-800"}`}>
-                              {client.name}
-                              {isHosp && <span className="ml-2 text-xs font-normal text-red-500">（入院中）</span>}
-                            </span>
-                            <span className="text-xs text-gray-500">{client.care_manager_org}</span>
-                            <span className="text-xs text-gray-400">{client.care_manager}</span>
-                            {benefitRate !== null && (
-                              <span className="text-xs text-gray-500 ml-auto">給付率 {benefitRate}% / 自己負担 {copayRate}%</span>
-                            )}
-                          </div>
-                          {/* 用具一覧テーブル */}
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="bg-blue-50 text-blue-800">
-                                <th className="text-left px-2 py-1.5 font-medium w-[90px]">コード</th>
-                                <th className="text-left px-2 py-1.5 font-medium">サービス項目名</th>
-                                <th className="text-left px-2 py-1.5 font-medium">レンタル商品名</th>
-                                <th className="text-right px-2 py-1.5 font-medium w-[60px]">単位数</th>
-                                <th className="text-right px-2 py-1.5 font-medium w-[70px]">金額</th>
-                                <th className="text-left px-2 py-1.5 font-medium w-[80px]">備考</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {rentals.map((r, ri) => {
-                                const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
-                                return (
-                                  <tr key={ri} className="hover:bg-gray-50">
-                                    <td className="px-2 py-1.5 text-gray-600 font-mono">{r.code}</td>
-                                    <td className="px-2 py-1.5 text-gray-700">{r.category}</td>
-                                    <td className="px-2 py-1.5 text-gray-800">{r.equipName}</td>
-                                    <td className="px-2 py-1.5 text-right text-gray-800">{tani !== null ? tani.toLocaleString() : "−"}</td>
-                                    <td className="px-2 py-1.5 text-right text-gray-800">{r.monthlyPrice !== null ? `¥${r.monthlyPrice.toLocaleString()}` : "−"}</td>
-                                    <td className="px-2 py-1.5 text-gray-500">{r.modelNumber ?? ""}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                            <tfoot>
-                              <tr className="bg-gray-50 font-medium">
-                                <td colSpan={3} className="px-2 py-1.5 text-right text-gray-600">合計</td>
-                                <td className="px-2 py-1.5 text-right text-gray-800">{totalTani.toLocaleString()} 単位</td>
-                                <td className="px-2 py-1.5 text-right text-gray-800">¥{totalPrice.toLocaleString()}</td>
-                                <td className="px-2 py-1.5 text-right text-gray-600">
-                                  {copayAmount !== null && <span className="text-blue-700">自己負担 ¥{copayAmount.toLocaleString()}</span>}
-                                </td>
-                              </tr>
-                            </tfoot>
-                          </table>
-                        </div>
-                      );
-                    })}
+                  <div className="space-y-4">
+                    {jissekiRows.map(({ client, rentals }) => renderClientCard(client, rentals, false))}
                   </div>
                 )}
               </div>
