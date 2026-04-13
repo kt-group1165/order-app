@@ -1916,8 +1916,8 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   // 実績表
   const [showJissekiModal, setShowJissekiModal] = useState(false);
   const [jissekiMonth, setJissekiMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
-  // ケアマネキー: "__ALL__" or "org||name"
-  const [jissekiCmKey, setJissekiCmKey] = useState<string>("__ALL__");
+  const [jissekiCmKey, setJissekiCmKey] = useState<string>("__ALL__"); // プレビュー対象（単独）
+  const [jissekiSelectedKeys, setJissekiSelectedKeys] = useState<Set<string>>(new Set()); // チェック済みキー
   const [jissekiRentals, setJissekiRentals] = useState<ClientRentalHistory[]>([]);
   const [jissekiLoading, setJissekiLoading] = useState(false);
   const [jissekiPreview, setJissekiPreview] = useState(false);
@@ -2621,8 +2621,12 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           .sort((a, b) => a.org.localeCompare(b.org, "ja") || a.name.localeCompare(b.name, "ja"));
         cmGroups.forEach(g => g.clients.sort((a, b) => (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja")));
 
-        // 選択中のケアマネグループ
-        const selectedGroup = jissekiCmKey === "__ALL__" ? null : cmGroups.find(g => g.key === jissekiCmKey) ?? null;
+        // プレビュー対象グループ（チェック済み or 単独指定）
+        const previewGroups = jissekiPreview
+          ? (jissekiCmKey !== "__ALL__"
+              ? cmGroups.filter(g => g.key === jissekiCmKey)
+              : cmGroups.filter(g => jissekiSelectedKeys.has(g.key)))
+          : [];
 
         // フラグ操作ヘルパー
         const getFlag = (rowKey: string) => jissekiFlags[rowKey] ?? { half: false, daily: false, hold: false };
@@ -2630,137 +2634,131 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           setJissekiFlags(prev => ({ ...prev, [rowKey]: { ...getFlag(rowKey), [flag]: !getFlag(rowKey)[flag] } }));
         };
 
-        // ── プレビュー画面（1ケアマネ選択時のみ） ──────────────────
-        if (jissekiPreview && selectedGroup) {
-          const cmOrg = selectedGroup.org;
-          const cmName = selectedGroup.name;
+        // ── プレビュー画面 ──────────────────────────────────────────
+        if (jissekiPreview && previewGroups.length > 0) {
           const today = new Date();
           const todayStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
 
+          const renderGroupPage = (group: typeof previewGroups[0]) => (
+            <div key={group.key} className="bg-white shadow-xl w-[210mm] px-10 py-8 mb-6 print:shadow-none print:w-full print:px-8 print:py-4 print:mb-0 print:break-after-page" style={{ minHeight: "297mm" }}>
+              {/* タイトル行 */}
+              <div className="flex items-end justify-between mb-3">
+                <div className="text-sm font-bold">{reiwaLabel}分</div>
+                <div className="text-xl font-bold underline tracking-widest">サービス利用実績表</div>
+                <div className="text-xs text-right">{todayStr}</div>
+              </div>
+              {/* 送り主 ＋ 矢印 ＋ 受け先 */}
+              <div className="flex items-stretch gap-3 mb-4">
+                <div className="border border-gray-400 p-3 text-xs flex-none w-52">
+                  <div className="font-bold text-sm mb-2">{tenantInfo?.company_name ?? "（会社名未設定）"}</div>
+                  <div>事業所番号：{tenantInfo?.business_number ?? "−"}</div>
+                  <div>TEL：{tenantInfo?.company_tel ?? "−"}</div>
+                  <div>FAX：{tenantInfo?.company_fax ?? "−"}</div>
+                </div>
+                <div className="flex items-center text-2xl text-gray-400 shrink-0">→</div>
+                <div className="border border-gray-400 p-3 text-xs flex-1">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-sm">{group.org || "（事業所名なし）"}</div>
+                    <div className="text-sm font-bold">御中</div>
+                  </div>
+                  <div className="mt-3 text-base font-bold text-right">{group.name ? `${group.name} 様` : ""}</div>
+                </div>
+              </div>
+              {/* 挨拶文 */}
+              <p className="text-xs mb-1">いつもお世話になりありがとうございます。</p>
+              <p className="text-xs mb-4">サービス利用実績表をお送りいたします。よろしくお願いいたします。</p>
+              {/* メインテーブル */}
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr>
+                    <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-24">ご利用者様氏名</th>
+                    <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-28">コード<br/>サービス項目名</th>
+                    <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium">レンタル商品名</th>
+                    <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-14">単位数</th>
+                    <th colSpan={3} className="border border-gray-600 px-1 py-0.5 text-center font-medium text-[10px]">区分</th>
+                    <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-20">備考</th>
+                  </tr>
+                  <tr>
+                    <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">半額</th>
+                    <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">日割</th>
+                    <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">保留</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.clients.map(({ client, rentals }) => {
+                    const isHosp = hospInMonth.has(client.id);
+                    const totalTani = Math.round(rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0) / 10);
+                    return (
+                      <Fragment key={client.id}>
+                        {rentals.map((r, ri) => {
+                          const rowKey = `${client.id}-${ri}`;
+                          const flags = getFlag(rowKey);
+                          const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
+                          return (
+                            <tr key={ri}>
+                              {ri === 0 && (
+                                <td rowSpan={rentals.length} className={`border border-gray-600 px-1 py-1 text-center align-top font-medium ${isHosp ? "text-red-600" : ""}`}>
+                                  {client.name} 様{isHosp && <div className="text-[10px] text-red-500">（入院中）</div>}
+                                </td>
+                              )}
+                              <td className="border border-gray-600 px-1 py-0.5">
+                                <div className="font-mono text-[10px]">{r.code}</div>
+                                <div>{r.category}</div>
+                              </td>
+                              <td className="border border-gray-600 px-1 py-0.5">{r.equipName}</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-right">{tani !== null ? tani.toLocaleString() : ""}</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                <input type="checkbox" checked={flags.half} onChange={() => toggleFlag(rowKey, "half")} />
+                              </td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                <input type="checkbox" checked={flags.daily} onChange={() => toggleFlag(rowKey, "daily")} />
+                              </td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                <input type="checkbox" checked={flags.hold} onChange={() => toggleFlag(rowKey, "hold")} />
+                              </td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">{flags.half ? "●" : ""}</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">{flags.daily ? "●" : ""}</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">{flags.hold ? "●" : ""}</td>
+                              <td className="border border-gray-600 px-1 py-0.5"></td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="bg-gray-50">
+                          <td colSpan={2} className="border border-gray-600 px-2 py-0.5 text-center font-medium">合計</td>
+                          <td className="border border-gray-600 px-2 py-0.5 text-right">金額</td>
+                          <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
+                          <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center print:hidden">単位数</td>
+                          <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center hidden print:table-cell">単位数</td>
+                          <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
+                        </tr>
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+
           return (
             <div className="fixed inset-0 bg-gray-300 z-50 flex flex-col">
-              {/* ツールバー */}
               <div className="bg-gray-800 text-white px-4 py-2 flex items-center gap-3 shrink-0 print:hidden">
-                <button onClick={() => setJissekiPreview(false)} className="flex items-center gap-1 text-sm text-gray-300 hover:text-white">
+                <button onClick={() => { setJissekiPreview(false); setJissekiCmKey("__ALL__"); }} className="flex items-center gap-1 text-sm text-gray-300 hover:text-white">
                   <ChevronLeft size={16} />戻る
                 </button>
-                <span className="text-sm flex-1">{reiwaLabel}分　{cmOrg}　{cmName}　{selectedGroup.clients.length}名</span>
+                <span className="text-sm flex-1">{reiwaLabel}分　{previewGroups.length}事業所</span>
                 <button onClick={() => window.print()} className="px-4 py-1.5 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-400">印刷</button>
               </div>
-              {/* A4用紙 */}
               <div className="flex-1 overflow-y-auto py-6 flex flex-col items-center print:py-0 print:block">
-                <div className="bg-white shadow-xl w-[210mm] px-10 py-8 print:shadow-none print:w-full print:px-8 print:py-4" style={{ minHeight: "297mm" }}>
-                  {/* タイトル行 */}
-                  <div className="flex items-end justify-between mb-3">
-                    <div className="text-sm font-bold">{reiwaLabel}分</div>
-                    <div className="text-xl font-bold underline tracking-widest">サービス利用実績表</div>
-                    <div className="text-xs text-right">{todayStr}</div>
-                  </div>
-                  {/* 送り主 ＋ 矢印 ＋ 受け先 */}
-                  <div className="flex items-stretch gap-3 mb-4">
-                    <div className="border border-gray-400 p-3 text-xs flex-none w-52">
-                      <div className="font-bold text-sm mb-2">{tenantInfo?.company_name ?? "（会社名未設定）"}</div>
-                      <div>事業所番号：{tenantInfo?.business_number ?? "−"}</div>
-                      <div>TEL：{tenantInfo?.company_tel ?? "−"}</div>
-                      <div>FAX：{tenantInfo?.company_fax ?? "−"}</div>
-                    </div>
-                    <div className="flex items-center text-2xl text-gray-400 shrink-0">→</div>
-                    <div className="border border-gray-400 p-3 text-xs flex-1">
-                      <div className="flex items-center justify-between">
-                        <div className="font-bold text-sm">{cmOrg || "（事業所名なし）"}</div>
-                        <div className="text-sm font-bold">御中</div>
-                      </div>
-                      <div className="mt-3 text-base font-bold text-right">{cmName ? `${cmName} 様` : ""}</div>
-                    </div>
-                  </div>
-                  {/* 挨拶文 */}
-                  <p className="text-xs mb-1">いつもお世話になりありがとうございます。</p>
-                  <p className="text-xs mb-4">サービス利用実績表をお送りいたします。よろしくお願いいたします。</p>
-                  {/* メインテーブル */}
-                  <table className="w-full text-xs border-collapse">
-                    <thead>
-                      <tr>
-                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-24">ご利用者様氏名</th>
-                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-28">コード<br/>サービス項目名</th>
-                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium">レンタル商品名</th>
-                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-14">単位数</th>
-                        <th colSpan={3} className="border border-gray-600 px-1 py-0.5 text-center font-medium text-[10px]">区分</th>
-                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-20">備考</th>
-                      </tr>
-                      <tr>
-                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">半額</th>
-                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">日割</th>
-                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">保留</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedGroup.clients.map(({ client, rentals }) => {
-                        const isHosp = hospInMonth.has(client.id);
-                        const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
-                        const totalTani = Math.round(totalPrice / 10);
-                        return (
-                          <Fragment key={client.id}>
-                            {rentals.map((r, ri) => {
-                              const rowKey = `${client.id}-${ri}`;
-                              const flags = getFlag(rowKey);
-                              const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
-                              return (
-                                <tr key={ri}>
-                                  {ri === 0 && (
-                                    <td rowSpan={rentals.length} className={`border border-gray-600 px-1 py-1 text-center align-top font-medium ${isHosp ? "text-red-600" : ""}`}>
-                                      {client.name} 様{isHosp && <div className="text-[10px] text-red-500">（入院中）</div>}
-                                    </td>
-                                  )}
-                                  <td className="border border-gray-600 px-1 py-0.5">
-                                    <div className="font-mono text-[10px]">{r.code}</div>
-                                    <div>{r.category}</div>
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5">{r.equipName}</td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-right">{tani !== null ? tani.toLocaleString() : ""}</td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
-                                    <input type="checkbox" checked={flags.half} onChange={() => toggleFlag(rowKey, "half")} />
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
-                                    <input type="checkbox" checked={flags.daily} onChange={() => toggleFlag(rowKey, "daily")} />
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
-                                    <input type="checkbox" checked={flags.hold} onChange={() => toggleFlag(rowKey, "hold")} />
-                                  </td>
-                                  {/* 印刷時はチェック済みのみ表示 */}
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
-                                    {flags.half ? "●" : ""}
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
-                                    {flags.daily ? "●" : ""}
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
-                                    {flags.hold ? "●" : ""}
-                                  </td>
-                                  <td className="border border-gray-600 px-1 py-0.5"></td>
-                                </tr>
-                              );
-                            })}
-                            {/* 利用者合計行 */}
-                            <tr className="bg-gray-50">
-                              <td colSpan={2} className="border border-gray-600 px-2 py-0.5 text-center font-medium text-xs">合計</td>
-                              <td className="border border-gray-600 px-2 py-0.5 text-right text-xs">金額</td>
-                              <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
-                              <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center text-xs print:hidden">単位数</td>
-                              <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center text-xs hidden print:table-cell">単位数</td>
-                              <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
-                            </tr>
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                {previewGroups.map(g => renderGroupPage(g))}
               </div>
             </div>
           );
         }
 
-        // ── 通常モーダル（ケアマネ一覧） ───────────────────────────
+        // ── 通常モーダル（ケアマネ一覧・チェック選択） ─────────────
+        const allChecked = cmGroups.length > 0 && cmGroups.every(g => jissekiSelectedKeys.has(g.key));
+        const checkedCount = cmGroups.filter(g => jissekiSelectedKeys.has(g.key)).length;
+
         return (
           <div className="fixed inset-0 bg-black/60 flex items-end z-50">
             <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
@@ -2779,6 +2777,25 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                   <X size={20} className="text-gray-400" />
                 </button>
               </div>
+              {/* 全選択・全解除 + プレビューボタン */}
+              {cmGroups.length > 0 && (
+                <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 shrink-0 bg-gray-50">
+                  <button
+                    onClick={() => setJissekiSelectedKeys(allChecked ? new Set() : new Set(cmGroups.map(g => g.key)))}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
+                  >
+                    {allChecked ? "全解除" : "全選択"}
+                  </button>
+                  <span className="text-xs text-gray-500 flex-1">{checkedCount}件選択中</span>
+                  <button
+                    onClick={() => { setJissekiCmKey("__ALL__"); setJissekiPreview(true); }}
+                    disabled={checkedCount === 0}
+                    className="px-4 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors disabled:opacity-40"
+                  >
+                    プレビュー・印刷
+                  </button>
+                </div>
+              )}
               {/* ケアマネ一覧 */}
               <div className="flex-1 overflow-y-auto">
                 {jissekiLoading ? (
@@ -2787,20 +2804,31 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                   <p className="text-sm text-gray-400 text-center py-16">該当する用具レンタルがありません</p>
                 ) : (
                   <ul className="divide-y divide-gray-100">
-                    {cmGroups.map(g => (
-                      <li key={g.key} className="px-4 py-3 flex items-center gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-gray-800 truncate">{g.org || "（事業所名なし）"}</div>
-                          <div className="text-xs text-gray-500">{g.name || "（担当者名なし）"}　{g.clients.length}名</div>
-                        </div>
-                        <button
-                          onClick={() => { setJissekiCmKey(g.key); setJissekiPreview(true); }}
-                          className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors shrink-0"
+                    {cmGroups.map(g => {
+                      const checked = jissekiSelectedKeys.has(g.key);
+                      return (
+                        <li
+                          key={g.key}
+                          className={`px-4 py-3 flex items-center gap-3 cursor-pointer transition-colors ${checked ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                          onClick={() => setJissekiSelectedKeys(prev => {
+                            const next = new Set(prev);
+                            checked ? next.delete(g.key) : next.add(g.key);
+                            return next;
+                          })}
                         >
-                          プレビュー
-                        </button>
-                      </li>
-                    ))}
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {}}
+                            className="w-4 h-4 rounded accent-blue-500 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-800 truncate">{g.org || "（事業所名なし）"}</div>
+                            <div className="text-xs text-gray-500">{g.name || "（担当者名なし）"}　{g.clients.length}名</div>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
