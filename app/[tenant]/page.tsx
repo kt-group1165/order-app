@@ -238,7 +238,7 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -376,6 +376,7 @@ export default function TenantPage({
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} />}
+        {activeTab === "documents" && <DocumentsTab tenantId={tenantId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
       </div>
 
@@ -388,6 +389,7 @@ export default function TenantPage({
             { id: "clients", icon: Users, label: "利用者別" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
             { id: "billing", icon: CreditCard, label: "請求" },
+            { id: "documents", icon: FileText, label: "書類" },
             { id: "settings", icon: Settings, label: "設定" },
           ] as { id: Tab; icon: React.ElementType; label: string }[]
         ).map(({ id, icon: Icon, label }) => (
@@ -4278,6 +4280,256 @@ function ClientDetail({
           );
         })()
       ) : null}
+    </div>
+  );
+}
+
+// ─── Documents Tab ───────────────────────────────────────────────────────────
+
+function DocumentsTab({ tenantId }: { tenantId: string }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+  const [loading, setLoading] = useState(true);
+  const [kanaFilter, setKanaFilter] = useState<string | null>(null);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [clientItems, setClientItems] = useState<OrderItem[]>([]);
+  const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
+  const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
+  const [documents, setDocuments] = useState<ClientDocument[]>([]);
+  const [clientLoading, setClientLoading] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
+  const [showCarePlan, setShowCarePlan] = useState(false);
+  const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
+  const [showProposal, setShowProposal] = useState(false);
+  const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
+  const [showContracts, setShowContracts] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana"),
+      getEquipment(tenantId),
+      getTenantById(tenantId),
+    ]).then(([clientResult, equip, tenant]) => {
+      setClients((clientResult.data ?? []) as Client[]);
+      setEquipment(equip);
+      if (tenant) setCompanyInfo({
+        businessNumber: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
+        companyName: tenant.company_name ?? COMPANY_INFO_DEFAULTS.companyName,
+        companyAddress: tenant.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
+        tel: tenant.company_tel ?? COMPANY_INFO_DEFAULTS.tel,
+        fax: tenant.company_fax ?? COMPANY_INFO_DEFAULTS.fax,
+        staffName: tenant.staff_name ?? COMPANY_INFO_DEFAULTS.staffName,
+        serviceArea: tenant.service_area ?? COMPANY_INFO_DEFAULTS.serviceArea,
+        businessDays: tenant.business_days ?? COMPANY_INFO_DEFAULTS.businessDays,
+        businessHours: tenant.business_hours ?? COMPANY_INFO_DEFAULTS.businessHours,
+        staffManagerFull: tenant.staff_manager_full ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+        staffManagerPart: tenant.staff_manager_part ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+        staffSpecialistFull: tenant.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+        staffSpecialistPart: tenant.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+        staffAdminFull: tenant.staff_admin_full ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+        staffAdminPart: tenant.staff_admin_part ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
+      });
+      setLoading(false);
+    });
+  }, [tenantId]);
+
+  const loadClientData = async (client: Client) => {
+    setClientLoading(true);
+    setClientItems([]); setDocuments([]); setPriceHistory([]); setOrderPaymentMap({});
+    const [{ data: ordersData }, docs] = await Promise.all([
+      supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
+      getClientDocuments(tenantId, client.id),
+    ]);
+    setDocuments(docs);
+    if (ordersData && ordersData.length > 0) {
+      const orderIds = ordersData.map((o: { id: string; payment_type: string }) => o.id);
+      const payMap: Record<string, "介護" | "自費"> = {};
+      ordersData.forEach((o: { id: string; payment_type: string }) => { payMap[o.id] = o.payment_type === "自費" ? "自費" : "介護"; });
+      setOrderPaymentMap(payMap);
+      const { data: items } = await supabase.from("order_items").select("*").in("order_id", orderIds);
+      const loaded = items ?? [];
+      setClientItems(loaded);
+      const codes = [...new Set(loaded.map((i: OrderItem) => i.product_code))];
+      const history = await getPriceHistory(tenantId, codes);
+      setPriceHistory(history);
+    }
+    setClientLoading(false);
+  };
+
+  const refreshDocs = async () => {
+    if (!selectedClient) return;
+    const docs = await getClientDocuments(tenantId, selectedClient.id);
+    setDocuments(docs);
+  };
+
+  const KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
+  const KANA_MAP: Record<string, string[]> = {
+    "あ":["ア","イ","ウ","エ","オ"],"か":["カ","キ","ク","ケ","コ","ガ","ギ","グ","ゲ","ゴ"],
+    "さ":["サ","シ","ス","セ","ソ","ザ","ジ","ズ","ゼ","ゾ"],"た":["タ","チ","ツ","テ","ト","ダ","ヂ","ヅ","デ","ド"],
+    "な":["ナ","ニ","ヌ","ネ","ノ"],"は":["ハ","ヒ","フ","ヘ","ホ","バ","ビ","ブ","ベ","ボ","パ","ピ","プ","ペ","ポ"],
+    "ま":["マ","ミ","ム","メ","モ"],"や":["ヤ","ユ","ヨ"],
+    "ら":["ラ","リ","ル","レ","ロ"],"わ":["ワ","ヲ","ン"],
+  };
+  const toKana = (s: string) => s.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const allKana = Object.values(KANA_MAP).flat();
+  const filteredClients = kanaFilter
+    ? clients.filter(c => {
+        const first = toKana((c.furigana ?? c.name).charAt(0));
+        return kanaFilter === "他" ? !allKana.includes(first) : (KANA_MAP[kanaFilter] ?? []).includes(first);
+      })
+    : clients;
+
+  const DOC_TYPE_COLORS: Record<string, string> = {
+    rental_report: "text-blue-600 bg-blue-50",
+    care_plan: "text-emerald-600 bg-emerald-50",
+    proposal: "text-purple-600 bg-purple-50",
+    contract: "text-orange-600 bg-orange-50",
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-white text-sm">
+      {/* ツールバー */}
+      <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2">
+        <FileText size={16} className="text-gray-600" />
+        <span className="font-semibold text-gray-700">書類管理</span>
+        {selectedClient && <span className="text-gray-500 text-xs ml-2">— {selectedClient.name}</span>}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-indigo-400" /></div>
+      ) : (
+        <div className="flex flex-1 min-h-0">
+          {/* 左：カナサイドバー + 利用者リスト */}
+          <div className="flex shrink-0 border-r border-gray-300">
+            <div className="w-10 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
+              <button onClick={() => setKanaFilter(null)}
+                className={`w-8 py-1 rounded text-sm font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}>全</button>
+              {KANA_ROWS.map(k => (
+                <button key={k} onClick={() => setKanaFilter(kanaFilter === k ? null : k)}
+                  className={`w-8 py-1 rounded text-sm font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}>{k}</button>
+              ))}
+            </div>
+            <div className="w-44 overflow-y-auto">
+              {filteredClients.map(c => (
+                <button key={c.id}
+                  onClick={() => { setSelectedClient(c); loadClientData(c); }}
+                  className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-100 transition-colors ${
+                    selectedClient?.id === c.id ? "bg-blue-100 text-blue-800 font-semibold" : "hover:bg-gray-50 text-gray-700"
+                  }`}
+                >{c.name}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 右：書類パネル */}
+          <div className="flex-1 overflow-y-auto">
+            {!selectedClient ? (
+              <div className="flex h-full items-center justify-center text-sm text-gray-400">利用者を選択してください</div>
+            ) : clientLoading ? (
+              <div className="flex h-full items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
+            ) : (
+              <div className="p-4 space-y-4">
+                {/* 書類作成ボタン */}
+                <div>
+                  <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">書類を作成</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => { setShowReport(true); }}
+                      className="flex items-center gap-2 px-3 py-2.5 bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium rounded-xl hover:bg-blue-100 transition-colors">
+                      <FileText size={15} /> 貸与報告書
+                    </button>
+                    <button onClick={() => { setCarePlanInitialParams(null); setShowCarePlan(true); }}
+                      className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-medium rounded-xl hover:bg-emerald-100 transition-colors">
+                      <FileText size={15} /> 個別援助計画書
+                    </button>
+                    <button onClick={() => { setProposalInitialParams(null); setShowProposal(true); }}
+                      className="flex items-center gap-2 px-3 py-2.5 bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium rounded-xl hover:bg-purple-100 transition-colors">
+                      <FileText size={15} /> 選定提案書
+                    </button>
+                    <button onClick={() => setShowContracts(true)}
+                      className="flex items-center gap-2 px-3 py-2.5 bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium rounded-xl hover:bg-orange-100 transition-colors">
+                      <FileText size={15} /> 重要事項・契約書
+                    </button>
+                  </div>
+                </div>
+
+                {/* 書類履歴 */}
+                <div>
+                  <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">保存済み書類 ({documents.length})</p>
+                  {documents.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-6">保存済みの書類はありません</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {documents.map(doc => (
+                        <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
+                          <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
+                            <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (doc.type === "rental_report") {
+                                setRegenDoc(doc); setShowReport(false);
+                              } else if (doc.type === "care_plan") {
+                                setCarePlanInitialParams(doc.params); setShowCarePlan(true);
+                              } else if (doc.type === "proposal") {
+                                setProposalInitialParams(doc.params); setShowProposal(true);
+                              }
+                            }}
+                            className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
+                          <button
+                            onClick={async () => { await deleteClientDocument(doc.id); setDocuments(prev => prev.filter(d => d.id !== doc.id)); }}
+                            className="shrink-0 text-xs text-red-400 border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-50">削除</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* モーダル */}
+      {(showReport || regenDoc) && selectedClient && (
+        <RentalReportModal
+          client={selectedClient} items={clientItems} orderPaymentMap={orderPaymentMap}
+          equipment={equipment} companyInfo={companyInfo} priceHistory={priceHistory}
+          tenantId={tenantId}
+          initialParams={regenDoc ? (regenDoc.params as { targetMonth: string; visitDate: string; memo: string; selectedUsage: string[] }) : undefined}
+          onClose={() => { setShowReport(false); setRegenDoc(null); }}
+          onSaved={refreshDocs}
+        />
+      )}
+      {showCarePlan && selectedClient && (
+        <CarePlanModal
+          client={selectedClient} clientItems={clientItems} equipment={equipment}
+          companyInfo={companyInfo} tenantId={tenantId}
+          initialParams={carePlanInitialParams ?? undefined}
+          onClose={() => setShowCarePlan(false)}
+          onSaved={async () => { await refreshDocs(); setShowCarePlan(false); }}
+        />
+      )}
+      {showProposal && selectedClient && (
+        <ProposalModal
+          client={selectedClient} clientItems={clientItems} equipment={equipment}
+          companyInfo={companyInfo} tenantId={tenantId}
+          initialParams={proposalInitialParams ?? undefined}
+          onClose={() => setShowProposal(false)}
+          onSaved={async () => { await refreshDocs(); setShowProposal(false); }}
+        />
+      )}
+      {showContracts && selectedClient && (
+        <ContractDocumentsModal
+          client={selectedClient} clientItems={clientItems} equipment={equipment}
+          companyInfo={companyInfo} tenantId={tenantId}
+          onClose={() => setShowContracts(false)}
+          onSaved={async () => { await refreshDocs(); setShowContracts(false); }}
+        />
+      )}
     </div>
   );
 }
