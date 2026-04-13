@@ -4305,6 +4305,7 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   const [showProposal, setShowProposal] = useState(false);
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showContracts, setShowContracts] = useState(false);
+  const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -4456,12 +4457,30 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
 
                 {/* 書類履歴 */}
                 <div>
-                  <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">保存済み書類 ({documents.length})</p>
-                  {documents.length === 0 ? (
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide shrink-0">保存済み書類 ({documents.length})</p>
+                    <div className="flex gap-1 flex-wrap">
+                      {([
+                        [null, "全"],
+                        ["care_plan", "個別援助計画書"],
+                        ["proposal", "選定提案書"],
+                        ["rental_report", "貸与報告書"],
+                        ["contract", "重要事項・契約書"],
+                      ] as [string | null, string][]).map(([type, label]) => (
+                        <button key={label} onClick={() => setDocTypeFilter(type)}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                            docTypeFilter === type
+                              ? "bg-gray-700 text-white border-gray-700"
+                              : "text-gray-500 border-gray-300 hover:border-gray-500"
+                          }`}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).length === 0 ? (
                     <p className="text-sm text-gray-400 text-center py-6">保存済みの書類はありません</p>
                   ) : (
                     <div className="space-y-2">
-                      {documents.map(doc => (
+                      {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).map(doc => (
                         <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
                           <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
                           <div className="flex-1 min-w-0">
