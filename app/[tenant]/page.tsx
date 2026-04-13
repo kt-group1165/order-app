@@ -4766,7 +4766,8 @@ function RentalGridModal({
                 const itemDays = getItemDays(item);
                 const billing = getHalfBilling(item);
                 const rentalDayCount = [...itemDays].filter(d => !hospDays.has(d)).length;
-                const units = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
+                const baseUnits = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
+                const units = (billing === "first" || billing === "second") ? Math.round(baseUnits / 2) : billing === "none" ? 0 : baseUnits;
                 const billingLabel = billing === "full" ? "1か月" : billing === "first" ? "前半月" : billing === "second" ? "後半月" : "—";
                 return (
                   <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
