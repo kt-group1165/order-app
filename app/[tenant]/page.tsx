@@ -3212,12 +3212,12 @@ function ClientDetail({
                   type="date"
                   value={dateInput.date}
                   onChange={(e) => setDateInput({ ...dateInput, date: e.target.value })}
-                  className="w-44 border border-emerald-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white"
+                  className="w-44 border border-blue-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-blue-400 bg-white"
                 />
                 <button
                   disabled={!dateInput.date || updatingId === item.id}
                   onClick={() => execStatusChange(dateInput.item, dateInput.nextStatus, dateInput.date)}
-                  className="px-4 bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
+                  className="px-4 bg-blue-500 text-white text-xs font-medium py-1.5 rounded-lg disabled:opacity-40 flex items-center justify-center gap-1"
                 >
                   {updatingId === item.id ? <Loader2 size={12} className="animate-spin" /> : "確定"}
                 </button>
@@ -3360,7 +3360,7 @@ function ClientDetail({
       <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
         {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"]] as [typeof topTab, string][]).map(([t, label]) => (
           <button key={t} onClick={() => setTopTab(t)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-emerald-500 text-emerald-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
             {label}
           </button>
         ))}
@@ -3369,19 +3369,19 @@ function ClientDetail({
       {topTab === "usage" && (
         <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-1.5 shrink-0">
           <button onClick={() => setViewMode("current")}
-            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-500"}`}>
             現在
           </button>
           <button onClick={() => setViewMode("monthly")}
-            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-500"}`}>
             月別
           </button>
           <button onClick={() => setViewMode("rental_history")}
-            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "rental_history" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "rental_history" ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-500"}`}>
             履歴
           </button>
           <button onClick={() => setViewMode("docs")}
-            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-blue-500 text-white" : "bg-gray-100 text-gray-500"}`}>
             書類{documents.length > 0 && <span className="ml-1 opacity-70">({documents.length})</span>}
           </button>
         </div>
@@ -3398,11 +3398,11 @@ function ClientDetail({
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-semibold text-gray-800">基本情報</h3>
               {!editingBasic ? (
-                <button onClick={() => setEditingBasic(true)} className="text-xs text-emerald-600 border border-emerald-200 px-3 py-1 rounded-lg hover:bg-emerald-50">編集</button>
+                <button onClick={() => setEditingBasic(true)} className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
               ) : (
                 <div className="flex gap-2">
                   <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
-                  <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
+                  <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
                 </div>
               )}
             </div>
@@ -3418,7 +3418,7 @@ function ClientDetail({
                     type="text"
                     value={basicForm[key]}
                     onChange={(e) => setBasicForm((f) => ({ ...f, [key]: e.target.value }))}
-                    className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-emerald-400"
+                    className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400"
                   />
                 ) : (
                   <span className="flex-1 text-sm text-gray-800">{(client as Record<string, unknown>)[key] as string || <span className="text-gray-300">—</span>}</span>
@@ -3548,7 +3548,7 @@ function ClientDetail({
           <div className="flex gap-2">
             <button
               onClick={() => { setCarePlanInitialParams(null); setShowCarePlan(true); }}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium rounded-xl hover:bg-emerald-100"
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-xl hover:bg-blue-100"
             >
               <Plus size={13} /> 個別援助計画書
             </button>
@@ -3588,7 +3588,7 @@ function ClientDetail({
                       if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members, sentAt: doc.created_at });
                     }
                   }}
-                  className="shrink-0 text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                  className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50"
                 >
                   再生成
                 </button>
@@ -3692,7 +3692,7 @@ function ClientDetail({
                   {insuranceForm ? (
                     <>
                       <button onClick={() => { setInsuranceForm(null); setEditingInsuranceId(null); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50">キャンセル</button>
-                      <button onClick={handleSaveInsuranceRecord} disabled={insuranceSaving} className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">{insuranceSaving ? "保存中…" : "保存"}</button>
+                      <button onClick={handleSaveInsuranceRecord} disabled={insuranceSaving} className="text-xs text-white bg-blue-500 px-4 py-1.5 rounded-lg disabled:opacity-50">{insuranceSaving ? "保存中…" : "保存"}</button>
                     </>
                   ) : (
                     <>
@@ -3880,7 +3880,7 @@ function ClientDetail({
                     setEditingRentalHistoryId(null);
                     setRentalHistoryForm({ equipment_name: "", model_number: null, start_date: null, end_date: null, monthly_price: null, notes: null });
                   }}
-                  className="text-xs text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-50"
+                  className="text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50"
                 >
                   ＋ 手動追加
                 </button>
@@ -3889,38 +3889,38 @@ function ClientDetail({
 
             {/* 手動登録フォーム */}
             {rentalHistoryForm && (
-              <div className="bg-emerald-50 rounded-xl p-4 mb-3 space-y-2.5">
-                <p className="text-xs font-semibold text-emerald-700">{editingRentalHistoryId ? "レンタル履歴を編集" : "レンタル履歴を追加"}</p>
+              <div className="bg-blue-50 rounded-xl p-4 mb-3 space-y-2.5">
+                <p className="text-xs font-semibold text-blue-700">{editingRentalHistoryId ? "レンタル履歴を編集" : "レンタル履歴を追加"}</p>
                 <div className="flex items-center gap-2">
                   <span className="w-24 shrink-0 text-xs text-gray-500">用具名 <span className="text-red-400">*</span></span>
                   <input type="text" value={rentalHistoryForm.equipment_name}
                     onChange={(e) => setRentalHistoryForm((f) => f && { ...f, equipment_name: e.target.value })}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 bg-white" />
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-24 shrink-0 text-xs text-gray-500">型番</span>
                   <input type="text" value={rentalHistoryForm.model_number ?? ""}
                     onChange={(e) => setRentalHistoryForm((f) => f && { ...f, model_number: e.target.value || null })}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 bg-white" />
                 </div>
                 {([["開始日","start_date"],["終了日","end_date"]] as [string,string][]).map(([label, key]) => (
                   <div key={key} className="flex items-center gap-2">
                     <span className="w-24 shrink-0 text-xs text-gray-500">{label}</span>
                     <input type="date" value={(rentalHistoryForm as Record<string,unknown>)[key] as string ?? ""}
                       onChange={(e) => setRentalHistoryForm((f) => f && { ...f, [key]: e.target.value || null })}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                      className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 bg-white" />
                   </div>
                 ))}
                 <div className="flex items-center gap-2">
                   <span className="w-24 shrink-0 text-xs text-gray-500">月額</span>
                   <input type="number" value={rentalHistoryForm.monthly_price ?? ""}
                     onChange={(e) => setRentalHistoryForm((f) => f && { ...f, monthly_price: e.target.value ? Number(e.target.value) : null })}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white" />
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 bg-white" />
                 </div>
                 <div className="flex items-start gap-2">
                   <span className="w-24 shrink-0 text-xs text-gray-500 pt-0.5">メモ</span>
                   <textarea value={rentalHistoryForm.notes ?? ""} onChange={(e) => setRentalHistoryForm((f) => f && { ...f, notes: e.target.value || null })} rows={2}
-                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-emerald-400 bg-white resize-none" />
+                    className="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-blue-400 bg-white resize-none" />
                 </div>
                 <div className="flex gap-2 justify-end pt-1">
                   <button onClick={() => { setRentalHistoryForm(null); setEditingRentalHistoryId(null); }}
@@ -3928,7 +3928,7 @@ function ClientDetail({
                     キャンセル
                   </button>
                   <button onClick={handleSaveRentalHistory} disabled={rentalHistorySaving}
-                    className="text-xs text-white bg-emerald-500 px-4 py-1.5 rounded-lg disabled:opacity-50">
+                    className="text-xs text-white bg-blue-500 px-4 py-1.5 rounded-lg disabled:opacity-50">
                     {rentalHistorySaving ? "保存中..." : "保存"}
                   </button>
                 </div>
