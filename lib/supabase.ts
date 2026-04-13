@@ -195,6 +195,8 @@ export type OrderItem = {
   delivered_at: string | null;
   cancelled_at: string | null;
   notes: string | null;
+  tokka_group: string | null;
+  tokka_group_price: number | null;
   created_at: string;
   updated_at: string;
 };
