@@ -238,6 +238,24 @@ export type MonitoringRecord = {
   updated_at: string;
 };
 
+// 公費情報（生活保護等）
+export type ClientPublicExpense = {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  hohei_code: string | null;       // 法制コード
+  futan_sha_number: string | null; // 負担者番号
+  jukyu_sha_number: string | null; // 受給者番号
+  valid_start: string | null;      // 有効期間開始日
+  valid_end: string | null;        // 有効期間終了日
+  confirmed_date: string | null;   // 確認日
+  application_type: string | null; // 申請区分
+  outpatient_copay: number | null; // 外来負担金
+  special_type: string | null;     // 特別区分
+  inpatient_copay: number | null;  // 入院負担金
+  created_at: string;
+};
+
 // モニタリング用具チェック
 export type MonitoringItem = {
   id: string;

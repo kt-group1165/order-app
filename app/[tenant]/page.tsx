@@ -223,11 +223,17 @@ const matchEquipment = (e: Equipment, raw: string): boolean => {
   );
 };
 
-/** 利用者名・フリガナに対してキーワード検索（かな/カナ両対応） */
+/** 利用者名・フリガナ・利用者番号に対してキーワード検索 */
 const matchClient = (c: Client, raw: string): boolean => {
-  const q = normalizeSearch(raw);
-  if (!q) return true;
-  return [c.name, c.furigana ?? ""].some((s) => normalizeSearch(s).includes(q));
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  const q = normalizeSearch(trimmed);
+  const fields = [c.name, c.furigana ?? "", c.user_number ?? ""];
+  // 正規化マッチ（ひらがな/カタカナ/半角カナ統一）
+  if (fields.some(s => normalizeSearch(s).includes(q))) return true;
+  // 直接マッチ（正規化をバイパスして全角カタカナ等をそのまま比較）
+  const rawLower = trimmed.toLowerCase();
+  return fields.some(s => s.toLowerCase().includes(rawLower));
 };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -2904,7 +2910,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance">(initialViewMode === "insurance" ? "insurance" : "usage");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi">(initialViewMode === "insurance" ? "insurance" : "usage");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
@@ -2935,6 +2941,19 @@ function ClientDetail({
   const [rentalHistoryForm, setRentalHistoryForm] = useState<Omit<ClientRentalHistory, "id" | "tenant_id" | "client_id" | "source" | "created_at"> | null>(null);
   const [editingRentalHistoryId, setEditingRentalHistoryId] = useState<string | null>(null);
   const [rentalHistorySaving, setRentalHistorySaving] = useState(false);
+  // 公費情報
+  const [publicExpenses, setPublicExpenses] = useState<import("@/lib/supabase").ClientPublicExpense[]>([]);
+  const [selectedPeId, setSelectedPeId] = useState<string | null>(null);
+  const [peForm, setPeForm] = useState<Omit<import("@/lib/supabase").ClientPublicExpense, "id"|"tenant_id"|"client_id"|"created_at"> | null>(null);
+  const [editingPeId, setEditingPeId] = useState<string | null>(null);
+  const [peSaving, setPeSaving] = useState(false);
+
+  const emptyPeForm = () => ({
+    hohei_code: null, futan_sha_number: null, jukyu_sha_number: null,
+    valid_start: null, valid_end: null, confirmed_date: null,
+    application_type: null, outpatient_copay: null, special_type: null, inpatient_copay: null,
+  });
+
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
@@ -2984,13 +3003,18 @@ function ClientDetail({
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const [{ data: ordersData }, insurResult, rentalResult] = await Promise.all([
+      // 第1バッチ：全て並列
+      const [{ data: ordersData }, insurResult, rentalResult, peResult, docs] = await Promise.all([
         supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
         supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("effective_date", { ascending: false }),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("start_date", { ascending: false }),
+        supabase.from("client_public_expenses").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("valid_start", { ascending: false }),
+        getClientDocuments(tenantId, client.id),
       ]);
       setInsuranceRecords((insurResult.data ?? []) as ClientInsuranceRecord[]);
       setRentalHistoryRecords((rentalResult.data ?? []) as ClientRentalHistory[]);
+      if (!peResult.error) setPublicExpenses((peResult.data ?? []) as import("@/lib/supabase").ClientPublicExpense[]);
+      setDocuments(docs);
       if (ordersData && ordersData.length > 0) {
         const orderIds = ordersData.map((o: { id: string; payment_type: string }) => o.id);
         const payMap: Record<string, "介護" | "自費"> = {};
@@ -2999,23 +3023,16 @@ function ClientDetail({
           else payMap[o.id] = "介護";
         });
         setOrderPaymentMap(payMap);
-        const { data: items } = await supabase
-          .from("order_items")
-          .select("*")
-          .in("order_id", orderIds);
+        // 第2バッチ：order_items 取得後に price_history も並列
+        const { data: items } = await supabase.from("order_items").select("*").in("order_id", orderIds);
         const loaded = items ?? [];
         setClientItems(loaded);
         const codes = [...new Set(loaded.map((i) => i.product_code))];
-        const [history, docs] = await Promise.all([
-          getPriceHistory(tenantId, codes),
-          getClientDocuments(tenantId, client.id),
-        ]);
+        const history = await getPriceHistory(tenantId, codes);
         setPriceHistory(history);
-        setDocuments(docs);
       } else {
         setClientItems([]);
         setPriceHistory([]);
-        setDocuments([]);
       }
     } finally {
       setLoading(false);
@@ -3358,7 +3375,7 @@ function ClientDetail({
 
       {/* トップタブ */}
       <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
-        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"]] as [typeof topTab, string][]).map(([t, label]) => (
+        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"]] as [typeof topTab, string][]).map(([t, label]) => (
           <button key={t} onClick={() => setTopTab(t)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
             {label}
@@ -4018,6 +4035,248 @@ function ClientDetail({
             })()}
           </section>
         </div>
+      ) : topTab === "kouhi" ? (
+        /* 公費タブ */
+        (() => {
+          const HOHEI_OPTIONS = [
+            { code: "12", label: "12：生活保護" },
+            { code: "21", label: "21：障害（精神通院）" },
+            { code: "22", label: "22：更生医療" },
+            { code: "25", label: "25：育成医療" },
+            { code: "51", label: "51：特定疾患（難病）" },
+            { code: "54", label: "54：小児慢性特定疾病" },
+          ];
+          const APP_TYPES = ["主", "重複"];
+          const SPECIAL_TYPES = ["低所得Ⅰ", "低所得Ⅱ", "一般Ⅰ", "一般Ⅱ"];
+          const sel = publicExpenses.find(r => r.id === selectedPeId) ?? publicExpenses[0] ?? null;
+          const pf = peForm;
+          const pfv = (k: string) => pf ? (String((pf as Record<string,unknown>)[k] ?? "")) : "";
+          const spf = (k: string, v: string | number | null) => setPeForm(f => f ? { ...f, [k]: v === "" ? null : v } : f);
+
+          const saveNew = async () => {
+            if (!pf) return;
+            setPeSaving(true);
+            const { data, error } = await supabase.from("client_public_expenses").insert({
+              tenant_id: tenantId, client_id: client.id, ...pf,
+            }).select().single();
+            setPeSaving(false);
+            if (!error && data) {
+              setPublicExpenses(prev => [data as import("@/lib/supabase").ClientPublicExpense, ...prev]);
+              setSelectedPeId(data.id);
+              setPeForm(null);
+              setEditingPeId(null);
+            }
+          };
+          const saveEdit = async () => {
+            if (!pf || !editingPeId) return;
+            setPeSaving(true);
+            await supabase.from("client_public_expenses").update(pf).eq("id", editingPeId);
+            setPeSaving(false);
+            setPublicExpenses(prev => prev.map(r => r.id === editingPeId ? { ...r, ...pf } : r));
+            setEditingPeId(null);
+            setPeForm(null);
+          };
+          const startEdit = (rec: import("@/lib/supabase").ClientPublicExpense) => {
+            setSelectedPeId(rec.id);
+            setEditingPeId(rec.id);
+            setPeForm({
+              hohei_code: rec.hohei_code, futan_sha_number: rec.futan_sha_number,
+              jukyu_sha_number: rec.jukyu_sha_number, valid_start: rec.valid_start,
+              valid_end: rec.valid_end, confirmed_date: rec.confirmed_date,
+              application_type: rec.application_type, outpatient_copay: rec.outpatient_copay,
+              special_type: rec.special_type, inpatient_copay: rec.inpatient_copay,
+            });
+          };
+          const deleteRec = async (id: string) => {
+            if (!confirm("この公費情報を削除しますか？")) return;
+            await supabase.from("client_public_expenses").delete().eq("id", id);
+            setPublicExpenses(prev => prev.filter(r => r.id !== id));
+            if (selectedPeId === id) { setSelectedPeId(null); setPeForm(null); setEditingPeId(null); }
+          };
+
+          return (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* 一覧テーブル */}
+              <div className="shrink-0 mx-4 mt-3 mb-3 border border-gray-200 rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <span className="text-xs font-semibold text-gray-700">公費情報 一覧</span>
+                  <button
+                    onClick={() => { setSelectedPeId(null); setEditingPeId(null); setPeForm(emptyPeForm()); }}
+                    className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg hover:bg-emerald-600"
+                  >＋ 新規</button>
+                </div>
+                <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                  <table className="w-full text-xs min-w-[600px]">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                      <tr>
+                        {["法制コード","負担者番号","受給者番号","有効期間開始日","有効期間終了日","確認日",""].map(h => (
+                          <th key={h} className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {publicExpenses.length === 0 ? (
+                        <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">公費情報がありません</td></tr>
+                      ) : publicExpenses.map(rec => {
+                        const hoheiLabel = HOHEI_OPTIONS.find(o => o.code === rec.hohei_code)?.label ?? rec.hohei_code ?? "—";
+                        const isSelected = rec.id === selectedPeId;
+                        return (
+                          <tr key={rec.id}
+                            onClick={() => { setSelectedPeId(rec.id); if (editingPeId !== rec.id) { setEditingPeId(null); setPeForm(null); } }}
+                            className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                          >
+                            <td className="px-3 py-2 font-medium text-gray-800">{hoheiLabel}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.futan_sha_number ?? "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.jukyu_sha_number ?? "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.valid_start ?? "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.valid_end ?? "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.confirmed_date ?? "—"}</td>
+                            <td className="px-3 py-2 flex gap-1.5 justify-end">
+                              <button onClick={e => { e.stopPropagation(); startEdit(rec); }}
+                                className="text-xs text-blue-600 border border-blue-200 px-2 py-0.5 rounded hover:bg-blue-50">編集</button>
+                              <button onClick={e => { e.stopPropagation(); deleteRec(rec.id); }}
+                                className="text-xs text-red-400 border border-red-200 px-2 py-0.5 rounded hover:bg-red-50">削除</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 入力フォーム */}
+              {pf !== null && (
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-sm font-semibold text-gray-700">
+                        {editingPeId ? "公費情報 編集" : "公費情報 新規登録"}
+                      </h3>
+                      <div className="flex gap-2">
+                        <button onClick={() => { setPeForm(null); setEditingPeId(null); }}
+                          className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                        <button onClick={editingPeId ? saveEdit : saveNew} disabled={peSaving}
+                          className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">
+                          {peSaving ? "保存中…" : "保存"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 法制コード・負担者・受給者番号 */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 法制コード</label>
+                        <select value={pfv("hohei_code")} onChange={e => spf("hohei_code", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          <option value="">選択してください</option>
+                          {HOHEI_OPTIONS.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 負担者番号</label>
+                        <input type="text" value={pfv("futan_sha_number")} onChange={e => spf("futan_sha_number", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="8桁" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 受給者番号</label>
+                        <input type="text" value={pfv("jukyu_sha_number")} onChange={e => spf("jukyu_sha_number", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="7桁" />
+                      </div>
+                    </div>
+
+                    {/* 有効期間・確認日 */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 有効期間 開始</label>
+                        <input type="date" value={pfv("valid_start")} onChange={e => spf("valid_start", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 有効期間 終了</label>
+                        <input type="date" value={pfv("valid_end")} onChange={e => spf("valid_end", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">確認日</label>
+                        <input type="date" value={pfv("confirmed_date")} onChange={e => spf("confirmed_date", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                    </div>
+
+                    {/* 申請区分・特別区分・負担金 */}
+                    <div className="grid grid-cols-4 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">申請区分</label>
+                        <select value={pfv("application_type")} onChange={e => spf("application_type", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          <option value=""></option>
+                          {APP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">外来負担金</label>
+                        <input type="number" value={pfv("outpatient_copay")} onChange={e => spf("outpatient_copay", e.target.value ? Number(e.target.value) : null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="円" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">特別区分</label>
+                        <select value={pfv("special_type")} onChange={e => spf("special_type", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          <option value=""></option>
+                          {SPECIAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">入院負担金</label>
+                        <input type="number" value={pfv("inpatient_copay")} onChange={e => spf("inpatient_copay", e.target.value ? Number(e.target.value) : null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="円" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 選択中の詳細表示（編集モードでない場合） */}
+              {pf === null && sel !== null && (
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                  <div className="bg-white border border-gray-200 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-gray-700">公費情報 詳細</h3>
+                      <button onClick={() => startEdit(sel)}
+                        className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      {[
+                        ["法制コード", HOHEI_OPTIONS.find(o => o.code === sel.hohei_code)?.label ?? sel.hohei_code ?? "—"],
+                        ["負担者番号", sel.futan_sha_number ?? "—"],
+                        ["受給者番号", sel.jukyu_sha_number ?? "—"],
+                        ["有効期間 開始", sel.valid_start ?? "—"],
+                        ["有効期間 終了", sel.valid_end ?? "—"],
+                        ["確認日", sel.confirmed_date ?? "—"],
+                        ["申請区分", sel.application_type ?? "—"],
+                        ["外来負担金", sel.outpatient_copay != null ? `${sel.outpatient_copay}円` : "—"],
+                        ["特別区分", sel.special_type ?? "—"],
+                        ["入院負担金", sel.inpatient_copay != null ? `${sel.inpatient_copay}円` : "—"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="space-y-0.5">
+                          <div className="text-[11px] text-gray-500">{label}</div>
+                          <div className="text-sm text-gray-800 font-medium">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {pf === null && sel === null && (
+                <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+                  「＋ 新規」から公費情報を登録してください
+                </div>
+              )}
+            </div>
+          );
+        })()
       ) : null}
     </div>
   );
