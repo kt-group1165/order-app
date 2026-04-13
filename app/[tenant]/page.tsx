@@ -2905,6 +2905,7 @@ function ClientDetail({
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance">(initialViewMode === "insurance" ? "insurance" : "usage");
+  const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
   const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" });
@@ -3614,20 +3615,35 @@ function ClientDetail({
           const CARE_LEVELS = ["要支援1","要支援2","要介護1","要介護2","要介護3","要介護4","要介護5"];
           return (
           <div className="flex-1 flex flex-col overflow-hidden">
+            {/* 介護認定 / 医療保険 サブタブ */}
+            <div className="shrink-0 flex gap-0 border-b border-gray-200 bg-gray-50 px-4 pt-2">
+              {([["care","介護認定"],["medical","医療保険"]] as ["care"|"medical",string][]).map(([t, label]) => (
+                <button key={t} onClick={() => setInsuranceSubTab(t)}
+                  className={`px-5 py-2 text-sm font-medium border-b-2 transition-colors ${insuranceSubTab === t ? "border-blue-500 text-blue-600 bg-white" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {insuranceSubTab === "medical" ? (
+              <div className="flex-1 flex items-center justify-center text-sm text-gray-400">医療保険情報（準備中）</div>
+            ) : (<>
+
             {/* 履歴一覧テーブル */}
-            <div className="shrink-0 border-b border-gray-200 overflow-x-auto">
-              <div className="flex items-center justify-between px-4 pt-3 pb-1">
+            <div className="shrink-0 mx-4 mt-3 mb-3 border border-gray-200 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
                 <span className="text-xs font-semibold text-gray-700">介護認定 履歴一覧</span>
               </div>
+              <div className="overflow-x-auto">
               <table className="w-full text-xs min-w-[700px]">
-                <thead className="bg-gray-50">
+                <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     {["保険者","被保険者番号","保険有効期間","要介護度","認定年月日","認定有効期間",""].map(h => (
-                      <th key={h} className="text-left px-3 py-2 font-medium text-gray-500 whitespace-nowrap">{h}</th>
+                      <th key={h} className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 bg-white">
                   {insuranceRecords.length === 0 ? (
                     <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">保険情報がありません</td></tr>
                   ) : insuranceRecords.map((rec, idx) => {
@@ -3665,12 +3681,13 @@ function ClientDetail({
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* 詳細フォーム */}
             <div className="flex-1 overflow-y-auto">
-              <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 bg-white sticky top-0">
-                <span className="text-xs font-semibold text-gray-700">介護認定 詳細</span>
+              <div className="flex items-center justify-between px-4 py-2.5 border-b-2 border-gray-200 bg-gray-50 sticky top-0">
+                <span className="text-sm font-semibold text-gray-800">介護認定 詳細</span>
                 <div className="flex gap-2">
                   {insuranceForm ? (
                     <>
@@ -3698,10 +3715,10 @@ function ClientDetail({
               </div>
 
               {/* 3カラムフォーム */}
-              <div className="grid grid-cols-3 gap-0 divide-x divide-gray-100 px-0">
+              <div className="grid grid-cols-3 gap-0 divide-x divide-gray-200 px-0">
                 {/* 左列: 保険証情報 */}
                 <div className="p-4 space-y-3">
-                  <p className="text-xs font-semibold text-gray-600 mb-3">保険証情報</p>
+                  <p className="text-sm font-semibold text-gray-700 mb-3 pb-1 border-b border-gray-200">保険証情報</p>
                   {[
                     ["被保険者番号","insured_number"],
                     ["交付年月日","issued_date"],
@@ -3712,7 +3729,7 @@ function ClientDetail({
                       <label className="text-[11px] text-gray-500">{label}</label>
                       {insuranceForm
                         ? <input type="text" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
-                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                        : <div className="text-sm text-gray-800 border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
                     </div>
                   ))}
                   <div className="space-y-1">
@@ -3729,7 +3746,7 @@ function ClientDetail({
                       <label className="text-[11px] text-gray-500">{label}</label>
                       {insuranceForm
                         ? <input type="date" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
-                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                        : <div className="text-sm text-gray-800 border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
                     </div>
                   ))}
                   <div className="space-y-1">
@@ -3744,7 +3761,7 @@ function ClientDetail({
 
                 {/* 中列: 認定情報 */}
                 <div className="p-4 space-y-3">
-                  <p className="text-xs font-semibold text-gray-600 mb-3">認定情報</p>
+                  <p className="text-sm font-semibold text-gray-700 mb-3 pb-1 border-b border-gray-200">認定情報</p>
                   <div className="space-y-1">
                     <label className="text-[11px] text-gray-500">要介護状態等</label>
                     <div className="flex gap-4">
@@ -3809,13 +3826,13 @@ function ClientDetail({
 
                 {/* 右列: 介護保険負担割合証・給付制限等 */}
                 <div className="p-4 space-y-3">
-                  <p className="text-xs font-semibold text-gray-600 mb-3">介護保険負担割合証・給付制限等</p>
+                  <p className="text-sm font-semibold text-gray-700 mb-3 pb-1 border-b border-gray-200">介護保険負担割合証・給付制限等</p>
                   {[["給付種類","benefit_type"],["内容","benefit_content"],["給付率（%）","benefit_rate"]].map(([label, key]) => (
                     <div key={key} className="space-y-1">
                       <label className="text-[11px] text-gray-500">{label}</label>
                       {insuranceForm
                         ? <input type="text" value={fv(key as keyof Omit<ClientInsuranceRecord,"id"|"tenant_id"|"client_id"|"created_at">)} onChange={e => sf(key, e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
-                        : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
+                        : <div className="text-sm text-gray-800 border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">{(selRec as Record<string,unknown> | null)?.[key] as string || "—"}</div>}
                     </div>
                   ))}
                   <div className="space-y-1">
@@ -3847,6 +3864,7 @@ function ClientDetail({
                 </div>
               </div>
             </div>
+            </>)}
           </div>
           );
         })()
