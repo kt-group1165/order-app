@@ -4318,178 +4318,232 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const prevMonth = () => { const d = new Date(y, m - 2, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
+  const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
+  const billingTarget = clientGroups.filter(g => !autoLateClients.has(g.client.id));
+  const totalUnitsAll = billingTarget.reduce((s, { client, items }) => s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
+
   return (
-    <div className="flex flex-col h-full bg-gray-50">
-      {/* ヘッダー */}
-      <div className="bg-white border-b border-gray-100 px-5 py-3 shrink-0 flex items-center">
-        <CreditCard size={16} className="text-indigo-500 mr-2" />
-        <span className="font-semibold text-gray-800 text-sm">請求管理</span>
-        <div className="ml-auto flex items-center gap-0.5">
-          <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 transition-colors"><ChevronLeft size={15} /></button>
-          <span className="text-sm font-semibold text-gray-700 w-22 text-center">{y}年{m}月</span>
-          <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 transition-colors"><ChevronRight size={15} /></button>
+    <div className="flex flex-col h-full bg-white">
+      {/* ── ツールバー ── */}
+      <div className="border-b border-gray-200 px-3 py-2 shrink-0 flex items-center gap-2">
+        <div className="flex items-center gap-0.5 mr-3">
+          <button onClick={prevMonth} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft size={14} /></button>
+          <span className="text-sm font-semibold text-gray-800 px-1">{y}年{m}月</span>
+          <button onClick={nextMonth} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronRight size={14} /></button>
+        </div>
+        <span className="text-xs text-gray-400 border border-gray-200 rounded px-2 py-1 bg-gray-50">国保対象</span>
+        {selectedClientIds.size > 0 && (
+          <>
+            <span className="text-xs text-gray-500">{selectedClientIds.size}名選択</span>
+            <button onClick={() => handleConfirm("返戻")}
+              className="text-xs px-2.5 py-1 rounded border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors">
+              返戻で確定
+            </button>
+            <button onClick={() => handleConfirm("過誤")}
+              className="text-xs px-2.5 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 transition-colors">
+              過誤で確定
+            </button>
+          </>
+        )}
+        <div className="ml-auto">
+          <button onClick={generateTransferData}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 transition-colors">
+            <Download size={12} />
+            伝送データ出力
+          </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {(loading || dataLoading) ? (
-          <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-indigo-400" /></div>
-        ) : (
-          <div className="p-4 space-y-3">
-
-            {/* ── 利用者リスト ── */}
-            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
-              {/* アクションバー */}
-              <div className="px-4 py-2.5 flex items-center gap-3 border-b border-gray-50">
+      {(loading || dataLoading) ? (
+        <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-indigo-400" /></div>
+      ) : (
+        <div className="flex flex-1 min-h-0">
+          {/* ── 左：利用者テーブル ── */}
+          <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
+            {/* テーブルヘッダー */}
+            <div className="grid grid-cols-[32px_1fr_80px_52px_52px_52px] bg-gray-50 border-b border-gray-200 text-[11px] font-semibold text-gray-500 shrink-0">
+              <div className="px-2 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
-                      ? new Set()
-                      : new Set(clientGroups.map(g => g.client.id))
+                      ? new Set() : new Set(clientGroups.map(g => g.client.id))
                   )}
-                  className="text-xs font-medium text-indigo-500 hover:text-indigo-700 transition-colors"
+                  className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                    selectedClientIds.size === clientGroups.length && clientGroups.length > 0
+                      ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
+                  }`}
                 >
-                  {selectedClientIds.size === clientGroups.length && clientGroups.length > 0 ? "全解除" : "全チェック"}
+                  {selectedClientIds.size === clientGroups.length && clientGroups.length > 0 && (
+                    <span className="text-white text-[8px] font-bold">✓</span>
+                  )}
                 </button>
-                {selectedClientIds.size > 0 && (
-                  <>
-                    <span className="text-xs text-gray-400">{selectedClientIds.size}名選択</span>
-                    <div className="ml-auto flex gap-2">
-                      <button
-                        onClick={() => handleConfirm("返戻")}
-                        className="text-xs font-semibold px-3 py-1 rounded-lg bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 transition-colors"
-                      >返戻で確定</button>
-                      <button
-                        onClick={() => handleConfirm("過誤")}
-                        className="text-xs font-semibold px-3 py-1 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
-                      >過誤で確定</button>
-                    </div>
-                  </>
-                )}
-                {selectedClientIds.size === 0 && (
-                  <span className="ml-auto text-xs text-gray-400">
-                    {clientGroups.filter(g => !autoLateClients.has(g.client.id)).length}名請求対象
-                  </span>
-                )}
               </div>
+              <div className="px-2 py-2">利用者名</div>
+              <div className="px-2 py-2 text-right">単位数</div>
+              <div className="px-2 py-2 text-center">月遅れ</div>
+              <div className="px-2 py-2 text-center">返戻</div>
+              <div className="px-2 py-2 text-center">過誤</div>
+            </div>
 
-              {/* 列ヘッダー */}
-              <div className="grid grid-cols-[28px_1fr_72px] px-4 py-1.5 bg-gray-50 border-b border-gray-100">
-                <div />
-                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">利用者</div>
-                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide text-right">単位数</div>
-              </div>
-
+            {/* テーブル本体 */}
+            <div className="flex-1 overflow-y-auto">
               {clientGroups.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-10">{billingMonth}のアクティブレンタル（介護）がありません</p>
               ) : (
-                <ul className="divide-y divide-gray-50">
+                <>
                   {clientGroups.map(({ client, items }) => {
                     const isLate = autoLateClients.has(client.id);
                     const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
                     const isSelected = selectedClientIds.has(client.id);
+                    const isDetail = detailClient?.client.id === client.id;
                     const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
                     return (
-                      <li
+                      <div
                         key={client.id}
-                        onClick={() => setSelectedClientIds(prev => {
-                          const s = new Set(prev);
-                          if (s.has(client.id)) s.delete(client.id); else s.add(client.id);
-                          return s;
-                        })}
-                        className={`grid grid-cols-[28px_1fr_72px] items-center px-4 py-3 cursor-pointer select-none transition-colors ${
-                          isSelected ? "bg-indigo-50" : isLate ? "bg-orange-50/60" : "hover:bg-gray-50/80"
+                        onClick={() => setDetailClient(isDetail ? null : { client, items })}
+                        className={`grid grid-cols-[32px_1fr_80px_52px_52px_52px] border-b border-gray-100 text-sm cursor-pointer transition-colors ${
+                          isDetail ? "bg-blue-50" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50/50" : "hover:bg-gray-50"
                         }`}
                       >
-                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
-                          isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
-                        }`}>
-                          {isSelected && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                        <div className="px-2 py-2 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => setSelectedClientIds(prev => {
+                              const s = new Set(prev);
+                              if (s.has(client.id)) s.delete(client.id); else s.add(client.id);
+                              return s;
+                            })}
+                            className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                              isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
+                            }`}
+                          >
+                            {isSelected && <span className="text-white text-[8px] font-bold">✓</span>}
+                          </button>
                         </div>
-                        <div className="flex items-center gap-1.5 min-w-0 pr-2">
-                          <span className={`font-medium text-sm truncate ${isLate ? "text-gray-400" : "text-gray-800"}`}>{client.name}</span>
-                          {client.care_level && (
-                            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full shrink-0">{client.care_level}</span>
-                          )}
-                          {isLate && (
-                            <span className="text-[10px] bg-orange-100 text-orange-600 font-semibold px-1.5 py-0.5 rounded-full shrink-0">月遅れ</span>
-                          )}
-                          {flag && (
-                            <span className="text-[10px] bg-red-100 text-red-600 font-semibold px-1.5 py-0.5 rounded-full shrink-0">{flag.flag_type}</span>
-                          )}
+                        <div className="px-2 py-2 flex items-center gap-1.5 min-w-0">
+                          <span className={`font-medium truncate ${isLate ? "text-gray-400" : "text-gray-800"}`}>{client.name}</span>
+                          {client.care_level && <span className="text-[10px] bg-gray-100 text-gray-500 px-1 rounded shrink-0">{client.care_level}</span>}
                         </div>
-                        <div className="text-right">
-                          {isLate ? (
-                            <span className="text-gray-300 text-sm font-bold">—</span>
-                          ) : (
-                            <>
-                              <span className="font-bold text-sm text-indigo-600">{totalUnits.toLocaleString()}</span>
-                              <span className="text-[11px] text-gray-400 ml-0.5">単位</span>
-                            </>
-                          )}
+                        <div className="px-2 py-2 text-right font-mono">
+                          {isLate ? <span className="text-gray-300">—</span> : <span className="text-gray-800">{totalUnits.toLocaleString()}</span>}
                         </div>
-                      </li>
+                        <div className="py-2 text-center">
+                          {isLate && <span className="text-[11px] font-semibold text-orange-500">月遅</span>}
+                        </div>
+                        <div className="py-2 text-center">
+                          {flag?.flag_type === "返戻" && <span className="text-[11px] font-semibold text-red-500">返戻</span>}
+                        </div>
+                        <div className="py-2 text-center">
+                          {flag?.flag_type === "過誤" && <span className="text-[11px] font-semibold text-red-500">過誤</span>}
+                        </div>
+                      </div>
                     );
                   })}
-                </ul>
-              )}
-            </div>
-
-            {/* ── 再請求セクション ── */}
-            {rebillByMonth.length > 0 && (
-              <div className="bg-white rounded-2xl border border-amber-100 overflow-hidden shadow-sm">
-                <div className="px-4 py-2.5 bg-amber-50/70 border-b border-amber-100 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-amber-700">再請求 — 今月の伝送データに含まれます</span>
-                  <span className="text-xs text-amber-500">{rebillByMonth.reduce((s, [, e]) => s + e.length, 0)}件</span>
-                </div>
-                <ul className="divide-y divide-amber-50">
+                  {/* 再請求行 */}
                   {rebillByMonth.flatMap(([month, entries]) =>
                     entries.map(({ client, items, flag }) => {
                       const [ry, rm] = month.split("-").map(Number);
                       const units = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
                       return (
-                        <li key={`${client.id}-${month}`} className="px-4 py-3 flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-gray-800">{client.name}</span>
-                            <span className="text-xs text-gray-400">{ry}年{rm}月</span>
-                            <span className="text-[10px] bg-red-100 text-red-600 font-semibold px-1.5 py-0.5 rounded-full">{flag.flag_type}</span>
+                        <div key={`rebill-${client.id}-${month}`}
+                          className="grid grid-cols-[32px_1fr_80px_52px_52px_52px] border-b border-amber-100 bg-amber-50/40 text-sm">
+                          <div className="px-2 py-2" />
+                          <div className="px-2 py-2 flex items-center gap-1.5">
+                            <span className="text-gray-700 font-medium">{client.name}</span>
+                            <span className="text-[10px] text-amber-600 bg-amber-100 px-1 rounded">{ry}/{String(rm).padStart(2,"0")} 再請求</span>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="font-bold text-sm text-amber-600">{units.toLocaleString()}<span className="text-[11px] font-normal text-gray-400 ml-0.5">単位</span></span>
-                            <button
-                              onClick={() => toggleRebillFlag(client.id, month, flag.flag_type as "返戻" | "過誤")}
-                              className="text-[11px] text-gray-400 hover:text-red-500 border border-gray-200 rounded-lg px-2 py-0.5 hover:border-red-300 transition-colors"
-                            >解除</button>
+                          <div className="px-2 py-2 text-right font-mono text-gray-600">{units.toLocaleString()}</div>
+                          <div className="py-2 text-center" />
+                          <div className="py-2 text-center">
+                            {flag.flag_type === "返戻" && (
+                              <button onClick={() => toggleRebillFlag(client.id, month, "返戻")}
+                                className="text-[11px] text-red-500 underline">返戻</button>
+                            )}
                           </div>
-                        </li>
+                          <div className="py-2 text-center">
+                            {flag.flag_type === "過誤" && (
+                              <button onClick={() => toggleRebillFlag(client.id, month, "過誤")}
+                                className="text-[11px] text-red-500 underline">過誤</button>
+                            )}
+                          </div>
+                        </div>
                       );
                     })
                   )}
-                </ul>
-              </div>
-            )}
+                </>
+              )}
+            </div>
 
-            {/* ── 伝送データ出力 ── */}
-            <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-gray-800">伝送データ出力</span>
-                <div className="flex items-center gap-3 text-xs text-gray-400">
-                  <span>請求 {clientGroups.filter(g => !autoLateClients.has(g.client.id)).length}名</span>
-                  {rebillByMonth.length > 0 && <span className="text-amber-500 font-medium">再請求 {rebillByMonth.reduce((s, [, e]) => s + e.length, 0)}件</span>}
-                </div>
-              </div>
-              <p className="text-[11px] text-amber-500">※ 被保険者証情報（保険者番号等）は別途ほのぼので補完してください</p>
-              <button
-                onClick={generateTransferData}
-                className="w-full bg-indigo-500 text-white py-2.5 rounded-xl font-medium text-sm flex items-center justify-center gap-2 hover:bg-indigo-600 active:bg-indigo-700 transition-colors"
-              >
-                <Download size={15} />
-                CSVダウンロード（FKYUFU{billingMonth.replace("-", "")}.csv）
-              </button>
+            {/* ── フッター合計 ── */}
+            <div className="border-t border-gray-200 bg-gray-50 px-3 py-2 shrink-0 flex items-center gap-6 text-xs text-gray-600">
+              <span>合計件数 <strong className="text-gray-800 font-semibold">{clientGroups.length}</strong></span>
+              <span>合計単位数 <strong className="text-gray-800 font-semibold">{(totalUnitsAll + rebillByMonth.reduce((s, [, entries]) => s + entries.reduce((ss, { client, items }) => ss + items.reduce((sss, item) => sss + getUnits(item, client.id) * item.quantity, 0), 0), 0)).toLocaleString()}</strong></span>
+              <span>国保対象件数 <strong className="text-gray-800 font-semibold">{billingTarget.length}</strong></span>
+              <span>国保対象単位数 <strong className="text-gray-800 font-semibold">{totalUnitsAll.toLocaleString()}</strong></span>
+              <span className="ml-auto text-amber-500 text-[10px]">※ 被保険者証情報は別途ほのぼので補完</span>
             </div>
           </div>
-        )}
-      </div>
+
+          {/* ── 右：明細情報 ── */}
+          <div className="w-72 shrink-0 flex flex-col bg-white">
+            <div className="border-b border-gray-200 px-3 py-2 bg-gray-50">
+              <span className="text-xs font-semibold text-gray-600">明細情報</span>
+              {detailClient && <span className="ml-2 text-xs text-gray-500">{detailClient.client.name}</span>}
+            </div>
+            {detailClient ? (
+              <>
+                <div className="flex-1 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-2 py-1.5 font-medium text-gray-500 w-auto">用具名</th>
+                        <th className="text-right px-2 py-1.5 font-medium text-gray-500 w-14">単位数</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {detailClient.items.map(item => {
+                        const eq = equipment.find(e => e.product_code === item.product_code);
+                        const units = getUnits(item, detailClient.client.id) * item.quantity;
+                        return (
+                          <tr key={item.id} className="hover:bg-gray-50">
+                            <td className="px-2 py-1.5 text-gray-700 leading-tight">{eq?.name ?? item.product_code}</td>
+                            <td className="px-2 py-1.5 text-right font-mono text-gray-800">{units.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-gray-200 p-3 bg-gray-50 space-y-1.5">
+                  {(() => {
+                    const totalU = detailClient.items.reduce((s, item) => s + getUnits(item, detailClient.client.id) * item.quantity, 0);
+                    const insuredAmount = totalU * 10;
+                    const benefitRate = parseInt(detailClient.client.benefit_rate ?? "90", 10);
+                    const copayRate = 100 - benefitRate;
+                    const copayAmount = Math.round(insuredAmount * copayRate / 100);
+                    return (
+                      <>
+                        <div className="flex justify-between text-xs text-gray-500">
+                          <span>保険単位数</span><span className="font-mono font-semibold text-gray-700">{totalU.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-gray-500">
+                          <span>保険請求額</span><span className="font-mono font-semibold text-gray-700">¥{insuredAmount.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-gray-500">
+                          <span>利用者負担額（{copayRate}%）</span><span className="font-mono font-semibold text-red-600">¥{copayAmount.toLocaleString()}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
+                利用者を選択してください
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
