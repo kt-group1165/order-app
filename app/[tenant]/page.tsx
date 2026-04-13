@@ -4032,6 +4032,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [tenantInfo, setTenantInfo] = useState<import("@/lib/tenants").Tenant | null>(null);
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
@@ -4042,13 +4043,15 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       getAllOrders(tenantId),
       getTenantById(tenantId),
       supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
-    ]).then(([c, eq, items, ords, tenant, insRaw]) => {
+      supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
+    ]).then(([c, eq, items, ords, tenant, insRaw, hospRaw]) => {
       setClients(c);
       setEquipment(eq);
       setOrderItems(items);
       setOrders(ords);
       setTenantInfo(tenant);
       setInsuranceRecords(insRaw as ClientInsuranceRecord[]);
+      setHospitalizations(hospRaw as ClientHospitalization[]);
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId]);
   const [billingMonth, setBillingMonth] = useState(() => {
@@ -4319,6 +4322,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
   const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
+  const [rentalGridClient, setRentalGridClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [kanaFilter, setKanaFilter] = useState<string | null>(null);
   const billingTarget = clientGroups.filter(g => !autoLateClients.has(g.client.id));
   const totalUnitsAll = billingTarget.reduce((s, { client, items }) => s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
@@ -4495,7 +4499,13 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                     </div>
                     <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
                     <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
-                    <div className="px-2 py-2.5 border-l border-gray-100 font-medium text-gray-800 truncate">{client.name}</div>
+                    <div className="px-2 py-2.5 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-2 min-w-0">
+                      <span className="truncate">{client.name}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
+                        className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                      >提供表</button>
+                    </div>
                     <div className="px-2 py-2.5 border-l border-gray-100 text-right font-mono">
                       {isLate ? <span className="text-gray-300">—</span> : totalUnits.toLocaleString()}
                     </div>
@@ -4600,6 +4610,213 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           </div>
         </div>
       )}
+
+      {/* ── 利用・提供表モーダル ── */}
+      {rentalGridClient && (
+        <RentalGridModal
+          client={rentalGridClient.client}
+          items={rentalGridClient.items}
+          equipment={equipment}
+          hospitalizations={hospitalizations.filter(h => h.client_id === rentalGridClient.client.id)}
+          month={billingMonth}
+          onClose={() => setRentalGridClient(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── RentalGridModal ──────────────────────────────────────────────────────────
+
+function RentalGridModal({
+  client, items, equipment, hospitalizations, month, onClose,
+}: {
+  client: Client;
+  items: OrderItem[];
+  equipment: Equipment[];
+  hospitalizations: ClientHospitalization[];
+  month: string;
+  onClose: () => void;
+}) {
+  const [y, m] = month.split("-").map(Number);
+  const reiwa = y - 2018;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  const DOW = ["日","月","火","水","木","金","土"];
+  const getDoW = (day: number) => DOW[new Date(y, m - 1, day).getDay()];
+  const isWeekend = (day: number) => { const d = new Date(y, m - 1, day).getDay(); return d === 0 || d === 6; };
+
+  // 入院期間を日単位のSetで保持
+  const hospDays = new Set<number>();
+  for (const h of hospitalizations) {
+    const admitDate = new Date(h.admission_date);
+    const dischargeDate = h.discharge_date ? new Date(h.discharge_date) : new Date(y, m, 0);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(y, m - 1, d);
+      if (date >= admitDate && date <= dischargeDate) hospDays.add(d);
+    }
+  }
+
+  // 各アイテムの貸与日を計算
+  const getItemDays = (item: OrderItem) => {
+    if (!item.rental_start_date) return new Set<number>();
+    const start = new Date(item.rental_start_date);
+    const end = item.rental_end_date ? new Date(item.rental_end_date) : new Date(y, m, 0);
+    const active = new Set<number>();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(y, m - 1, d);
+      if (date >= start && date <= end) active.add(d);
+    }
+    return active;
+  };
+
+  // 半月請求判定
+  const getHalfBilling = (item: OrderItem): "full" | "first" | "second" | "none" => {
+    const itemDays = getItemDays(item);
+    if (itemDays.size === 0) return "none";
+    // 入院で除外される日
+    const billingDays = [...itemDays].filter(d => !hospDays.has(d));
+    if (billingDays.length === 0) return "none";
+    const hasFirst = billingDays.some(d => d <= 15);
+    const hasSecond = billingDays.some(d => d > 15);
+    if (hasFirst && hasSecond) return "full";
+    if (hasFirst) return "first";
+    return "second";
+  };
+
+  const eq = (item: OrderItem) => equipment.find(e => e.product_code === item.product_code);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-2xl flex flex-col w-full max-w-[95vw] max-h-[90vh]">
+        {/* ヘッダー */}
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-200 bg-gray-50 rounded-t-lg shrink-0">
+          <span className="font-bold text-gray-800">利用・提供表</span>
+          <span className="text-gray-600 text-sm">{client.name}</span>
+          <span className="text-gray-500 text-sm">R{reiwa}/{m}月</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="text-xs border border-gray-300 rounded px-3 py-1 hover:bg-gray-100 flex items-center gap-1"
+            >
+              <Printer size={12} />印刷
+            </button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={18} /></button>
+          </div>
+        </div>
+
+        {/* グリッド本体 */}
+        <div className="flex-1 overflow-auto p-3">
+          <table className="border-collapse text-[11px] w-full">
+            <thead>
+              {/* 曜日行 */}
+              <tr>
+                <th className="border border-gray-300 bg-gray-100 px-2 py-1 text-left font-semibold text-gray-600 min-w-[140px]">サービス内容</th>
+                {days.map(d => (
+                  <th key={d} className={`border border-gray-300 px-0.5 py-1 text-center font-medium w-6 ${
+                    isWeekend(d) ? "bg-red-50 text-red-500" : "bg-gray-100 text-gray-600"
+                  }`}>
+                    <div>{d}</div>
+                    <div className={`text-[9px] ${isWeekend(d) ? "text-red-400" : "text-gray-400"}`}>{getDoW(d)}</div>
+                  </th>
+                ))}
+                <th className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold text-gray-600 w-10">合計</th>
+                <th className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold text-gray-600 w-14">単位数</th>
+                <th className="border border-gray-300 bg-gray-100 px-2 py-1 text-center font-semibold text-gray-600 w-16">請求区分</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => {
+                const e = eq(item);
+                const itemDays = getItemDays(item);
+                const billing = getHalfBilling(item);
+                const rentalDayCount = [...itemDays].filter(d => !hospDays.has(d)).length;
+                const units = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
+                const billingLabel = billing === "full" ? "1か月" : billing === "first" ? "前半月" : billing === "second" ? "後半月" : "—";
+                return (
+                  <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
+                    <td className="border border-gray-200 px-2 py-1.5 font-medium text-gray-800 leading-tight">
+                      {e?.name ?? item.product_code}
+                    </td>
+                    {days.map(d => {
+                      const isRental = itemDays.has(d);
+                      const isHosp = hospDays.has(d);
+                      const isStart = item.rental_start_date && new Date(item.rental_start_date).getDate() === d
+                        && new Date(item.rental_start_date).getMonth() === m - 1
+                        && new Date(item.rental_start_date).getFullYear() === y;
+                      const isEnd = item.rental_end_date && new Date(item.rental_end_date).getDate() === d
+                        && new Date(item.rental_end_date).getMonth() === m - 1
+                        && new Date(item.rental_end_date).getFullYear() === y;
+                      return (
+                        <td key={d} className={`border border-gray-200 text-center p-0 h-7 ${
+                          !isRental ? "bg-white" :
+                          isHosp ? "bg-orange-100" :
+                          "bg-blue-100"
+                        }`}>
+                          {isRental && (
+                            <span className={`text-[9px] font-bold ${
+                              isHosp ? "text-orange-500" :
+                              isStart ? "text-blue-700" :
+                              isEnd ? "text-purple-600" :
+                              "text-blue-500"
+                            }`}>
+                              {isStart ? "S" : isEnd ? "E" : isHosp ? "入" : "●"}
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="border border-gray-200 px-1 py-1 text-right font-mono text-gray-700">{rentalDayCount}日</td>
+                    <td className="border border-gray-200 px-1 py-1 text-right font-mono font-semibold text-gray-800">{units}</td>
+                    <td className={`border border-gray-200 px-1 py-1 text-center text-[10px] font-semibold ${
+                      billing === "full" ? "text-gray-700" :
+                      billing !== "none" ? "text-amber-600" : "text-gray-400"
+                    }`}>{billingLabel}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {/* 凡例 */}
+          <div className="flex items-center gap-4 mt-3 text-[11px] text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-4 h-4 bg-blue-100 border border-gray-300 inline-block rounded-sm" />貸与中</span>
+            <span className="flex items-center gap-1"><span className="w-4 h-4 bg-orange-100 border border-gray-300 inline-block rounded-sm" />入院中（請求除外）</span>
+            <span className="flex items-center gap-1"><span className="font-bold text-blue-700 text-xs">S</span> 開始日</span>
+            <span className="flex items-center gap-1"><span className="font-bold text-purple-600 text-xs">E</span> 終了日</span>
+          </div>
+
+          {/* 合計 */}
+          <div className="mt-4 inline-block border border-gray-300 rounded overflow-hidden text-[11px]">
+            <div className="bg-gray-100 border-b border-gray-300 px-3 py-1 font-semibold text-gray-700 text-center">介護請求合計</div>
+            <table className="border-collapse">
+              <thead>
+                <tr>
+                  <th className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-600"></th>
+                  <th className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-600">単位数合計</th>
+                  <th className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-600">請求区分</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-700">合計</td>
+                  <td className="border border-gray-200 px-3 py-1 text-right font-mono font-semibold text-gray-800">
+                    {items.reduce((s, item) => {
+                      const e = eq(item);
+                      const billing = getHalfBilling(item);
+                      if (billing === "none") return s;
+                      const u = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
+                      return s + (billing === "first" || billing === "second" ? Math.round(u / 2) : u);
+                    }, 0)}単位
+                  </td>
+                  <td className="border border-gray-200 px-3 py-1 text-center text-gray-600">介護保険</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
