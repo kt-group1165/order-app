@@ -1910,6 +1910,12 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
   const [showHospModal, setShowHospModal] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  // 実績表
+  const [showJissekiModal, setShowJissekiModal] = useState(false);
+  const [jissekiMonth, setJissekiMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [jissekiCmOrg, setJissekiCmOrg] = useState<string>("__ALL__");
+  const [jissekiRentals, setJissekiRentals] = useState<ClientRentalHistory[]>([]);
+  const [jissekiLoading, setJissekiLoading] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -2161,6 +2167,51 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
     }
   };
 
+  const openJissekiModal = async () => {
+    setShowJissekiModal(true);
+    if (jissekiRentals.length > 0) return; // already loaded
+    setJissekiLoading(true);
+    try {
+      const all: ClientRentalHistory[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("client_rental_history")
+          .select("*")
+          .eq("tenant_id", tenantId)
+          .is("end_date", null)
+          .range(from, from + 999);
+        if (error || !data || data.length === 0) break;
+        all.push(...(data as ClientRentalHistory[]));
+        if (data.length < 1000) break;
+        from += 1000;
+      }
+      setJissekiRentals(all);
+    } finally {
+      setJissekiLoading(false);
+    }
+  };
+
+  // サービスコードマッピング（種目→コード）
+  const JISSEKI_SERVICE_CODES: Record<string, string> = {
+    "車いす": "17 1001",
+    "車椅子": "17 1001",
+    "車いす付属品": "17 1002",
+    "車椅子付属品": "17 1002",
+    "特殊寝台": "17 1003",
+    "特殊寝台付属品": "17 1004",
+    "床ずれ防止用具": "17 1005",
+    "体位変換器": "17 1006",
+    "手すり": "17 1007",
+    "スロープ": "17 1008",
+    "歩行器": "17 1009",
+    "歩行補助つえ": "17 1012",
+    "徘徊感知機器": "17 1014",
+    "認知症老人徘徊感知機器": "17 1014",
+    "移動用リフト": "17 1015",
+    "自動排せつ処理装置": "17 1016",
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
@@ -2182,6 +2233,12 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         )}
         {viewMode === "history" && <div className="flex-1" />}
         <div className="flex gap-1 shrink-0">
+          <button
+            onClick={openJissekiModal}
+            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors"
+          >
+            実績表
+          </button>
           <button
             onClick={() => setShowHospModal(true)}
             className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors"
@@ -2417,6 +2474,181 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
       )}
 
       {/* 入院中一覧モーダル */}
+      {showJissekiModal && (() => {
+        const [jYear, jMonth] = jissekiMonth.split("-").map(Number);
+        // 令和換算
+        const reiwaYear = jYear - 2018;
+        const reiwaLabel = `令和${reiwaYear}年${jMonth}月`;
+
+        const prevJMonth = () => {
+          const d = new Date(jYear, jMonth - 2, 1);
+          setJissekiMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+        };
+        const nextJMonth = () => {
+          const d = new Date(jYear, jMonth, 1);
+          setJissekiMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+        };
+
+        // ケアマネ事業所一覧（重複除去・ソート）
+        const allCmOrgs = Array.from(new Set(
+          clients.map(c => c.care_manager_org ?? "").filter(Boolean)
+        )).sort((a, b) => a.localeCompare(b, "ja"));
+
+        // 表示対象の利用者（入院中を除外）
+        const monthStart = `${jissekiMonth}-01`;
+        const monthEnd = new Date(jYear, jMonth, 0).toISOString().split("T")[0];
+        const hospInMonth = new Set(
+          hospitalizations
+            .filter(h => h.admission_date <= monthEnd && (h.discharge_date === null || h.discharge_date >= monthStart))
+            .map(h => h.client_id)
+        );
+
+        // ケアマネ事業所でフィルタ
+        const targetClients = clients.filter(c => {
+          if (jissekiCmOrg !== "__ALL__" && (c.care_manager_org ?? "") !== jissekiCmOrg) return false;
+          return true;
+        }).sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
+
+        // 各利用者のレンタル用具をマッピング
+        const rentalByClient = new Map<string, ClientRentalHistory[]>();
+        for (const r of jissekiRentals) {
+          if (!rentalByClient.has(r.client_id)) rentalByClient.set(r.client_id, []);
+          rentalByClient.get(r.client_id)!.push(r);
+        }
+
+        // 実績表データ：レンタルがある利用者のみ
+        const jissekiRows = targetClients
+          .map(c => ({ client: c, rentals: rentalByClient.get(c.id) ?? [] }))
+          .filter(r => r.rentals.length > 0);
+
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-end z-50">
+            <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
+              {/* ヘッダー */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="font-semibold text-gray-800 text-sm">サービス利用実績表</span>
+                  <div className="flex items-center gap-1">
+                    <button onClick={prevJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
+                      <ChevronLeft size={16} />
+                    </button>
+                    <span className="text-sm font-medium text-gray-700 w-32 text-center">{reiwaLabel}</span>
+                    <button onClick={nextJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                  <select
+                    value={jissekiCmOrg}
+                    onChange={e => setJissekiCmOrg(e.target.value)}
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 max-w-[200px]"
+                  >
+                    <option value="__ALL__">すべての事業所</option>
+                    {allCmOrgs.map(org => (
+                      <option key={org} value={org}>{org}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-500">{jissekiRows.length}名</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                  >
+                    印刷
+                  </button>
+                  <button onClick={() => setShowJissekiModal(false)}><X size={20} className="text-gray-400" /></button>
+                </div>
+              </div>
+
+              {/* コンテンツ */}
+              <div className="flex-1 overflow-y-auto px-4 py-3">
+                {jissekiLoading ? (
+                  <div className="flex items-center justify-center py-16">
+                    <Loader2 size={24} className="animate-spin text-emerald-400" />
+                  </div>
+                ) : jissekiRows.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-16">該当する用具レンタルがありません</p>
+                ) : (
+                  <div className="space-y-6 print:space-y-4">
+                    {/* 印刷ヘッダー（print時のみ表示） */}
+                    <div className="hidden print:block text-center mb-4">
+                      <h1 className="text-lg font-bold">サービス利用実績表</h1>
+                      <p className="text-sm">{reiwaLabel}{jissekiCmOrg !== "__ALL__" ? `　${jissekiCmOrg}` : ""}</p>
+                    </div>
+
+                    {jissekiRows.map(({ client, rentals }) => {
+                      const isHosp = hospInMonth.has(client.id);
+                      const totalPrice = rentals.reduce((s, r) => s + (r.monthly_price ?? 0), 0);
+                      const totalTani = Math.round(totalPrice / 10);
+                      const benefitRate = client.benefit_rate ? parseInt(client.benefit_rate) : null;
+                      const copayRate = benefitRate !== null ? 100 - benefitRate : null;
+                      const copayAmount = copayRate !== null ? Math.ceil(totalPrice * copayRate / 100) : null;
+
+                      return (
+                        <div key={client.id} className="border border-gray-200 rounded-xl overflow-hidden print:break-inside-avoid print:rounded-none print:border-gray-400">
+                          {/* 利用者ヘッダー */}
+                          <div className={`px-3 py-2 flex items-center gap-3 ${isHosp ? "bg-red-50" : "bg-gray-50"}`}>
+                            <span className={`text-sm font-bold ${isHosp ? "text-red-700" : "text-gray-800"}`}>
+                              {client.name}
+                              {isHosp && <span className="ml-2 text-xs font-normal text-red-500">（入院中）</span>}
+                            </span>
+                            <span className="text-xs text-gray-500">{client.care_manager_org}</span>
+                            <span className="text-xs text-gray-400">{client.care_manager}</span>
+                            {benefitRate !== null && (
+                              <span className="text-xs text-gray-500 ml-auto">給付率 {benefitRate}% / 自己負担 {copayRate}%</span>
+                            )}
+                          </div>
+                          {/* 用具一覧テーブル */}
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-blue-50 text-blue-800">
+                                <th className="text-left px-2 py-1.5 font-medium w-[90px]">コード</th>
+                                <th className="text-left px-2 py-1.5 font-medium">サービス項目名</th>
+                                <th className="text-left px-2 py-1.5 font-medium">レンタル商品名</th>
+                                <th className="text-right px-2 py-1.5 font-medium w-[60px]">単位数</th>
+                                <th className="text-right px-2 py-1.5 font-medium w-[70px]">金額</th>
+                                <th className="text-left px-2 py-1.5 font-medium w-[80px]">備考</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {rentals.map((r, ri) => {
+                                const category = r.notes ?? "";
+                                const code = JISSEKI_SERVICE_CODES[category] ?? "";
+                                const tani = r.monthly_price ? Math.round(r.monthly_price / 10) : null;
+                                return (
+                                  <tr key={ri} className="hover:bg-gray-50">
+                                    <td className="px-2 py-1.5 text-gray-600 font-mono">{code}</td>
+                                    <td className="px-2 py-1.5 text-gray-700">{category}</td>
+                                    <td className="px-2 py-1.5 text-gray-800">{r.equipment_name}</td>
+                                    <td className="px-2 py-1.5 text-right text-gray-800">{tani !== null ? tani.toLocaleString() : "−"}</td>
+                                    <td className="px-2 py-1.5 text-right text-gray-800">{r.monthly_price !== null ? `¥${r.monthly_price.toLocaleString()}` : "−"}</td>
+                                    <td className="px-2 py-1.5 text-gray-500">{r.model_number ?? ""}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-gray-50 font-medium">
+                                <td colSpan={3} className="px-2 py-1.5 text-right text-gray-600">合計</td>
+                                <td className="px-2 py-1.5 text-right text-gray-800">{totalTani.toLocaleString()} 単位</td>
+                                <td className="px-2 py-1.5 text-right text-gray-800">¥{totalPrice.toLocaleString()}</td>
+                                <td className="px-2 py-1.5 text-right text-gray-600">
+                                  {copayAmount !== null && <span className="text-blue-700">自己負担 ¥{copayAmount.toLocaleString()}</span>}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {showHospModal && (() => {
         const [year, month] = hospModalMonth.split("-").map(Number);
         const firstDay = `${hospModalMonth}-01`;
