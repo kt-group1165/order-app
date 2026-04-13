@@ -4502,11 +4502,11 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                     <div className="py-1 border-l border-gray-100 text-center text-orange-500 font-semibold">
                       {isLate ? "月遅" : ""}
                     </div>
-                    <div className="py-1 border-l border-gray-100 text-center text-red-500 font-semibold">
-                      {flag?.flag_type === "返戻" ? "▼" : ""}
+                    <div className="py-1 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "返戻"); }}>
+                      <span className={`cursor-pointer select-none font-semibold ${flag?.flag_type === "返戻" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>▼</span>
                     </div>
-                    <div className="py-1 border-l border-gray-100 text-center text-red-500 font-semibold">
-                      {flag?.flag_type === "過誤" ? "▼" : ""}
+                    <div className="py-1 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
+                      <span className={`cursor-pointer select-none font-semibold ${flag?.flag_type === "過誤" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>▼</span>
                     </div>
                   </div>
                 );
