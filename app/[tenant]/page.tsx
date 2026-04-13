@@ -229,11 +229,13 @@ const matchClient = (c: Client, raw: string): boolean => {
   if (!trimmed) return true;
   const q = normalizeSearch(trimmed);
   const fields = [c.name, c.furigana ?? "", c.user_number ?? ""];
-  // 正規化マッチ（ひらがな/カタカナ/半角カナ統一）
+  // ① 正規化マッチ（ひらがな→カタカナ統一後に比較）
   if (fields.some(s => normalizeSearch(s).includes(q))) return true;
-  // 直接マッチ（正規化をバイパスして全角カタカナ等をそのまま比較）
-  const rawLower = trimmed.toLowerCase();
-  return fields.some(s => s.toLowerCase().includes(rawLower));
+  // ② カタカナ→ひらがなに変換してそのまま比較（DB側がひらがな保存の場合）
+  const qHira = trimmed.replace(/[\u30A1-\u30F6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+  if (qHira !== trimmed && fields.some(s => s.includes(qHira))) return true;
+  // ③ 直接マッチ（全角カタカナをそのまま比較）
+  return fields.some(s => s.toLowerCase().includes(trimmed.toLowerCase()));
 };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
