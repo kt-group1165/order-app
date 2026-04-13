@@ -1916,16 +1916,21 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   // 実績表
   const [showJissekiModal, setShowJissekiModal] = useState(false);
   const [jissekiMonth, setJissekiMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [jissekiCmOrg, setJissekiCmOrg] = useState<string>("__ALL__");
+  // ケアマネキー: "__ALL__" or "org||name"
+  const [jissekiCmKey, setJissekiCmKey] = useState<string>("__ALL__");
   const [jissekiRentals, setJissekiRentals] = useState<ClientRentalHistory[]>([]);
   const [jissekiLoading, setJissekiLoading] = useState(false);
   const [jissekiPreview, setJissekiPreview] = useState(false);
+  // 半額・日割・保留フラグ（rowKey → flags）
+  const [jissekiFlags, setJissekiFlags] = useState<Record<string, { half: boolean; daily: boolean; hold: boolean }>>({});
+  // テナント（自社）情報
+  const [tenantInfo, setTenantInfo] = useState<Tenant | null>(null);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq, ords, sup, mem, hospRes] = await Promise.all([
+        const [c, items, eq, ords, sup, mem, hospRes, tenant] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
@@ -1933,6 +1938,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           getSuppliers(),
           getMembers(tenantId),
           supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).order("admission_date", { ascending: false }),
+          getTenantById(tenantId),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -1941,6 +1947,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         setSuppliers(sup);
         setMembers(mem);
         setHospitalizations((hospRes.data ?? []) as ClientHospitalization[]);
+        setTenantInfo(tenant);
         // 保険レコードは件数が多いので全件ページング取得
         const allInsur: ClientInsuranceRecord[] = [];
         let insurFrom = 0;
@@ -2540,7 +2547,6 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
 
       {showJissekiModal && (() => {
         const [jYear, jMonth] = jissekiMonth.split("-").map(Number);
-        // 令和換算
         const reiwaYear = jYear - 2018;
         const reiwaLabel = `令和${reiwaYear}年${jMonth}月`;
 
@@ -2553,12 +2559,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           setJissekiMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
         };
 
-        // ケアマネ事業所一覧（重複除去・ソート）
-        const allCmOrgs = Array.from(new Set(
-          clients.map(c => c.care_manager_org ?? "").filter(Boolean)
-        )).sort((a, b) => a.localeCompare(b, "ja"));
-
-        // 表示対象の利用者（入院中を除外）
+        // 入院中（その月）
         const monthStart = `${jissekiMonth}-01`;
         const monthEnd = new Date(jYear, jMonth, 0).toISOString().split("T")[0];
         const hospInMonth = new Set(
@@ -2567,166 +2568,199 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
             .map(h => h.client_id)
         );
 
-        // ケアマネ事業所でフィルタ
-        const targetClients = clients.filter(c => {
-          if (jissekiCmOrg !== "__ALL__" && (c.care_manager_org ?? "") !== jissekiCmOrg) return false;
-          return true;
-        }).sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
-
         // 統合レンタル行の型
-        type JissekiRow = { equipName: string; category: string; code: string; monthlyPrice: number | null; modelNumber: string | null; source: "history" | "order" };
+        type JissekiRow = { equipName: string; category: string; code: string; monthlyPrice: number | null; modelNumber: string | null };
 
-        // client_rental_history から（インポートデータ）
+        // client_rental_history から
         const rentalByClient = new Map<string, JissekiRow[]>();
         for (const r of jissekiRentals) {
           const category = r.notes ?? "";
           if (!rentalByClient.has(r.client_id)) rentalByClient.set(r.client_id, []);
-          rentalByClient.get(r.client_id)!.push({
-            equipName: r.equipment_name,
-            category,
-            code: JISSEKI_SERVICE_CODES[category] ?? "",
-            monthlyPrice: r.monthly_price,
-            modelNumber: r.model_number,
-            source: "history",
-          });
+          rentalByClient.get(r.client_id)!.push({ equipName: r.equipment_name, category, code: JISSEKI_SERVICE_CODES[category] ?? "", monthlyPrice: r.monthly_price, modelNumber: r.model_number });
         }
-
-        // orderItems（rental_started）から — client_rental_history にない利用者を補完
+        // orderItems（rental_started）から補完
         for (const item of orderItems) {
           if (item.status !== "rental_started") continue;
-          const order = orders.find(o => o.id === item.order_id);
-          if (!order?.client_id) continue;
+          const ord = orders.find(o => o.id === item.order_id);
+          if (!ord?.client_id) continue;
+          if (rentalByClient.has(ord.client_id)) continue;
           const eq = equipment.find(e => e.product_code === item.product_code);
           const category = eq?.category ?? "";
-          const clientId = order.client_id;
-          // すでにhistoryデータがある利用者はスキップ（二重計上防止）
-          if (rentalByClient.has(clientId)) continue;
-          if (!rentalByClient.has(clientId)) rentalByClient.set(clientId, []);
-          rentalByClient.get(clientId)!.push({
-            equipName: eq?.name ?? item.product_code,
-            category,
-            code: JISSEKI_SERVICE_CODES[category] ?? "",
-            monthlyPrice: item.rental_price,
-            modelNumber: null,
-            source: "order",
-          });
+          rentalByClient.set(ord.client_id, []);
+          rentalByClient.get(ord.client_id)!.push({ equipName: eq?.name ?? item.product_code, category, code: JISSEKI_SERVICE_CODES[category] ?? "", monthlyPrice: item.rental_price, modelNumber: null });
+        }
+        // orderItems — 同一利用者の複数用具を追加（rental_historyある利用者も含む）
+        for (const item of orderItems) {
+          if (item.status !== "rental_started") continue;
+          const ord = orders.find(o => o.id === item.order_id);
+          if (!ord?.client_id) continue;
+          const existing = rentalByClient.get(ord.client_id);
+          if (!existing) continue; // historyデータがない場合は上で処理済み
+          const eq = equipment.find(e => e.product_code === item.product_code);
+          const category = eq?.category ?? "";
+          const equipName = eq?.name ?? item.product_code;
+          // 同じ用具名が既に入っていれば追加しない
+          if (!existing.some(r => r.equipName === equipName)) {
+            existing.push({ equipName, category, code: JISSEKI_SERVICE_CODES[category] ?? "", monthlyPrice: item.rental_price, modelNumber: null });
+          }
         }
 
-        // 実績表データ：レンタルがある利用者のみ
-        const jissekiRows = targetClients
-          .map(c => ({ client: c, rentals: rentalByClient.get(c.id) ?? [] as JissekiRow[] }))
-          .filter(r => r.rentals.length > 0);
+        // ケアマネ単位でグループ化: key = "org||name"
+        type CmGroup = { org: string; name: string; key: string; clients: { client: Client; rentals: JissekiRow[] }[] };
+        const cmGroupMap = new Map<string, CmGroup>();
+        for (const c of clients) {
+          const rows = rentalByClient.get(c.id);
+          if (!rows || rows.length === 0) continue;
+          const org = c.care_manager_org ?? "";
+          const name = c.care_manager ?? "";
+          const key = `${org}||${name}`;
+          if (!cmGroupMap.has(key)) cmGroupMap.set(key, { org, name, key, clients: [] });
+          cmGroupMap.get(key)!.clients.push({ client: c, rentals: rows });
+        }
+        const cmGroups = Array.from(cmGroupMap.values())
+          .sort((a, b) => a.org.localeCompare(b.org, "ja") || a.name.localeCompare(b.name, "ja"));
+        cmGroups.forEach(g => g.clients.sort((a, b) => (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja")));
 
-        // 各利用者カードの共通レンダラー
-        const renderClientCard = (client: Client, rentals: JissekiRow[], preview: boolean) => {
-          const isHosp = hospInMonth.has(client.id);
-          const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
-          const totalTani = Math.round(totalPrice / 10);
-          const benefitRate = client.benefit_rate ? parseInt(client.benefit_rate) : null;
-          const copayRate = benefitRate !== null ? 100 - benefitRate : null;
-          const copayAmount = copayRate !== null ? Math.ceil(totalPrice * copayRate / 100) : null;
+        // 選択中のケアマネグループ
+        const selectedGroup = jissekiCmKey === "__ALL__" ? null : cmGroups.find(g => g.key === jissekiCmKey) ?? null;
 
-          return (
-            <div key={client.id} className={preview
-              ? "mb-6 break-inside-avoid"
-              : "border border-gray-200 rounded-xl overflow-hidden"
-            }>
-              {/* 利用者ヘッダー */}
-              <div className={`px-3 py-1.5 flex items-center gap-3 ${preview ? "border-b border-gray-300" : (isHosp ? "bg-red-50" : "bg-gray-50")}`}>
-                <span className={`${preview ? "text-sm font-bold" : "text-sm font-bold"} ${isHosp ? "text-red-700" : "text-gray-800"}`}>
-                  {client.name}
-                  {isHosp && <span className="ml-2 text-xs font-normal text-red-500">（入院中）</span>}
-                </span>
-                {!preview && <><span className="text-xs text-gray-500">{client.care_manager_org}</span><span className="text-xs text-gray-400">{client.care_manager}</span></>}
-                {benefitRate !== null && (
-                  <span className={`text-xs text-gray-500 ${preview ? "" : "ml-auto"}`}>給付率 {benefitRate}%　自己負担 {copayRate}%</span>
-                )}
-              </div>
-              {/* 用具テーブル */}
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className={preview ? "bg-gray-100" : "bg-blue-50 text-blue-800"}>
-                    <th className="text-left px-2 py-1 font-medium border border-gray-300 w-[90px]">コード</th>
-                    <th className="text-left px-2 py-1 font-medium border border-gray-300">サービス項目名</th>
-                    <th className="text-left px-2 py-1 font-medium border border-gray-300">レンタル商品名</th>
-                    <th className="text-right px-2 py-1 font-medium border border-gray-300 w-[60px]">単位数</th>
-                    <th className="text-right px-2 py-1 font-medium border border-gray-300 w-[70px]">金額</th>
-                    <th className="text-left px-2 py-1 font-medium border border-gray-300 w-[100px]">備考</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rentals.map((r, ri) => {
-                    const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
-                    return (
-                      <tr key={ri}>
-                        <td className="px-2 py-1 border border-gray-300 font-mono">{r.code}</td>
-                        <td className="px-2 py-1 border border-gray-300">{r.category}</td>
-                        <td className="px-2 py-1 border border-gray-300">{r.equipName}</td>
-                        <td className="px-2 py-1 border border-gray-300 text-right">{tani !== null ? tani.toLocaleString() : "−"}</td>
-                        <td className="px-2 py-1 border border-gray-300 text-right">{r.monthlyPrice !== null ? `¥${r.monthlyPrice.toLocaleString()}` : "−"}</td>
-                        <td className="px-2 py-1 border border-gray-300 text-gray-500">{r.modelNumber ?? ""}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className={preview ? "bg-gray-50 font-medium" : "bg-gray-50 font-medium"}>
-                    <td colSpan={3} className="px-2 py-1 border border-gray-300 text-right text-gray-600">合計</td>
-                    <td className="px-2 py-1 border border-gray-300 text-right font-bold">{totalTani.toLocaleString()} 単位</td>
-                    <td className="px-2 py-1 border border-gray-300 text-right font-bold">¥{totalPrice.toLocaleString()}</td>
-                    <td className="px-2 py-1 border border-gray-300 text-right">
-                      {copayAmount !== null && <span className="text-blue-700">自己負担 ¥{copayAmount.toLocaleString()}</span>}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          );
+        // フラグ操作ヘルパー
+        const getFlag = (rowKey: string) => jissekiFlags[rowKey] ?? { half: false, daily: false, hold: false };
+        const toggleFlag = (rowKey: string, flag: "half" | "daily" | "hold") => {
+          setJissekiFlags(prev => ({ ...prev, [rowKey]: { ...getFlag(rowKey), [flag]: !getFlag(rowKey)[flag] } }));
         };
 
-        // ── プレビュー画面 ──────────────────────────────────────────
-        if (jissekiPreview) {
+        // ── プレビュー画面（1ケアマネ選択時のみ） ──────────────────
+        if (jissekiPreview && selectedGroup) {
+          const cmOrg = selectedGroup.org;
+          const cmName = selectedGroup.name;
+          const today = new Date();
+          const todayStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+
           return (
             <div className="fixed inset-0 bg-gray-300 z-50 flex flex-col">
-              {/* プレビューツールバー */}
+              {/* ツールバー */}
               <div className="bg-gray-800 text-white px-4 py-2 flex items-center gap-3 shrink-0 print:hidden">
-                <button
-                  onClick={() => setJissekiPreview(false)}
-                  className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors"
-                >
-                  <ChevronLeft size={16} />
-                  戻る
+                <button onClick={() => setJissekiPreview(false)} className="flex items-center gap-1 text-sm text-gray-300 hover:text-white">
+                  <ChevronLeft size={16} />戻る
                 </button>
-                <span className="text-sm font-medium flex-1">{reiwaLabel}　{jissekiCmOrg !== "__ALL__" ? jissekiCmOrg : "全事業所"}　{jissekiRows.length}名</span>
-                <button
-                  onClick={() => window.print()}
-                  className="px-4 py-1.5 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-400 transition-colors"
-                >
-                  印刷
-                </button>
+                <span className="text-sm flex-1">{reiwaLabel}分　{cmOrg}　{cmName}　{selectedGroup.clients.length}名</span>
+                <button onClick={() => window.print()} className="px-4 py-1.5 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-400">印刷</button>
               </div>
-              {/* A4用紙風プレビュー */}
+              {/* A4用紙 */}
               <div className="flex-1 overflow-y-auto py-6 flex flex-col items-center print:py-0 print:block">
-                <div className="bg-white shadow-xl w-[210mm] min-h-[297mm] px-10 py-10 print:shadow-none print:w-full print:px-8 print:py-6">
-                  {/* 文書タイトル */}
-                  <div className="text-center mb-6">
-                    <h1 className="text-xl font-bold tracking-wide">サービス利用実績表</h1>
-                    <p className="text-sm mt-1 text-gray-600">
-                      {reiwaLabel}
-                      {jissekiCmOrg !== "__ALL__" && `　${jissekiCmOrg}`}
-                    </p>
+                <div className="bg-white shadow-xl w-[210mm] px-10 py-8 print:shadow-none print:w-full print:px-8 print:py-4" style={{ minHeight: "297mm" }}>
+                  {/* タイトル行 */}
+                  <div className="flex items-end justify-between mb-3">
+                    <div className="text-sm font-bold">{reiwaLabel}分</div>
+                    <div className="text-xl font-bold underline tracking-widest">サービス利用実績表</div>
+                    <div className="text-xs text-right">{todayStr}</div>
                   </div>
-                  {/* 利用者カード一覧 */}
-                  <div className="space-y-5">
-                    {jissekiRows.map(({ client, rentals }) => renderClientCard(client, rentals, true))}
+                  {/* 送り主 ＋ 矢印 ＋ 受け先 */}
+                  <div className="flex items-stretch gap-3 mb-4">
+                    <div className="border border-gray-400 p-3 text-xs flex-none w-52">
+                      <div className="font-bold text-sm mb-2">{tenantInfo?.company_name ?? "（会社名未設定）"}</div>
+                      <div>事業所番号：{tenantInfo?.business_number ?? "−"}</div>
+                      <div>TEL：{tenantInfo?.company_tel ?? "−"}</div>
+                      <div>FAX：{tenantInfo?.company_fax ?? "−"}</div>
+                    </div>
+                    <div className="flex items-center text-2xl text-gray-400 shrink-0">→</div>
+                    <div className="border border-gray-400 p-3 text-xs flex-1">
+                      <div className="flex items-center justify-between">
+                        <div className="font-bold text-sm">{cmOrg || "（事業所名なし）"}</div>
+                        <div className="text-sm font-bold">御中</div>
+                      </div>
+                      <div className="mt-3 text-base font-bold text-right">{cmName ? `${cmName} 様` : ""}</div>
+                    </div>
                   </div>
+                  {/* 挨拶文 */}
+                  <p className="text-xs mb-1">いつもお世話になりありがとうございます。</p>
+                  <p className="text-xs mb-4">サービス利用実績表をお送りいたします。よろしくお願いいたします。</p>
+                  {/* メインテーブル */}
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr>
+                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-24">ご利用者様氏名</th>
+                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-28">コード<br/>サービス項目名</th>
+                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium">レンタル商品名</th>
+                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-14">単位数</th>
+                        <th colSpan={3} className="border border-gray-600 px-1 py-0.5 text-center font-medium text-[10px]">区分</th>
+                        <th rowSpan={2} className="border border-gray-600 px-1 py-1 text-center font-medium w-20">備考</th>
+                      </tr>
+                      <tr>
+                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">半額</th>
+                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">日割</th>
+                        <th className="border border-gray-600 px-0.5 py-0.5 text-center text-[10px] font-medium w-8">保留</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedGroup.clients.map(({ client, rentals }) => {
+                        const isHosp = hospInMonth.has(client.id);
+                        const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
+                        const totalTani = Math.round(totalPrice / 10);
+                        return (
+                          <Fragment key={client.id}>
+                            {rentals.map((r, ri) => {
+                              const rowKey = `${client.id}-${ri}`;
+                              const flags = getFlag(rowKey);
+                              const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
+                              return (
+                                <tr key={ri}>
+                                  {ri === 0 && (
+                                    <td rowSpan={rentals.length} className={`border border-gray-600 px-1 py-1 text-center align-top font-medium ${isHosp ? "text-red-600" : ""}`}>
+                                      {client.name} 様{isHosp && <div className="text-[10px] text-red-500">（入院中）</div>}
+                                    </td>
+                                  )}
+                                  <td className="border border-gray-600 px-1 py-0.5">
+                                    <div className="font-mono text-[10px]">{r.code}</div>
+                                    <div>{r.category}</div>
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5">{r.equipName}</td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-right">{tani !== null ? tani.toLocaleString() : ""}</td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                    <input type="checkbox" checked={flags.half} onChange={() => toggleFlag(rowKey, "half")} />
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                    <input type="checkbox" checked={flags.daily} onChange={() => toggleFlag(rowKey, "daily")} />
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center print:hidden">
+                                    <input type="checkbox" checked={flags.hold} onChange={() => toggleFlag(rowKey, "hold")} />
+                                  </td>
+                                  {/* 印刷時はチェック済みのみ表示 */}
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
+                                    {flags.half ? "●" : ""}
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
+                                    {flags.daily ? "●" : ""}
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5 text-center hidden print:table-cell text-[10px]">
+                                    {flags.hold ? "●" : ""}
+                                  </td>
+                                  <td className="border border-gray-600 px-1 py-0.5"></td>
+                                </tr>
+                              );
+                            })}
+                            {/* 利用者合計行 */}
+                            <tr className="bg-gray-50">
+                              <td colSpan={2} className="border border-gray-600 px-2 py-0.5 text-center font-medium text-xs">合計</td>
+                              <td className="border border-gray-600 px-2 py-0.5 text-right text-xs">金額</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
+                              <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center text-xs print:hidden">単位数</td>
+                              <td colSpan={3} className="border border-gray-600 px-2 py-0.5 text-center text-xs hidden print:table-cell">単位数</td>
+                              <td className="border border-gray-600 px-1 py-0.5 text-right font-bold">{totalTani.toLocaleString()}</td>
+                            </tr>
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
           );
         }
 
-        // ── 通常モーダル ────────────────────────────────────────────
+        // ── 通常モーダル（ケアマネ一覧） ───────────────────────────
         return (
           <div className="fixed inset-0 bg-black/60 flex items-end z-50">
             <div className="bg-white w-full rounded-t-2xl max-h-[92vh] flex flex-col">
@@ -2735,50 +2769,39 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="font-semibold text-gray-800 text-sm">サービス利用実績表</span>
                   <div className="flex items-center gap-1">
-                    <button onClick={prevJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
-                      <ChevronLeft size={16} />
-                    </button>
+                    <button onClick={prevJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={16} /></button>
                     <span className="text-sm font-medium text-gray-700 w-32 text-center">{reiwaLabel}</span>
-                    <button onClick={nextJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
-                      <ChevronRight size={16} />
-                    </button>
+                    <button onClick={nextJMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={16} /></button>
                   </div>
-                  <select
-                    value={jissekiCmOrg}
-                    onChange={e => setJissekiCmOrg(e.target.value)}
-                    className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 max-w-[200px]"
-                  >
-                    <option value="__ALL__">すべての事業所</option>
-                    {allCmOrgs.map(org => (
-                      <option key={org} value={org}>{org}</option>
-                    ))}
-                  </select>
-                  <span className="text-xs text-gray-500">{jissekiRows.length}名</span>
+                  <span className="text-xs text-gray-500">{cmGroups.length}事業所</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setJissekiPreview(true)}
-                    disabled={jissekiRows.length === 0}
-                    className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors disabled:opacity-40"
-                  >
-                    プレビュー
-                  </button>
-                  <button onClick={() => { setShowJissekiModal(false); setJissekiPreview(false); }}><X size={20} className="text-gray-400" /></button>
-                </div>
+                <button onClick={() => { setShowJissekiModal(false); setJissekiPreview(false); setJissekiCmKey("__ALL__"); }}>
+                  <X size={20} className="text-gray-400" />
+                </button>
               </div>
-
-              {/* コンテンツ */}
-              <div className="flex-1 overflow-y-auto px-4 py-3">
+              {/* ケアマネ一覧 */}
+              <div className="flex-1 overflow-y-auto">
                 {jissekiLoading ? (
-                  <div className="flex items-center justify-center py-16">
-                    <Loader2 size={24} className="animate-spin text-emerald-400" />
-                  </div>
-                ) : jissekiRows.length === 0 ? (
+                  <div className="flex items-center justify-center py-16"><Loader2 size={24} className="animate-spin text-emerald-400" /></div>
+                ) : cmGroups.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-16">該当する用具レンタルがありません</p>
                 ) : (
-                  <div className="space-y-4">
-                    {jissekiRows.map(({ client, rentals }) => renderClientCard(client, rentals, false))}
-                  </div>
+                  <ul className="divide-y divide-gray-100">
+                    {cmGroups.map(g => (
+                      <li key={g.key} className="px-4 py-3 flex items-center gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-800 truncate">{g.org || "（事業所名なし）"}</div>
+                          <div className="text-xs text-gray-500">{g.name || "（担当者名なし）"}　{g.clients.length}名</div>
+                        </div>
+                        <button
+                          onClick={() => { setJissekiCmKey(g.key); setJissekiPreview(true); }}
+                          className="px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors shrink-0"
+                        >
+                          プレビュー
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </div>
