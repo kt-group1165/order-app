@@ -2572,16 +2572,48 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           return true;
         }).sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
 
-        // 各利用者のレンタル用具をマッピング
-        const rentalByClient = new Map<string, ClientRentalHistory[]>();
+        // 統合レンタル行の型
+        type JissekiRow = { equipName: string; category: string; code: string; monthlyPrice: number | null; modelNumber: string | null; source: "history" | "order" };
+
+        // client_rental_history から（インポートデータ）
+        const rentalByClient = new Map<string, JissekiRow[]>();
         for (const r of jissekiRentals) {
+          const category = r.notes ?? "";
           if (!rentalByClient.has(r.client_id)) rentalByClient.set(r.client_id, []);
-          rentalByClient.get(r.client_id)!.push(r);
+          rentalByClient.get(r.client_id)!.push({
+            equipName: r.equipment_name,
+            category,
+            code: JISSEKI_SERVICE_CODES[category] ?? "",
+            monthlyPrice: r.monthly_price,
+            modelNumber: r.model_number,
+            source: "history",
+          });
+        }
+
+        // orderItems（rental_started）から — client_rental_history にない利用者を補完
+        for (const item of orderItems) {
+          if (item.status !== "rental_started") continue;
+          const order = orders.find(o => o.id === item.order_id);
+          if (!order?.client_id) continue;
+          const eq = equipment.find(e => e.product_code === item.product_code);
+          const category = eq?.category ?? "";
+          const clientId = order.client_id;
+          // すでにhistoryデータがある利用者はスキップ（二重計上防止）
+          if (rentalByClient.has(clientId)) continue;
+          if (!rentalByClient.has(clientId)) rentalByClient.set(clientId, []);
+          rentalByClient.get(clientId)!.push({
+            equipName: eq?.name ?? item.product_code,
+            category,
+            code: JISSEKI_SERVICE_CODES[category] ?? "",
+            monthlyPrice: item.rental_price,
+            modelNumber: null,
+            source: "order",
+          });
         }
 
         // 実績表データ：レンタルがある利用者のみ
         const jissekiRows = targetClients
-          .map(c => ({ client: c, rentals: rentalByClient.get(c.id) ?? [] }))
+          .map(c => ({ client: c, rentals: rentalByClient.get(c.id) ?? [] as JissekiRow[] }))
           .filter(r => r.rentals.length > 0);
 
         return (
@@ -2641,7 +2673,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
 
                     {jissekiRows.map(({ client, rentals }) => {
                       const isHosp = hospInMonth.has(client.id);
-                      const totalPrice = rentals.reduce((s, r) => s + (r.monthly_price ?? 0), 0);
+                      const totalPrice = rentals.reduce((s, r) => s + (r.monthlyPrice ?? 0), 0);
                       const totalTani = Math.round(totalPrice / 10);
                       const benefitRate = client.benefit_rate ? parseInt(client.benefit_rate) : null;
                       const copayRate = benefitRate !== null ? 100 - benefitRate : null;
@@ -2675,17 +2707,15 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {rentals.map((r, ri) => {
-                                const category = r.notes ?? "";
-                                const code = JISSEKI_SERVICE_CODES[category] ?? "";
-                                const tani = r.monthly_price ? Math.round(r.monthly_price / 10) : null;
+                                const tani = r.monthlyPrice ? Math.round(r.monthlyPrice / 10) : null;
                                 return (
                                   <tr key={ri} className="hover:bg-gray-50">
-                                    <td className="px-2 py-1.5 text-gray-600 font-mono">{code}</td>
-                                    <td className="px-2 py-1.5 text-gray-700">{category}</td>
-                                    <td className="px-2 py-1.5 text-gray-800">{r.equipment_name}</td>
+                                    <td className="px-2 py-1.5 text-gray-600 font-mono">{r.code}</td>
+                                    <td className="px-2 py-1.5 text-gray-700">{r.category}</td>
+                                    <td className="px-2 py-1.5 text-gray-800">{r.equipName}</td>
                                     <td className="px-2 py-1.5 text-right text-gray-800">{tani !== null ? tani.toLocaleString() : "−"}</td>
-                                    <td className="px-2 py-1.5 text-right text-gray-800">{r.monthly_price !== null ? `¥${r.monthly_price.toLocaleString()}` : "−"}</td>
-                                    <td className="px-2 py-1.5 text-gray-500">{r.model_number ?? ""}</td>
+                                    <td className="px-2 py-1.5 text-right text-gray-800">{r.monthlyPrice !== null ? `¥${r.monthlyPrice.toLocaleString()}` : "−"}</td>
+                                    <td className="px-2 py-1.5 text-gray-500">{r.modelNumber ?? ""}</td>
                                   </tr>
                                 );
                               })}
