@@ -4460,7 +4460,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                 <button
                   key={client.id}
                   onClick={() => setGridSelectedClient({ client, items })}
-                  className={`w-full text-left px-3 py-2 text-sm border-b border-gray-100 transition-colors leading-tight ${
+                  className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-100 transition-colors ${
                     gridSelectedClient?.client.id === client.id
                       ? "bg-blue-100 text-blue-800 font-semibold"
                       : "hover:bg-gray-50 text-gray-700"
