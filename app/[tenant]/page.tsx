@@ -4350,35 +4350,35 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   ];
 
   return (
-    <div className="flex flex-col h-full bg-white text-xs">
+    <div className="flex flex-col h-full bg-white text-sm">
       {/* ── ツールバー ── */}
-      <div className="border-b border-gray-300 bg-gray-100 px-2 py-1.5 shrink-0 flex items-center gap-1.5 flex-wrap">
-        <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-1.5 py-0.5">
-          <button onClick={prevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={12} /></button>
-          <span className="font-semibold text-gray-800 px-1 text-xs">R{y - 2018}/{m}</span>
-          <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={12} /></button>
+      <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
+          <button onClick={prevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={14} /></button>
+          <span className="font-semibold text-gray-800 px-1.5">R{y - 2018}/{m}</span>
+          <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
         </div>
-        <span className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 font-medium">請求分</span>
-        <div className="w-px h-4 bg-gray-300 mx-0.5" />
-        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">明細書</button>
-        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">請求書</button>
-        <button className="border border-blue-500 rounded bg-blue-100 px-2 py-0.5 text-blue-800 font-semibold">国保対象</button>
-        <button className="border border-gray-400 rounded bg-white px-2 py-0.5 text-gray-700 hover:bg-gray-50">管理帳票</button>
+        <span className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 font-medium">請求分</span>
+        <div className="w-px h-5 bg-gray-300 mx-1" />
+        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">明細書</button>
+        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">請求書</button>
+        <button className="border border-blue-500 rounded bg-blue-100 px-2.5 py-1 text-blue-800 font-semibold">国保対象</button>
+        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">管理帳票</button>
         {selectedClientIds.size > 0 && (
           <>
-            <div className="w-px h-4 bg-gray-300 mx-0.5" />
+            <div className="w-px h-5 bg-gray-300 mx-1" />
             <span className="text-gray-600">{selectedClientIds.size}名選択</span>
             <button onClick={() => handleConfirm("返戻")}
-              className="border border-orange-400 rounded bg-orange-50 px-2 py-0.5 text-orange-700 font-semibold hover:bg-orange-100">返戻で確定</button>
+              className="border border-orange-400 rounded bg-orange-50 px-2.5 py-1 text-orange-700 font-semibold hover:bg-orange-100">返戻で確定</button>
             <button onClick={() => handleConfirm("過誤")}
-              className="border border-red-400 rounded bg-red-50 px-2 py-0.5 text-red-700 font-semibold hover:bg-red-100">過誤で確定</button>
+              className="border border-red-400 rounded bg-red-50 px-2.5 py-1 text-red-700 font-semibold hover:bg-red-100">過誤で確定</button>
           </>
         )}
-        <div className="ml-auto flex items-center gap-1.5">
-          <span className="text-amber-600 text-[10px]">※ 被保険者証情報は別途ほのぼので補完</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-amber-600 text-xs">※ 被保険者証情報は別途ほのぼので補完</span>
           <button onClick={generateTransferData}
-            className="border border-indigo-500 rounded bg-indigo-500 px-2.5 py-0.5 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1">
-            <Download size={11} />CSV出力
+            className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
+            <Download size={13} />CSV出力
           </button>
         </div>
       </div>
@@ -4388,15 +4388,15 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* ── 行カナ絞り込みサイドバー ── */}
-          <div className="w-8 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
+          <div className="w-10 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
             <button
               onClick={() => setKanaFilter(null)}
-              className={`w-7 py-0.5 rounded text-[10px] font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+              className={`w-8 py-1 rounded text-xs font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
             >全</button>
             {KANA_ROWS.map(k => (
               <button key={k}
                 onClick={() => setKanaFilter(kanaFilter === k ? null : k)}
-                className={`w-7 py-0.5 rounded text-[10px] font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+                className={`w-8 py-1 rounded text-xs font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
               >{k}</button>
             ))}
           </div>
@@ -4404,31 +4404,31 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           {/* ── メインテーブル ── */}
           <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
             {/* ヘッダー行 */}
-            <div className="grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-300 bg-gray-100 text-[10px] font-semibold text-gray-600 shrink-0">
-              <div className="px-1 py-1.5 flex items-center justify-center">
+            <div className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 shrink-0">
+              <div className="px-2 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
                       ? new Set() : new Set(clientGroups.map(g => g.client.id))
                   )}
-                  className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
+                  className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
                       ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
                   }`}
                 >
                   {selectedClientIds.size === clientGroups.length && clientGroups.length > 0 && (
-                    <span className="text-white text-[7px] font-bold leading-none">✓</span>
+                    <span className="text-white text-[8px] font-bold leading-none">✓</span>
                   )}
                 </button>
               </div>
-              <div className="px-1 py-1.5 border-l border-gray-200">状態</div>
-              <div className="px-1 py-1.5 border-l border-gray-200">提供月</div>
-              <div className="px-1 py-1.5 border-l border-gray-200">請求月</div>
-              <div className="px-1 py-1.5 border-l border-gray-200">利用者名</div>
-              <div className="px-1 py-1.5 border-l border-gray-200 text-right">単位数</div>
-              <div className="px-1 py-1.5 border-l border-gray-200 text-center">月遅</div>
-              <div className="px-1 py-1.5 border-l border-gray-200 text-center">返戻</div>
-              <div className="px-1 py-1.5 border-l border-gray-200 text-center">過誤</div>
+              <div className="px-2 py-2 border-l border-gray-200">状態</div>
+              <div className="px-2 py-2 border-l border-gray-200">提供月</div>
+              <div className="px-2 py-2 border-l border-gray-200">請求月</div>
+              <div className="px-2 py-2 border-l border-gray-200">利用者名</div>
+              <div className="px-2 py-2 border-l border-gray-200 text-right">単位数</div>
+              <div className="px-2 py-2 border-l border-gray-200 text-center">月遅</div>
+              <div className="px-2 py-2 border-l border-gray-200 text-center">返戻</div>
+              <div className="px-2 py-2 border-l border-gray-200 text-center">過誤</div>
             </div>
 
             {/* 行 */}
@@ -4441,24 +4441,24 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                   const units = row.items.reduce((s, item) => s + getUnits(item, row.client.id) * item.quantity, 0);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-100 bg-amber-50 text-[11px]">
-                      <div className="px-1 py-1" />
-                      <div className="px-1 py-1 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
-                      <div className="px-1 py-1 border-l border-gray-100 text-gray-500">R{ry-2018}/{rm}</div>
-                      <div className="px-1 py-1 border-l border-gray-100 text-gray-500">R{y-2018}/{m}</div>
-                      <div className="px-1 py-1 border-l border-gray-100 text-gray-700 font-medium">{row.client.name}</div>
-                      <div className="px-1 py-1 border-l border-gray-100 text-right font-mono">{units.toLocaleString()}</div>
-                      <div className="py-1 border-l border-gray-100 text-center" />
-                      <div className="py-1 border-l border-gray-100 text-center">
+                      className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-100 bg-amber-50 text-sm">
+                      <div className="px-2 py-2" />
+                      <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-gray-500">R{ry-2018}/{rm}</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-gray-500">R{y-2018}/{m}</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-gray-700 font-medium">{row.client.name}</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-right font-mono">{units.toLocaleString()}</div>
+                      <div className="py-2 border-l border-gray-100 text-center" />
+                      <div className="py-2 border-l border-gray-100 text-center">
                         {row.flag.flag_type === "返戻" && (
                           <button onClick={() => toggleRebillFlag(row.client.id, row.month, "返戻")}
-                            className="text-red-500 underline text-[10px]">返戻</button>
+                            className="text-red-500 underline text-xs">返戻</button>
                         )}
                       </div>
-                      <div className="py-1 border-l border-gray-100 text-center">
+                      <div className="py-2 border-l border-gray-100 text-center">
                         {row.flag.flag_type === "過誤" && (
                           <button onClick={() => toggleRebillFlag(row.client.id, row.month, "過誤")}
-                            className="text-red-500 underline text-[10px]">過誤</button>
+                            className="text-red-500 underline text-xs">過誤</button>
                         )}
                       </div>
                     </div>
@@ -4474,39 +4474,39 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[28px_64px_56px_56px_1fr_80px_40px_40px_40px] border-b border-gray-100 text-[11px] cursor-pointer transition-colors ${
+                    className={`grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-100 text-sm cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
-                    <div className="px-1 py-1 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                    <div className="px-2 py-2.5 flex items-center justify-center" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => setSelectedClientIds(prev => {
                           const s = new Set(prev); if (s.has(client.id)) s.delete(client.id); else s.add(client.id); return s;
                         })}
-                        className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
+                        className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
                           isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
                         }`}
                       >
-                        {isSelected && <span className="text-white text-[7px] font-bold leading-none">✓</span>}
+                        {isSelected && <span className="text-white text-[8px] font-bold leading-none">✓</span>}
                       </button>
                     </div>
-                    <div className="px-1 py-1 border-l border-gray-100">
+                    <div className="px-2 py-2.5 border-l border-gray-100">
                       <span className="text-blue-700 font-semibold">国保対象</span>
                     </div>
-                    <div className="px-1 py-1 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
-                    <div className="px-1 py-1 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
-                    <div className="px-1 py-1 border-l border-gray-100 font-medium text-gray-800 truncate">{client.name}</div>
-                    <div className="px-1 py-1 border-l border-gray-100 text-right font-mono">
+                    <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
+                    <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
+                    <div className="px-2 py-2.5 border-l border-gray-100 font-medium text-gray-800 truncate">{client.name}</div>
+                    <div className="px-2 py-2.5 border-l border-gray-100 text-right font-mono">
                       {isLate ? <span className="text-gray-300">—</span> : totalUnits.toLocaleString()}
                     </div>
-                    <div className="py-1 border-l border-gray-100 text-center text-orange-500 font-semibold">
+                    <div className="py-2.5 border-l border-gray-100 text-center text-orange-500 font-semibold text-xs">
                       {isLate ? "月遅" : ""}
                     </div>
-                    <div className="py-1 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "返戻"); }}>
-                      <span className={`cursor-pointer select-none font-semibold ${flag?.flag_type === "返戻" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>▼</span>
+                    <div className="py-2.5 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "返戻"); }}>
+                      <span className={`cursor-pointer select-none font-bold text-base leading-none ${flag?.flag_type === "返戻" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>✓</span>
                     </div>
-                    <div className="py-1 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
-                      <span className={`cursor-pointer select-none font-semibold ${flag?.flag_type === "過誤" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>▼</span>
+                    <div className="py-2.5 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
+                      <span className={`cursor-pointer select-none font-bold text-base leading-none ${flag?.flag_type === "過誤" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>✓</span>
                     </div>
                   </div>
                 );
@@ -4514,7 +4514,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
             </div>
 
             {/* ── フッター合計 ── */}
-            <div className="border-t border-gray-300 bg-gray-100 px-3 py-1 shrink-0 flex items-center gap-6 text-[11px] text-gray-700">
+            <div className="border-t border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-6 text-xs text-gray-700">
               <span>合計件数 <strong>{clientGroups.length}</strong></span>
               <span>合計単位数 <strong>{totalUnitsAll.toLocaleString()}</strong></span>
               <span>国保件数 <strong>{billingTarget.length}</strong></span>
@@ -4524,20 +4524,20 @@ function BillingTab({ tenantId }: { tenantId: string }) {
 
           {/* ── 右：明細情報 ── */}
           <div className="w-64 shrink-0 flex flex-col bg-white">
-            <div className="border-b border-gray-300 bg-gray-100 px-2 py-1 text-[10px] font-bold text-gray-700 flex items-center gap-2">
+            <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 text-xs font-bold text-gray-700 flex items-center gap-2">
               <span>明細情報</span>
               {detailClient && <span className="font-normal text-gray-500">{detailClient.client.name}</span>}
             </div>
             {detailClient ? (
               <>
                 <div className="flex-1 overflow-y-auto">
-                  <table className="w-full text-[10px] border-collapse">
+                  <table className="w-full text-xs border-collapse">
                     <thead className="bg-gray-100 border-b border-gray-300 sticky top-0">
                       <tr>
-                        <th className="text-left px-1.5 py-1 font-semibold text-gray-600 border-r border-gray-200">サービス内容</th>
-                        <th className="text-right px-1 py-1 font-semibold text-gray-600 border-r border-gray-200 w-12">単価</th>
-                        <th className="text-right px-1 py-1 font-semibold text-gray-600 border-r border-gray-200 w-8">回数</th>
-                        <th className="text-right px-1 py-1 font-semibold text-gray-600 w-12">単位数</th>
+                        <th className="text-left px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200">サービス内容</th>
+                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-14">単価</th>
+                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-10">回数</th>
+                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 w-14">単位数</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -4547,10 +4547,10 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                         const units = unitPrice * item.quantity;
                         return (
                           <tr key={item.id} className={`border-b border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
-                            <td className="px-1.5 py-1 text-gray-700 leading-tight border-r border-gray-100">{eq?.name ?? item.product_code}</td>
-                            <td className="px-1 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{unitPrice}</td>
-                            <td className="px-1 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{item.quantity}</td>
-                            <td className="px-1 py-1 text-right font-mono font-semibold text-gray-800">{units}</td>
+                            <td className="px-2 py-1.5 text-gray-700 leading-tight border-r border-gray-100">{eq?.name ?? item.product_code}</td>
+                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 border-r border-gray-100">{unitPrice}</td>
+                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 border-r border-gray-100">{item.quantity}</td>
+                            <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-800">{units}</td>
                           </tr>
                         );
                       })}
@@ -4566,25 +4566,25 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                     const copayAmount = Math.round(insuredAmount * copayRate / 100);
                     const benefitAmount = insuredAmount - copayAmount;
                     return (
-                      <table className="w-full text-[10px] border-collapse">
+                      <table className="w-full text-xs border-collapse">
                         <tbody>
                           <tr className="border-t border-gray-200">
-                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険単位数</td>
-                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-gray-800">{totalU.toLocaleString()}</td>
-                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費単位数</td>
-                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                            <td className="px-2 py-1 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険単位数</td>
+                            <td className="px-2 py-1 text-right font-mono font-semibold text-gray-800">{totalU.toLocaleString()}</td>
+                            <td className="px-2 py-1 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費単位数</td>
+                            <td className="px-2 py-1 text-right font-mono text-gray-400">—</td>
                           </tr>
                           <tr className="border-t border-gray-200">
-                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険請求額</td>
-                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-gray-800">{benefitAmount.toLocaleString()}</td>
-                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費請求額</td>
-                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                            <td className="px-2 py-1 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険請求額</td>
+                            <td className="px-2 py-1 text-right font-mono font-semibold text-gray-800">{benefitAmount.toLocaleString()}</td>
+                            <td className="px-2 py-1 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費請求額</td>
+                            <td className="px-2 py-1 text-right font-mono text-gray-400">—</td>
                           </tr>
                           <tr className="border-t border-gray-200">
-                            <td className="px-2 py-0.5 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">利用者負担額</td>
-                            <td className="px-2 py-0.5 text-right font-mono font-semibold text-red-600">{copayAmount.toLocaleString()}</td>
-                            <td className="px-2 py-0.5 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費本人負担</td>
-                            <td className="px-2 py-0.5 text-right font-mono text-gray-400">—</td>
+                            <td className="px-2 py-1 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">利用者負担額</td>
+                            <td className="px-2 py-1 text-right font-mono font-semibold text-red-600">{copayAmount.toLocaleString()}</td>
+                            <td className="px-2 py-1 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費本人負担</td>
+                            <td className="px-2 py-1 text-right font-mono text-gray-400">—</td>
                           </tr>
                         </tbody>
                       </table>
@@ -4593,7 +4593,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-[11px] text-gray-400">
+              <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
                 利用者を選択してください
               </div>
             )}
