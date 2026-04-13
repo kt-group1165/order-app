@@ -4046,7 +4046,7 @@ function ClientDetail({
             { code: "51", label: "51：特定疾患（難病）" },
             { code: "54", label: "54：小児慢性特定疾病" },
           ];
-          const APP_TYPES = ["主", "重複"];
+          const APP_TYPES = ["継続", "申請中"];
           const SPECIAL_TYPES = ["低所得Ⅰ", "低所得Ⅱ", "一般Ⅰ", "一般Ⅱ"];
           const sel = publicExpenses.find(r => r.id === selectedPeId) ?? publicExpenses[0] ?? null;
           const pf = peForm;
