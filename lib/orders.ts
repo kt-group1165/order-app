@@ -94,6 +94,7 @@ export async function createOrder(params: {
   attendanceRequired?: boolean;
   attendeeIds?: string[];
   supplierId?: string;
+  tokkaSetPrice?: number;
 }): Promise<Order> {
   const { data, error } = await supabase
     .from("orders")
@@ -113,6 +114,7 @@ export async function createOrder(params: {
       attendance_required: params.attendanceRequired ?? false,
       attendee_ids: params.attendeeIds ?? [],
       supplier_id: params.supplierId ?? null,
+      tokka_set_price: params.tokkaSetPrice ?? null,
     })
     .select()
     .single();

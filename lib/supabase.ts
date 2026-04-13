@@ -172,6 +172,7 @@ export type Order = {
   supplier_id: string | null;
   email_sent_at: string | null;
   email_sent_count: number;
+  tokka_set_price: number | null;
   created_at: string;
   updated_at: string;
 };

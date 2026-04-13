@@ -4118,6 +4118,7 @@ function NewOrderModal({
     }
   }, [clientId, clients]);
 
+  const [tokkaSetPrice, setTokkaSetPrice] = useState(""); // 特価自費セット月額
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
@@ -4228,6 +4229,7 @@ function NewOrderModal({
         attendanceRequired,
         attendeeIds: selectedAttendees,
         supplierId: supplierId || undefined,
+        tokkaSetPrice: selectedKinds.has("特価自費") && tokkaSetPrice ? parseInt(tokkaSetPrice, 10) : undefined,
       });
       const createdItems: OrderItem[] = [];
       for (const item of items) {
@@ -4519,6 +4521,24 @@ function NewOrderModal({
                     {kindItems.length > 0 && <span className={`${colorCls.badge} text-white text-[10px] font-bold px-2 py-0.5 rounded-full`}>{kindItems.length}件</span>}
                   </div>
                   <div className="p-2 space-y-2">
+                    {/* 特価自費のみ：セット月額入力欄 */}
+                    {kind === "特価自費" && (
+                      <div className="flex items-center gap-2 px-1">
+                        <label className="text-xs font-medium text-amber-700 shrink-0">セット月額（税込）</label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-400">¥</span>
+                          <input
+                            type="number"
+                            value={tokkaSetPrice}
+                            onChange={e => setTokkaSetPrice(e.target.value)}
+                            placeholder="例: 1000"
+                            className="w-28 border border-amber-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-amber-400 bg-white"
+                          />
+                          <span className="text-xs text-gray-400">/月</span>
+                        </div>
+                        <span className="text-[10px] text-amber-600">用具の個別価格は使いません</span>
+                      </div>
+                    )}
                     <button
                       onClick={() => { setActiveModalKind(kind); setShowEquipModal(true); setEquipModalSearch(""); setEquipModalCategory(null); setEquipModalSelected([]); }}
                       className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-medium transition-colors ${colorCls.btn}`}
@@ -4801,9 +4821,15 @@ function NewOrderModal({
         if (!deliveryDate) warnings.push("納品予定日が未入力です");
         if (!deliveryTime) warnings.push("納品時間が未入力です");
         if (!supplierId) warnings.push("卸会社が未選択です");
-        const noPriceItems = items.filter((i) => !i.rental_price || parseFloat(i.rental_price) === 0);
+        const tokkaSetPriceNum = selectedKinds.has("特価自費") && tokkaSetPrice ? parseInt(tokkaSetPrice, 10) : 0;
+        const noPriceItems = items.filter((i) => {
+          if (i.payment_type === "特価自費" && tokkaSetPriceNum > 0) return false;
+          return !i.rental_price || parseFloat(i.rental_price) === 0;
+        });
         if (noPriceItems.length > 0)
           warnings.push(`価格未入力の用具があります：${noPriceItems.map((i) => i.equipment.name).join("、")}`);
+        if (selectedKinds.has("特価自費") && !tokkaSetPriceNum)
+          warnings.push("特価自費のセット月額が未入力です");
 
         return (
           <div className="fixed inset-0 bg-black/60 flex items-end z-[70]">
@@ -4854,17 +4880,24 @@ function NewOrderModal({
                       blue:    { border: "border-blue-200",    bg: "bg-blue-50",    text: "text-blue-700",    price: "text-blue-600",    subtotal: "text-blue-700 bg-blue-50" },
                       amber:   { border: "border-amber-200",   bg: "bg-amber-50",   text: "text-amber-700",   price: "text-amber-600",   subtotal: "text-amber-700 bg-amber-50" },
                     }[kindColor];
-                    const kindTotal = kindItems.reduce((sum, item) => {
-                      return sum + (item.rental_price ? parseFloat(item.rental_price) : 0) * item.quantity;
-                    }, 0);
+                    const isTokka = kind === "特価自費";
+                    const tokkaPrice = isTokka && tokkaSetPrice ? parseInt(tokkaSetPrice, 10) : 0;
+                    const kindTotal = isTokka
+                      ? tokkaPrice
+                      : kindItems.reduce((sum, item) => {
+                          return sum + (item.rental_price ? parseFloat(item.rental_price) : 0) * item.quantity;
+                        }, 0);
                     return (
                       <div key={kind} className={`border ${colorCls.border} rounded-xl overflow-hidden`}>
                         <div className={`px-3 py-1.5 ${colorCls.bg} border-b ${colorCls.border}`}>
                           <span className={`text-xs font-semibold ${colorCls.text}`}>{kind}</span>
+                          {isTokka && tokkaPrice > 0 && (
+                            <span className={`ml-2 text-xs font-bold ${colorCls.text}`}>セット月額 ¥{tokkaPrice.toLocaleString()}/月</span>
+                          )}
                         </div>
                         <div className="bg-white px-3 divide-y divide-gray-100">
                           {kindItems.map((item, i) => {
-                            const price = item.rental_price ? parseFloat(item.rental_price) : null;
+                            const price = isTokka ? null : (item.rental_price ? parseFloat(item.rental_price) : null);
                             const itemSupplier = suppliers.find((s) => s.id === item.supplier_id);
                             return (
                               <div key={i} className="flex items-start justify-between gap-2 py-2">
@@ -4872,9 +4905,11 @@ function NewOrderModal({
                                   <p className="text-sm font-medium text-gray-800 truncate">{item.equipment.name}</p>
                                   <p className="text-[10px] text-gray-400">{item.equipment.product_code}{itemSupplier ? `　${itemSupplier.name}` : ""}{item.quantity > 1 ? `　×${item.quantity}` : ""}</p>
                                 </div>
-                                <p className={`text-sm font-semibold shrink-0 ${price ? colorCls.price : "text-amber-500"}`}>
-                                  {price ? `¥${price.toLocaleString()}/月` : "価格未入力"}
-                                </p>
+                                {!isTokka && (
+                                  <p className={`text-sm font-semibold shrink-0 ${price ? colorCls.price : "text-amber-500"}`}>
+                                    {price ? `¥${price.toLocaleString()}/月` : "価格未入力"}
+                                  </p>
+                                )}
                               </div>
                             );
                           })}
@@ -4889,10 +4924,12 @@ function NewOrderModal({
                     );
                   })}
                   {(() => {
+                    const tokkaPrice = selectedKinds.has("特価自費") && tokkaSetPrice ? parseInt(tokkaSetPrice, 10) : 0;
                     const total = items.reduce((sum, item) => {
+                      if (item.payment_type === "特価自費") return sum;
                       const p = item.rental_price ? parseFloat(item.rental_price) : 0;
                       return sum + p * item.quantity;
-                    }, 0);
+                    }, tokkaPrice);
                     return total > 0 ? (
                       <div className="flex justify-between items-center px-1 pt-1 border-t border-gray-200 mt-1">
                         <span className="text-xs font-semibold text-gray-600">月額総合計</span>
