@@ -4445,12 +4445,12 @@ function BillingTab({ tenantId }: { tenantId: string }) {
             <div className="w-10 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
               <button
                 onClick={() => setGridKanaFilter(null)}
-                className={`w-8 py-1 rounded text-xs font-bold transition-colors ${gridKanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+                className={`w-8 py-1 rounded text-sm font-bold transition-colors ${gridKanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
               >全</button>
               {KANA_ROWS.map(k => (
                 <button key={k}
                   onClick={() => setGridKanaFilter(gridKanaFilter === k ? null : k)}
-                  className={`w-8 py-1 rounded text-xs font-medium transition-colors ${gridKanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+                  className={`w-8 py-1 rounded text-sm font-medium transition-colors ${gridKanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
                 >{k}</button>
               ))}
             </div>
@@ -4490,12 +4490,12 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           <div className="w-10 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
             <button
               onClick={() => setKanaFilter(null)}
-              className={`w-8 py-1 rounded text-xs font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+              className={`w-8 py-1 rounded text-sm font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
             >全</button>
             {KANA_ROWS.map(k => (
               <button key={k}
                 onClick={() => setKanaFilter(kanaFilter === k ? null : k)}
-                className={`w-8 py-1 rounded text-xs font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+                className={`w-8 py-1 rounded text-sm font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
               >{k}</button>
             ))}
           </div>
@@ -4503,7 +4503,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           {/* ── メインテーブル ── */}
           <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
             {/* ヘッダー行 */}
-            <div className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 shrink-0">
+            <div className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-300 bg-gray-100 text-sm font-semibold text-gray-600 shrink-0">
               <div className="px-2 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
