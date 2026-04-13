@@ -1920,6 +1920,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
   const [showHospModal, setShowHospModal] = useState(false);
+  const [hospFilter, setHospFilter] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
   // 入退院日付入力ダイアログ
   const [hospDateDialog, setHospDateDialog] = useState<{ client: Client; mode: "admit" | "discharge"; currentHospId?: string } | null>(null);
@@ -1999,8 +2000,22 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
     );
   }
 
+  // 入院フィルター用
+  const hospFilteredIds = (() => {
+    if (!hospFilter) return null;
+    const [year, month] = hospModalMonth.split("-").map(Number);
+    const firstDay = `${hospModalMonth}-01`;
+    const lastDay = new Date(year, month, 0).toISOString().split("T")[0];
+    return new Set(
+      hospitalizations
+        .filter(h => h.admission_date <= lastDay && (h.discharge_date === null || h.discharge_date >= firstDay))
+        .map(h => h.client_id)
+    );
+  })();
+
   const filtered = clients
     .filter((c) => {
+      if (hospFilter) return hospFilteredIds!.has(c.id);
       if (kanaFilter) {
         const row = KANA_ROWS.find((r) => r.label === kanaFilter);
         // ひらがな→カタカナ変換してから比較
@@ -2267,8 +2282,8 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
             実績表
           </button>
           <button
-            onClick={() => setShowHospModal(true)}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors"
+            onClick={() => { setHospFilter(f => !f); setKanaFilter(""); }}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-colors ${hospFilter ? "bg-red-500 text-white border-red-500" : "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"}`}
           >
             入院中一覧
           </button>
@@ -2396,18 +2411,30 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
       {/* 利用者一覧ビュー */}
       {viewMode === "list" && <>
       {/* ア行・カ行フィルター */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-1.5 overflow-x-auto shrink-0">
-        <button
-          onClick={() => setKanaFilter("")}
-          className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
-        >すべて</button>
-        {KANA_ROWS.map((row) => (
-          <button
-            key={row.label}
-            onClick={() => setKanaFilter(kanaFilter === row.label ? "" : row.label)}
-            className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${kanaFilter === row.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
-          >{row.label}行</button>
-        ))}
+      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-1.5 overflow-x-auto shrink-0 items-center">
+        {hospFilter ? (
+          <>
+            <span className="shrink-0 text-xs font-medium text-red-600 px-1">入院中一覧</span>
+            <button onClick={() => { const d = new Date(...(hospModalMonth.split("-").map(Number) as [number, number])); d.setMonth(d.getMonth() - 2); setHospModalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={15} /></button>
+            <span className="shrink-0 text-xs font-medium text-gray-700 w-16 text-center">{hospModalMonth.replace("-", "年")}月</span>
+            <button onClick={() => { const [y, m] = hospModalMonth.split("-").map(Number); const d = new Date(y, m, 1); setHospModalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={15} /></button>
+            <span className="text-xs text-red-500 font-medium ml-1">{filtered.length}名</span>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => setKanaFilter("")}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+            >すべて</button>
+            {KANA_ROWS.map((row) => (
+              <button
+                key={row.label}
+                onClick={() => setKanaFilter(kanaFilter === row.label ? "" : row.label)}
+                className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${kanaFilter === row.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+              >{row.label}行</button>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-auto bg-white">
@@ -2848,89 +2875,6 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         );
       })()}
 
-      {showHospModal && (() => {
-        const [year, month] = hospModalMonth.split("-").map(Number);
-        const firstDay = `${hospModalMonth}-01`;
-        const lastDay = new Date(year, month, 0).toISOString().split("T")[0]; // 月末
-        // その月に1日でも入院していた利用者
-        const hospInMonth = hospitalizations.filter(h => {
-          const admitted = h.admission_date <= lastDay;
-          const notDischarged = h.discharge_date === null || h.discharge_date >= firstDay;
-          return admitted && notDischarged;
-        });
-        const clientIds = [...new Set(hospInMonth.map(h => h.client_id))];
-        const hospClients = clientIds.map(id => ({
-          client: clients.find(c => c.id === id),
-          records: hospInMonth.filter(h => h.client_id === id).sort((a, b) => a.admission_date.localeCompare(b.admission_date)),
-        })).filter(x => x.client);
-
-        const prevMonth = () => {
-          const d = new Date(year, month - 2, 1);
-          setHospModalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-        };
-        const nextMonth = () => {
-          const d = new Date(year, month, 1);
-          setHospModalMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-        };
-
-        return (
-          <div className="fixed inset-0 bg-black/60 flex items-end z-50">
-            <div className="bg-white w-full rounded-t-2xl max-h-[85vh] flex flex-col">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
-                <div className="flex items-center gap-3">
-                  <span className="font-semibold text-gray-800">入院中一覧</span>
-                  <div className="flex items-center gap-1">
-                    <button onClick={prevMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
-                      <ChevronLeft size={16} />
-                    </button>
-                    <span className="text-sm font-medium text-gray-700 w-20 text-center">
-                      {year}年{month}月
-                    </span>
-                    <button onClick={nextMonth} className="p-1 rounded-lg hover:bg-gray-100 text-gray-500">
-                      <ChevronRight size={16} />
-                    </button>
-                  </div>
-                  <span className="text-xs text-red-500 font-medium">{hospClients.length}名</span>
-                </div>
-                <button onClick={() => setShowHospModal(false)}><X size={20} className="text-gray-400" /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                {hospClients.length === 0 ? (
-                  <p className="text-sm text-gray-400 text-center py-16">{year}年{month}月の入院履歴はありません</p>
-                ) : (
-                  <ul className="divide-y divide-gray-100">
-                    {hospClients.map(({ client, records }) => (
-                      <li key={client!.id} className="px-4 py-3">
-                        <button
-                          onClick={() => { setShowHospModal(false); setSelectedClient(client!); }}
-                          className="text-sm font-semibold text-gray-800 hover:text-emerald-600 flex items-center gap-1 mb-1"
-                        >
-                          {client!.name}
-                          <ChevronRight size={13} className="text-gray-400" />
-                        </button>
-                        <div className="space-y-0.5">
-                          {records.map(r => (
-                            <div key={r.id} className="flex items-center gap-2 text-xs text-gray-600">
-                              <span className="text-gray-400 shrink-0">入院</span>
-                              <span className="font-medium">{r.admission_date}</span>
-                              <span className="text-gray-400 shrink-0">〜</span>
-                              {r.discharge_date ? (
-                                <><span className="text-gray-400 shrink-0">退院</span><span className="font-medium">{r.discharge_date}</span></>
-                              ) : (
-                                <span className="text-red-500 font-medium">入院中</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
