@@ -360,7 +360,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.0</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.1</span>
       </header>
 
       {/* Content */}
@@ -3970,7 +3970,8 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     return orderItems.filter((item) => {
-      if (item.payment_type !== "介護") return false; // 介護保険のみ請求
+      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+      if (pt !== "介護") return false; // 介護保険のみ請求
       if (!item.rental_start_date) return false;
       const start = new Date(item.rental_start_date);
       if (start > monthEnd) return false;
@@ -4078,9 +4079,8 @@ function BillingTab({ tenantId }: { tenantId: string }) {
 
     for (const { client, items } of billingGroups) {
       const insuredNumber = client.user_number ?? "";
-      // 負担割合（benefit_rateから取得）
-      const copayRate = client.benefit_rate?.replace(/割/, "") ?? "1";
-      const benefitRate = 100 - parseInt(copayRate, 10) * 10;
+      // 給付率（benefit_rateは90/80/70などの給付率で保存済み）
+      const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
 
       // 基本情報レコード
       lines.push([
@@ -4192,7 +4192,8 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     const targetItems = orderItems.filter((item) => {
-      if (item.payment_type !== "介護") return false;
+      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+      if (pt !== "介護") return false;
       if (!item.rental_start_date) return false;
       const start = new Date(item.rental_start_date);
       if (start > monthEnd) return false;
