@@ -1995,6 +1995,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         equipment={equipment}
         tenantId={tenantId}
         initialViewMode={selectedClientInitialViewMode}
+        hospitalizations={hospitalizations}
         onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
       />
     );
@@ -2887,6 +2888,7 @@ function ClientDetail({
   equipment,
   tenantId,
   initialViewMode,
+  hospitalizations,
   onBack,
 }: {
   client: Client;
@@ -2894,6 +2896,7 @@ function ClientDetail({
   equipment: Equipment[];
   tenantId: string;
   initialViewMode?: "current" | "insurance";
+  hospitalizations?: import("@/lib/supabase").ClientHospitalization[];
   onBack: () => void;
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
@@ -2901,7 +2904,11 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "insurance" | "rental_history">(initialViewMode ?? "current");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance">(initialViewMode === "insurance" ? "insurance" : "usage");
+  const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
+  const [editingBasic, setEditingBasic] = useState(false);
+  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" });
+  const [basicSaving, setBasicSaving] = useState(false);
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
@@ -3214,10 +3221,14 @@ function ClientDetail({
         <button onClick={onBack}>
           <ChevronLeft size={20} className="text-gray-500" />
         </button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
             <h2 className="font-semibold text-gray-800">{client.name}</h2>
             {client.gender && <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md">{client.gender}</span>}
+            {hospitalizations?.some(h => h.client_id === client.id && h.discharge_date === null)
+              ? <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-600">入院中</span>
+              : <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">在籍中</span>
+            }
           </div>
           {client.furigana && <p className="text-xs text-gray-400">{client.furigana}</p>}
         </div>
@@ -3329,35 +3340,78 @@ function ClientDetail({
         />
       )}
 
-      {/* View toggle */}
-      <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-1.5 shrink-0">
-        <button onClick={() => setViewMode("current")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          現在
-        </button>
-        <button onClick={() => setViewMode("monthly")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          月別
-        </button>
-        <button onClick={() => setViewMode("insurance")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "insurance" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          保険情報
-        </button>
-        <button onClick={() => setViewMode("rental_history")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "rental_history" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          履歴
-        </button>
-        <button onClick={() => setViewMode("docs")}
-          className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
-          書類{documents.length > 0 && <span className="ml-1 opacity-70">({documents.length})</span>}
-        </button>
+      {/* トップタブ */}
+      <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
+        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"]] as [typeof topTab, string][]).map(([t, label]) => (
+          <button key={t} onClick={() => setTopTab(t)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-emerald-500 text-emerald-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+            {label}
+          </button>
+        ))}
       </div>
+      {/* 利用状況サブタブ */}
+      {topTab === "usage" && (
+        <div className="bg-white border-b border-gray-100 px-4 py-2 flex gap-1.5 shrink-0">
+          <button onClick={() => setViewMode("current")}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "current" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            現在
+          </button>
+          <button onClick={() => setViewMode("monthly")}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "monthly" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            月別
+          </button>
+          <button onClick={() => setViewMode("rental_history")}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "rental_history" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            履歴
+          </button>
+          <button onClick={() => setViewMode("docs")}
+            className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors ${viewMode === "docs" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}>
+            書類{documents.length > 0 && <span className="ml-1 opacity-70">({documents.length})</span>}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center flex-1">
           <Loader2 size={28} className="animate-spin text-emerald-400" />
         </div>
-      ) : viewMode === "current" ? (
+      ) : topTab === "basic" ? (
+        /* 基本情報タブ */
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-semibold text-gray-800">基本情報</h3>
+              {!editingBasic ? (
+                <button onClick={() => setEditingBasic(true)} className="text-xs text-emerald-600 border border-emerald-200 px-3 py-1 rounded-lg hover:bg-emerald-50">編集</button>
+              ) : (
+                <div className="flex gap-2">
+                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                  <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
+                </div>
+              )}
+            </div>
+            {([
+              ["氏名", "name"],["ふりがな","furigana"],["性別","gender"],
+              ["電話","phone"],["携帯","mobile"],["住所","address"],
+              ["ケアマネ","care_manager"],["所属","care_manager_org"],["メモ","memo"],
+            ] as [string, keyof typeof basicForm][]).map(([label, key]) => (
+              <div key={key} className="flex items-start gap-3 border-b border-gray-50 pb-2">
+                <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">{label}</span>
+                {editingBasic ? (
+                  <input
+                    type="text"
+                    value={basicForm[key]}
+                    onChange={(e) => setBasicForm((f) => ({ ...f, [key]: e.target.value }))}
+                    className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-emerald-400"
+                  />
+                ) : (
+                  <span className="flex-1 text-sm text-gray-800">{(client as Record<string, unknown>)[key] as string || <span className="text-gray-300">—</span>}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : topTab === "usage" && viewMode === "current" ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Summary */}
           <div className="grid grid-cols-2 gap-3">
@@ -3535,8 +3589,8 @@ function ClientDetail({
             ))
           )}
         </div>
-      ) : viewMode === "insurance" ? (
-        /* 保険情報タブ - 複数レコード管理 */
+      ) : topTab === "insurance" ? (
+        /* 介護保険タブ - 複数レコード管理 */
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* 事業所情報（テナント設定から参照） */}
           <section>
