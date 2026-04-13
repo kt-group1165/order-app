@@ -385,11 +385,11 @@ export default function TenantPage({
         {(
           [
             { id: "orders", icon: ClipboardList, label: "発注管理" },
-            { id: "equipment", icon: Package, label: "用具マスタ" },
+            { id: "documents", icon: FileText, label: "書類" },
             { id: "clients", icon: Users, label: "利用者別" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
             { id: "billing", icon: CreditCard, label: "請求" },
-            { id: "documents", icon: FileText, label: "書類" },
+            { id: "equipment", icon: Package, label: "用具マスタ" },
             { id: "settings", icon: Settings, label: "設定" },
           ] as { id: Tab; icon: React.ElementType; label: string }[]
         ).map(({ id, icon: Icon, label }) => (
