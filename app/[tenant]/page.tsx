@@ -7461,12 +7461,15 @@ function OrderEmailPreviewModal({
 
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
+type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan";
+
 function SettingsTab({ tenantId }: { tenantId: string }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("menu");
 
   // 会社情報
   const [company, setCompany] = useState({
@@ -7578,9 +7581,6 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     { label: "専門相談員",           fullKey: "staff_specialist_full", partKey: "staff_specialist_part" },
     { label: "事務･配送職員",        fullKey: "staff_admin_full",      partKey: "staff_admin_part" },
   ] as const;
-
-  type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan";
-  const [settingsPage, setSettingsPage] = useState<SettingsPage>("menu");
 
   const menuItems: { id: SettingsPage; label: string; desc: string }[] = [
     { id: "company",      label: "会社情報",           desc: "事業所番号・住所・担当者など" },
