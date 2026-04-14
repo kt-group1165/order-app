@@ -7835,6 +7835,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
             {addingNew && (
               <div className="p-4 border-b border-gray-100 space-y-2 bg-emerald-50">
                 <FormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" />
+                <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                 <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                 <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
                 <FormRow label="メール" field="email" placeholder="example@example.com" />
@@ -7854,6 +7855,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                 {editingId === office.id ? (
                   <div className="space-y-2">
                     <FormRow label="事業所名 *" field="name" />
+                    <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                     <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                     <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
                     <FormRow label="メール" field="email" placeholder="example@example.com" />
@@ -7869,6 +7871,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                     <div>
                       <p className="text-sm font-medium text-gray-800">{office.name}</p>
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                        {office.address && <span className="text-xs text-gray-500 w-full">{office.address}</span>}
                         {office.fax_number && <span className="text-xs text-gray-500">FAX: {office.fax_number}</span>}
                         {office.phone_number && <span className="text-xs text-gray-500">TEL: {office.phone_number}</span>}
                         {office.email && <span className="text-xs text-gray-500">Mail: {office.email}</span>}
