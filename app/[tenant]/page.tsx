@@ -8056,7 +8056,7 @@ function OfficePriceImportModal({
 
           <div>
             <label className="text-xs font-medium text-gray-600 block mb-1">ファイル選択</label>
-            <input ref={fileRef} type="file" accept=".csv" onChange={handleFile} className="text-sm" />
+            <input type="file" accept=".csv" onChange={handleFile} className="text-sm" />
           </div>
 
           <div>
