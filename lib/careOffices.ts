@@ -40,6 +40,54 @@ export async function deleteCareOffice(id: string): Promise<void> {
   if (error) throw error;
 }
 
+// ─── ケアマネ ────────────────────────────────────────────────────────────────
+
+export type CareManager = {
+  id: string;
+  tenant_id: string;
+  care_office_id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+};
+
+export async function getCareManagers(tenantId: string): Promise<CareManager[]> {
+  const { data, error } = await supabase
+    .from("care_managers")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function addCareManager(
+  tenantId: string,
+  careOfficeId: string,
+  name: string
+): Promise<CareManager> {
+  const { data, error } = await supabase
+    .from("care_managers")
+    .insert({ tenant_id: tenantId, care_office_id: careOfficeId, name, active: true })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCareManager(
+  id: string,
+  params: { name?: string; care_office_id?: string; active?: boolean }
+): Promise<void> {
+  const { error } = await supabase.from("care_managers").update(params).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteCareManager(id: string): Promise<void> {
+  const { error } = await supabase.from("care_managers").delete().eq("id", id);
+  if (error) throw error;
+}
+
 // eFax送信（API Route経由）
 export async function sendFax(params: {
   toFaxNumber: string;

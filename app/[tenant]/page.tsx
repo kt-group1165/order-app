@@ -48,7 +48,7 @@ import {
   getRebillFlags, setRebillFlag, removeRebillFlag,
   type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
 } from "@/lib/billing";
-import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, type CareOffice } from "@/lib/careOffices";
+import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -7754,15 +7754,25 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
 
 function CareOfficeSection({ tenantId }: { tenantId: string }) {
   const [offices, setOffices] = useState<CareOffice[]>([]);
+  const [managers, setManagers] = useState<CareManager[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Partial<CareOffice>>({});
   const [saving, setSaving] = useState(false);
   const [addingNew, setAddingNew] = useState(false);
+  const [expandedOfficeId, setExpandedOfficeId] = useState<string | null>(null);
+  // ケアマネ追加
+  const [addingManagerOfficeId, setAddingManagerOfficeId] = useState<string | null>(null);
+  const [newManagerName, setNewManagerName] = useState("");
+  const [savingManager, setSavingManager] = useState(false);
 
   const load = async () => {
     setLoading(true);
-    try { setOffices(await getCareOffices(tenantId)); } finally { setLoading(false); }
+    try {
+      const [o, m] = await Promise.all([getCareOffices(tenantId), getCareManagers(tenantId)]);
+      setOffices(o);
+      setManagers(m);
+    } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, [tenantId]);
 
@@ -7775,7 +7785,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   const startNew = () => {
     setAddingNew(true);
     setEditingId(null);
-    setForm({ name: "", fax_number: "", phone_number: "", email: "" });
+    setForm({ name: "", fax_number: "", phone_number: "", address: "", email: "" });
   };
 
   const handleSave = async () => {
@@ -7799,8 +7809,32 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`「${name}」を削除しますか？`)) return;
+    if (!confirm(`「${name}」を削除しますか？\nケアマネ情報も削除されます。`)) return;
     try { await deleteCareOffice(id); await load(); }
+    catch { alert("削除に失敗しました"); }
+  };
+
+  const handleAddManager = async (officeId: string) => {
+    if (!newManagerName.trim()) return;
+    setSavingManager(true);
+    try {
+      await addCareManager(tenantId, officeId, newManagerName.trim());
+      setNewManagerName("");
+      setAddingManagerOfficeId(null);
+      await load();
+    } catch { alert("追加に失敗しました"); } finally { setSavingManager(false); }
+  };
+
+  const handleToggleManagerActive = async (manager: CareManager) => {
+    try {
+      await updateCareManager(manager.id, { active: !manager.active });
+      await load();
+    } catch { alert("更新に失敗しました"); }
+  };
+
+  const handleDeleteManager = async (id: string, name: string) => {
+    if (!confirm(`「${name}」を削除しますか？`)) return;
+    try { await deleteCareManager(id); await load(); }
     catch { alert("削除に失敗しました"); }
   };
 
@@ -7820,11 +7854,8 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     <div>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">居宅事業所マスタ</h3>
-        <button
-          onClick={startNew}
-          className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100"
-        >
-          ＋ 追加
+        <button onClick={startNew} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100">
+          ＋ 事業所追加
         </button>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
@@ -7841,7 +7872,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                 <FormRow label="メール" field="email" placeholder="example@example.com" />
                 <div className="flex gap-2 pt-1">
                   <button onClick={() => setAddingNew(false)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
-                  <button onClick={handleSave} disabled={saving || !form.name?.trim()} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50">
+                  <button onClick={handleSave} disabled={saving || !form.name?.trim()} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
                     {saving ? "保存中..." : "保存"}
                   </button>
                 </div>
@@ -7850,41 +7881,100 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
             {offices.length === 0 && !addingNew && (
               <p className="text-xs text-gray-400 p-4 text-center">事業所が登録されていません</p>
             )}
-            {offices.map((office, idx) => (
-              <div key={office.id} className={`px-4 py-3 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
-                {editingId === office.id ? (
-                  <div className="space-y-2">
-                    <FormRow label="事業所名 *" field="name" />
-                    <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
-                    <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
-                    <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
-                    <FormRow label="メール" field="email" placeholder="example@example.com" />
-                    <div className="flex gap-2 pt-1">
-                      <button onClick={() => setEditingId(null)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-gray-100">キャンセル</button>
-                      <button onClick={handleSave} disabled={saving} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
-                        {saving ? "保存中..." : "保存"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">{office.name}</p>
-                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
-                        {office.address && <span className="text-xs text-gray-500 w-full">{office.address}</span>}
-                        {office.fax_number && <span className="text-xs text-gray-500">FAX: {office.fax_number}</span>}
-                        {office.phone_number && <span className="text-xs text-gray-500">TEL: {office.phone_number}</span>}
-                        {office.email && <span className="text-xs text-gray-500">Mail: {office.email}</span>}
+            {offices.map((office, idx) => {
+              const officeManagers = managers.filter(m => m.care_office_id === office.id);
+              const isExpanded = expandedOfficeId === office.id;
+              return (
+                <div key={office.id} className={`${idx > 0 ? "border-t border-gray-100" : ""}`}>
+                  {editingId === office.id ? (
+                    <div className="p-4 space-y-2 bg-blue-50">
+                      <FormRow label="事業所名 *" field="name" />
+                      <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
+                      <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
+                      <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
+                      <FormRow label="メール" field="email" placeholder="example@example.com" />
+                      <div className="flex gap-2 pt-1">
+                        <button onClick={() => setEditingId(null)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
+                        <button onClick={handleSave} disabled={saving} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
+                          {saving ? "保存中..." : "保存"}
+                        </button>
                       </div>
                     </div>
-                    <div className="flex gap-1.5 shrink-0">
-                      <button onClick={() => startEdit(office)} className="text-xs px-2 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">編集</button>
-                      <button onClick={() => handleDelete(office.id, office.name)} className="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100">削除</button>
+                  ) : (
+                    <div>
+                      {/* 事業所ヘッダー */}
+                      <div className="px-4 py-3 flex items-start justify-between gap-2">
+                        <button className="flex-1 text-left" onClick={() => setExpandedOfficeId(isExpanded ? null : office.id)}>
+                          <div className="flex items-center gap-1.5">
+                            <ChevronRight size={14} className={`text-gray-400 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                            <p className="text-sm font-medium text-gray-800">{office.name}</p>
+                            <span className="text-xs text-gray-400">（{officeManagers.filter(m => m.active).length}名）</span>
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 ml-5">
+                            {office.address && <span className="text-xs text-gray-400">{office.address}</span>}
+                            {office.fax_number && <span className="text-xs text-gray-400">FAX: {office.fax_number}</span>}
+                            {office.phone_number && <span className="text-xs text-gray-400">TEL: {office.phone_number}</span>}
+                          </div>
+                        </button>
+                        <div className="flex gap-1.5 shrink-0">
+                          <button onClick={() => startEdit(office)} className="text-xs px-2 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">編集</button>
+                          <button onClick={() => handleDelete(office.id, office.name)} className="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100">削除</button>
+                        </div>
+                      </div>
+
+                      {/* ケアマネ一覧（展開時） */}
+                      {isExpanded && (
+                        <div className="bg-gray-50 border-t border-gray-100 px-4 py-3 space-y-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-gray-500">ケアマネ</span>
+                            <button
+                              onClick={() => { setAddingManagerOfficeId(office.id); setNewManagerName(""); }}
+                              className="text-xs px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 border border-emerald-200"
+                            >
+                              ＋ 追加
+                            </button>
+                          </div>
+
+                          {addingManagerOfficeId === office.id && (
+                            <div className="flex gap-2">
+                              <input
+                                value={newManagerName}
+                                onChange={e => setNewManagerName(e.target.value)}
+                                placeholder="氏名を入力"
+                                className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white"
+                              />
+                              <button onClick={() => handleAddManager(office.id)} disabled={savingManager || !newManagerName.trim()}
+                                className="px-3 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
+                                {savingManager ? "…" : "追加"}
+                              </button>
+                              <button onClick={() => setAddingManagerOfficeId(null)} className="px-2 py-1.5 rounded-lg text-sm text-gray-400 bg-white border border-gray-200">✕</button>
+                            </div>
+                          )}
+
+                          {officeManagers.length === 0 && addingManagerOfficeId !== office.id && (
+                            <p className="text-xs text-gray-400">ケアマネが登録されていません</p>
+                          )}
+                          {officeManagers.map(mgr => (
+                            <div key={mgr.id} className="flex items-center justify-between gap-2">
+                              <span className={`text-sm ${mgr.active ? "text-gray-700" : "text-gray-400 line-through"}`}>{mgr.name}</span>
+                              <div className="flex gap-1.5 shrink-0">
+                                <button
+                                  onClick={() => handleToggleManagerActive(mgr)}
+                                  className={`text-xs px-2 py-0.5 rounded-md border ${mgr.active ? "bg-white text-gray-500 border-gray-200" : "bg-emerald-50 text-emerald-600 border-emerald-200"}`}
+                                >
+                                  {mgr.active ? "退職" : "復職"}
+                                </button>
+                                <button onClick={() => handleDeleteManager(mgr.id, mgr.name)} className="text-xs px-2 py-0.5 rounded-md bg-red-50 text-red-400 border border-red-100">削除</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
           </>
         )}
       </div>
