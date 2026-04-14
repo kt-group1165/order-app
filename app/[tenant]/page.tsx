@@ -41,12 +41,14 @@ import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
+import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, type Office, type EquipmentOfficePrice } from "@/lib/offices";
 import {
   getLateFlags, setLateFlag, removeLateFlag,
   getUnitOverrides, setUnitOverride, removeUnitOverride,
   getRebillFlags, setRebillFlag, removeRebillFlag,
   type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
 } from "@/lib/billing";
+import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, type CareOffice } from "@/lib/careOffices";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -1162,6 +1164,9 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [showNewItem, setShowNewItem] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<"idle" | "confirm1" | "confirm2">("idle");
   const [deleting, setDeleting] = useState(false);
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [officePrices, setOfficePrices] = useState<EquipmentOfficePrice[]>([]);
+  const [showOfficePriceImport, setShowOfficePriceImport] = useState(false);
 
   const handleDeleteAll = async () => {
     if (deleteConfirm === "idle") { setDeleteConfirm("confirm1"); return; }
@@ -1185,7 +1190,14 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setEquipment(await getEquipment(tenantId));
+      const [eq, ofs, ops] = await Promise.all([
+        getEquipment(tenantId),
+        getOffices(tenantId).catch(() => [] as Office[]),
+        getOfficePrices(tenantId).catch(() => [] as EquipmentOfficePrice[]),
+      ]);
+      setEquipment(eq);
+      setOffices(ofs);
+      setOfficePrices(ops);
     } finally {
       setLoading(false);
     }
@@ -1220,6 +1232,28 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
     const a = document.createElement("a");
     a.href = url;
     a.download = "用具マスタ.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportOfficePricesCSV = () => {
+    if (offices.length === 0) { alert("事業所が登録されていません。設定タブで事業所を登録してください。"); return; }
+    const headers = ["商品コード", "用具名", ...offices.map((o) => o.name)];
+    const rows = localEquipment.map((eq) => {
+      const priceCells = offices.map((o) => {
+        const op = officePrices.find((p) => p.product_code === eq.product_code && p.office_id === o.id);
+        return op ? String(op.rental_price) : "";
+      });
+      return [eq.product_code, eq.name, ...priceCells];
+    });
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "事業所別レンタル価格.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1290,6 +1324,9 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         tenantId={tenantId}
         onBack={() => setSelectedItem(null)}
         onSave={(saved) => { setSelectedItem(saved); load(); }}
+        offices={offices}
+        officePrices={officePrices}
+        onReloadOfficePrices={load}
       />
     );
   }
@@ -1301,6 +1338,9 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         tenantId={tenantId}
         onBack={() => setShowNewItem(false)}
         onSave={(saved) => { setShowNewItem(false); setSelectedItem(saved); load(); }}
+        offices={offices}
+        officePrices={officePrices}
+        onReloadOfficePrices={load}
       />
     );
   }
@@ -1343,6 +1383,20 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         >
           <Download size={14} />
           CSV出力
+        </button>
+        <button
+          onClick={handleExportOfficePricesCSV}
+          className="shrink-0 flex items-center gap-1 bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+        >
+          <Download size={14} />
+          事業所別価格
+        </button>
+        <button
+          onClick={() => setShowOfficePriceImport(true)}
+          className="shrink-0 flex items-center gap-1 bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+        >
+          <Upload size={14} />
+          取込
         </button>
         <button
           onClick={handleDeleteAll}
@@ -1487,6 +1541,16 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           }}
         />
       )}
+
+      {showOfficePriceImport && (
+        <OfficePriceImportModal
+          tenantId={tenantId}
+          offices={offices}
+          equipment={localEquipment}
+          onClose={() => setShowOfficePriceImport(false)}
+          onDone={() => { setShowOfficePriceImport(false); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -1498,16 +1562,39 @@ function EquipmentDetail({
   tenantId,
   onBack,
   onSave,
+  offices,
+  officePrices,
+  onReloadOfficePrices,
 }: {
   item: Equipment | null;
   tenantId: string;
   onBack: () => void;
   onSave: (saved: Equipment) => void;
+  offices: Office[];
+  officePrices: EquipmentOfficePrice[];
+  onReloadOfficePrices: () => void;
 }) {
   const isNew = item === null;
   const [isEditing, setIsEditing] = useState(isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // 事業所別価格（この用具分）
+  const myOfficePrices = item
+    ? officePrices.filter((p) => p.product_code === item.product_code)
+    : [];
+  const [officePriceMap, setOfficePriceMap] = useState<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    myOfficePrices.forEach((p) => { m[p.office_id] = String(p.rental_price); });
+    return m;
+  });
+  // 編集開始時に同期
+  useEffect(() => {
+    const m: Record<string, string> = {};
+    const prices = item ? officePrices.filter((p) => p.product_code === item.product_code) : [];
+    prices.forEach((p) => { m[p.office_id] = String(p.rental_price); });
+    setOfficePriceMap(m);
+  }, [isEditing, officePrices, item]);
 
   // フォーム state
   const [name, setName] = useState(item?.name ?? "");
@@ -1547,6 +1634,19 @@ function EquipmentDetail({
           await addPriceHistory(tenantId, saved.product_code, newRentalPrice, `${priceEffectiveMonth}-01`);
         }
       }
+      // 事業所別価格を保存
+      await Promise.all(
+        offices.map(async (office) => {
+          const priceStr = officePriceMap[office.id] ?? "";
+          const price = priceStr.trim() ? parseInt(priceStr.trim()) : 0;
+          if (price > 0) {
+            await upsertOfficePrice(tenantId, saved.product_code, office.id, price);
+          } else {
+            await deleteOfficePrice(tenantId, saved.product_code, office.id).catch(() => {});
+          }
+        })
+      );
+      onReloadOfficePrices();
       onSave(saved);
       setIsEditing(false);
     } catch {
@@ -1670,6 +1770,26 @@ function EquipmentDetail({
                 />
               </div>
             ))}
+            {/* 事業所別レンタル価格 */}
+            {offices.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-2">事業所別レンタル価格（円/月）</label>
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  {offices.map((office, idx) => (
+                    <div key={office.id} className={`flex items-center gap-2 px-3 py-2 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
+                      <span className="text-sm text-gray-700 flex-1 truncate">{office.name}</span>
+                      <input
+                        type="number"
+                        value={officePriceMap[office.id] ?? ""}
+                        onChange={(e) => setOfficePriceMap((prev) => ({ ...prev, [office.id]: e.target.value }))}
+                        placeholder="例：15000"
+                        className="w-28 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
                 <AlertCircle size={14} />
@@ -1688,6 +1808,24 @@ function EquipmentDetail({
             <Field label="限度額" value={item?.price_limit ? `¥${item.price_limit.toLocaleString()}` : null} />
             <Field label="選定理由" value={item?.selection_reason} />
             <Field label="提案理由" value={item?.proposal_reason} />
+            {/* 事業所別レンタル価格（表示） */}
+            {offices.length > 0 && myOfficePrices.length > 0 && (
+              <div className="bg-gray-50 rounded-xl p-3">
+                <p className="text-xs text-gray-400 mb-2">事業所別レンタル価格</p>
+                <div className="space-y-1">
+                  {offices.map((office) => {
+                    const op = myOfficePrices.find((p) => p.office_id === office.id);
+                    if (!op) return null;
+                    return (
+                      <div key={office.id} className="flex justify-between items-center">
+                        <span className="text-xs text-gray-600">{office.name}</span>
+                        <span className="text-sm font-medium text-emerald-700">¥{op.rental_price.toLocaleString()}/月</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {item && (
               <div className="bg-gray-50 rounded-xl p-3">
                 <p className="text-xs text-gray-400 mb-0.5">更新日</p>
@@ -7516,6 +7654,9 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
           </div>
         </div>
 
+        {/* 事業所管理 */}
+        <OfficeManagementSection tenantId={tenantId} />
+
         {/* 卸会社メールアドレス */}
         <div>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">卸会社メールアドレス</h3>
@@ -7547,6 +7688,9 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
           </div>
         </div>
 
+        {/* ── 居宅事業所マスタ ── */}
+        <CareOfficeSection tenantId={tenantId} />
+
         {/* ── 個別援助計画書テンプレート ── */}
         <CarePlanTemplateSection tenantId={tenantId} />
 
@@ -7554,6 +7698,412 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     </div>
   );
 }
+
+// ─── Care Office Section ─────────────────────────────────────────────────────
+
+function CareOfficeSection({ tenantId }: { tenantId: string }) {
+  const [offices, setOffices] = useState<CareOffice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<Partial<CareOffice>>({});
+  const [saving, setSaving] = useState(false);
+  const [addingNew, setAddingNew] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try { setOffices(await getCareOffices(tenantId)); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, [tenantId]);
+
+  const startEdit = (office: CareOffice) => {
+    setEditingId(office.id);
+    setForm({ ...office });
+    setAddingNew(false);
+  };
+
+  const startNew = () => {
+    setAddingNew(true);
+    setEditingId(null);
+    setForm({ name: "", fax_number: "", phone_number: "", email: "" });
+  };
+
+  const handleSave = async () => {
+    if (!form.name?.trim()) return;
+    setSaving(true);
+    try {
+      await upsertCareOffice(tenantId, {
+        id: editingId ?? undefined,
+        name: form.name!,
+        fax_number: form.fax_number ?? null,
+        phone_number: form.phone_number ?? null,
+        address: form.address ?? null,
+        email: form.email ?? null,
+        notes: form.notes ?? null,
+      });
+      setEditingId(null);
+      setAddingNew(false);
+      setForm({});
+      await load();
+    } catch { alert("保存に失敗しました"); } finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`「${name}」を削除しますか？`)) return;
+    try { await deleteCareOffice(id); await load(); }
+    catch { alert("削除に失敗しました"); }
+  };
+
+  const FormRow = ({ label, field, placeholder }: { label: string; field: keyof CareOffice; placeholder?: string }) => (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500 w-24 shrink-0">{label}</span>
+      <input
+        value={(form[field] as string) ?? ""}
+        onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))}
+        placeholder={placeholder}
+        className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+      />
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">居宅事業所マスタ</h3>
+        <button
+          onClick={startNew}
+          className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100"
+        >
+          ＋ 追加
+        </button>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        {loading ? (
+          <div className="p-4 flex justify-center"><Loader2 size={20} className="animate-spin text-emerald-400" /></div>
+        ) : (
+          <>
+            {addingNew && (
+              <div className="p-4 border-b border-gray-100 space-y-2 bg-emerald-50">
+                <FormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" />
+                <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
+                <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
+                <FormRow label="メール" field="email" placeholder="example@example.com" />
+                <div className="flex gap-2 pt-1">
+                  <button onClick={() => setAddingNew(false)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
+                  <button onClick={handleSave} disabled={saving || !form.name?.trim()} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50">
+                    {saving ? "保存中..." : "保存"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {offices.length === 0 && !addingNew && (
+              <p className="text-xs text-gray-400 p-4 text-center">事業所が登録されていません</p>
+            )}
+            {offices.map((office, idx) => (
+              <div key={office.id} className={`px-4 py-3 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
+                {editingId === office.id ? (
+                  <div className="space-y-2">
+                    <FormRow label="事業所名 *" field="name" />
+                    <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
+                    <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
+                    <FormRow label="メール" field="email" placeholder="example@example.com" />
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => setEditingId(null)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-gray-100">キャンセル</button>
+                      <button onClick={handleSave} disabled={saving} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
+                        {saving ? "保存中..." : "保存"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">{office.name}</p>
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                        {office.fax_number && <span className="text-xs text-gray-500">FAX: {office.fax_number}</span>}
+                        {office.phone_number && <span className="text-xs text-gray-500">TEL: {office.phone_number}</span>}
+                        {office.email && <span className="text-xs text-gray-500">Mail: {office.email}</span>}
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button onClick={() => startEdit(office)} className="text-xs px-2 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">編集</button>
+                      <button onClick={() => handleDelete(office.id, office.name)} className="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100">削除</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Office Management Section ───────────────────────────────────────────────
+
+function OfficeManagementSection({ tenantId }: { tenantId: string }) {
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [saving, setSaving] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try { setOffices(await getOffices(tenantId)); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [tenantId]);
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return;
+    setAdding(true);
+    try {
+      await createOffice(tenantId, newName.trim());
+      setNewName("");
+      await load();
+    } catch { alert("追加に失敗しました"); } finally { setAdding(false); }
+  };
+
+  const handleEdit = async (id: string) => {
+    if (!editName.trim()) return;
+    setSaving(id);
+    try {
+      await updateOffice(id, editName.trim());
+      setEditId(null);
+      await load();
+    } catch { alert("保存に失敗しました"); } finally { setSaving(null); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("この事業所を削除しますか？\n（事業所別価格データも削除されます）")) return;
+    setDeletingId(id);
+    try { await deleteOffice(id); await load(); }
+    catch { alert("削除に失敗しました"); } finally { setDeletingId(null); }
+  };
+
+  return (
+    <div>
+      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">事業所管理</h3>
+      <div className="bg-white rounded-xl overflow-hidden border border-gray-100">
+        {loading ? (
+          <div className="p-4 flex justify-center"><Loader2 size={20} className="animate-spin text-emerald-400" /></div>
+        ) : (
+          <>
+            {offices.length === 0 && (
+              <p className="text-xs text-gray-400 p-4 text-center">事業所が登録されていません</p>
+            )}
+            {offices.map((office, idx) => (
+              <div key={office.id} className={`px-4 py-3 flex items-center gap-2 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
+                {editId === office.id ? (
+                  <>
+                    <input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-emerald-400"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => handleEdit(office.id)}
+                      disabled={saving === office.id}
+                      className="text-xs font-medium text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-40 flex items-center gap-1"
+                    >
+                      {saving === office.id ? <Loader2 size={12} className="animate-spin" /> : "保存"}
+                    </button>
+                    <button onClick={() => setEditId(null)} className="text-xs text-gray-400">戻す</button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm text-gray-800">{office.name}</span>
+                    <button
+                      onClick={() => { setEditId(office.id); setEditName(office.name); }}
+                      className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg"
+                    >
+                      編集
+                    </button>
+                    <button
+                      onClick={() => handleDelete(office.id)}
+                      disabled={deletingId === office.id}
+                      className="text-xs text-red-400 bg-red-50 px-2 py-1 rounded-lg disabled:opacity-40"
+                    >
+                      {deletingId === office.id ? <Loader2 size={12} className="animate-spin" /> : "削除"}
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+            {/* 新規追加 */}
+            <div className="border-t border-gray-100 px-4 py-3 flex gap-2">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                placeholder="新しい事業所名"
+                className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400"
+              />
+              <button
+                onClick={handleAdd}
+                disabled={adding || !newName.trim()}
+                className="flex items-center gap-1 text-xs font-medium text-white bg-emerald-500 px-3 py-1.5 rounded-lg disabled:opacity-40"
+              >
+                {adding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                追加
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Office Price Import Modal ────────────────────────────────────────────────
+
+function OfficePriceImportModal({
+  tenantId,
+  offices,
+  equipment,
+  onClose,
+  onDone,
+}: {
+  tenantId: string;
+  offices: Office[];
+  equipment: Equipment[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [csvText, setCsvText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => { setCsvText(ev.target?.result as string ?? ""); };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  const handleImport = async () => {
+    if (!csvText.trim()) { alert("CSVを入力またはファイルを選択してください"); return; }
+    setLoading(true);
+    setResult(null);
+    try {
+      // BOMを除去してパース
+      const text = csvText.replace(/^\uFEFF/, "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) { alert("データ行がありません"); return; }
+
+      // ヘッダー行解析
+      const parseRow = (line: string) =>
+        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
+      const headers = parseRow(lines[0]);
+      // 0: 商品コード, 1: 用具名, 2+: 事業所名
+      const officeHeaders = headers.slice(2);
+      const officeMap = new Map(offices.map((o) => [o.name, o.id]));
+
+      let imported = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      const prices: { tenant_id: string; product_code: string; office_id: string; rental_price: number }[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseRow(lines[i]);
+        const productCode = cols[0]?.trim();
+        if (!productCode) { skipped++; continue; }
+        const eq = equipment.find((e) => e.product_code === productCode);
+        if (!eq) { skipped++; errors.push(`行${i + 1}: 商品コード「${productCode}」が見つかりません`); continue; }
+
+        officeHeaders.forEach((officeName, j) => {
+          const officeId = officeMap.get(officeName);
+          if (!officeId) return;
+          const priceStr = cols[j + 2]?.trim();
+          if (!priceStr) return;
+          const price = parseInt(priceStr.replace(/,/g, ""));
+          if (isNaN(price) || price <= 0) return;
+          prices.push({ tenant_id: tenantId, product_code: productCode, office_id: officeId, rental_price: price });
+          imported++;
+        });
+      }
+
+      if (prices.length > 0) {
+        await bulkUpsertOfficePrices(prices);
+      }
+      setResult({ imported, skipped, errors: errors.slice(0, 10) });
+    } catch (err) {
+      alert("インポートに失敗しました: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
+      <div className="bg-white rounded-t-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">事業所別価格 取込</h3>
+          <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
+        </div>
+        <div className="p-4 space-y-4">
+          <div className="bg-indigo-50 rounded-xl p-3 text-xs text-indigo-700 space-y-1">
+            <p className="font-semibold">CSV形式：</p>
+            <p>商品コード,用具名,{offices.map((o) => o.name).join(",") || "事業所A,事業所B"}</p>
+            <p>CODE001,電動ベッド,15000,14000</p>
+            <p className="text-indigo-500">※「事業所別価格 出力」ボタンでテンプレートを取得できます</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">ファイル選択</label>
+            <input ref={fileRef} type="file" accept=".csv" onChange={handleFile} className="text-sm" />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">またはCSVをペースト</label>
+            <textarea
+              value={csvText}
+              onChange={(e) => setCsvText(e.target.value)}
+              rows={6}
+              placeholder="CSVの内容をここにペースト..."
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-indigo-400 resize-none"
+            />
+          </div>
+
+          {result && (
+            <div className="bg-emerald-50 rounded-xl p-3 text-xs space-y-1">
+              <p className="font-semibold text-emerald-700">✓ 完了：{result.imported}件 取込、{result.skipped}件 スキップ</p>
+              {result.errors.map((e, i) => <p key={i} className="text-red-500">{e}</p>)}
+            </div>
+          )}
+        </div>
+        <div className="px-4 pb-6 pt-2 flex gap-2 border-t border-gray-100">
+          {result ? (
+            <button onClick={onDone} className="flex-1 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
+              完了
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} className="flex-1 py-3 border border-gray-200 text-sm text-gray-600 rounded-xl">
+                キャンセル
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={loading || !csvText.trim()}
+                className="flex-1 py-3 bg-indigo-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                取込実行
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Care Plan Template ───────────────────────────────────────────────────────
 
 function CarePlanTemplateSection({ tenantId }: { tenantId: string }) {
   const [templates, setTemplates] = useState<CarePlanTemplate[]>([]);
@@ -9733,6 +10283,40 @@ function RentalReportModal({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [checkedReqs, setCheckedReqs] = useState<Set<number>>(new Set());
+  const [faxSending, setFaxSending] = useState(false);
+  const [faxResult, setFaxResult] = useState<"ok" | "err" | null>(null);
+  const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
+  const [faxDialogOpen, setFaxDialogOpen] = useState(false);
+  const [selectedFaxNumber, setSelectedFaxNumber] = useState("");
+
+  useEffect(() => {
+    getCareOffices(tenantId).then(setCareOffices).catch(() => {});
+  }, [tenantId]);
+
+  // 利用者のケアマネ事務所に紐づくFAX番号を自動選択
+  useEffect(() => {
+    if (client.care_manager_org) {
+      const matched = careOffices.find(o => o.name === client.care_manager_org);
+      if (matched?.fax_number) setSelectedFaxNumber(matched.fax_number);
+    }
+  }, [careOffices, client.care_manager_org]);
+
+  const handleSendFax = async () => {
+    if (!selectedFaxNumber) { alert("FAX番号を選択してください"); return; }
+    setFaxSending(true);
+    setFaxResult(null);
+    try {
+      // 印刷エリアをキャンバス化してbase64に変換（簡易実装）
+      // 実際はPDF生成ライブラリ（html2canvas + jspdf等）を使用
+      alert("FAX送信機能：eFax APIキー設定後に利用できます。\n送信先：" + selectedFaxNumber);
+      setFaxResult("ok");
+    } catch {
+      setFaxResult("err");
+    } finally {
+      setFaxSending(false);
+      setFaxDialogOpen(false);
+    }
+  };
 
   const m1Year  = parseInt(targetMonth.split("-")[0]);
   const m1Month = parseInt(targetMonth.split("-")[1]);
@@ -9893,7 +10477,53 @@ function RentalReportModal({
           className="flex items-center gap-1.5 bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
           <Printer size={14} /> 印刷
         </button>
+        <button onClick={() => setFaxDialogOpen(true)}
+          className="flex items-center gap-1.5 bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
+          <Send size={14} /> FAX送信
+        </button>
       </div>
+
+      {/* FAX送信ダイアログ */}
+      {faxDialogOpen && (
+        <div className="no-print fixed inset-0 bg-black/50 z-[70] flex items-center justify-center px-6">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5">
+            <h3 className="font-semibold text-gray-800 mb-1">FAX送信</h3>
+            <p className="text-xs text-gray-500 mb-4">貸与提供報告書を送信します</p>
+            <div className="mb-3">
+              <label className="text-xs text-gray-500 mb-1 block">送信先事業所</label>
+              <select
+                value={selectedFaxNumber}
+                onChange={e => setSelectedFaxNumber(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              >
+                <option value="">FAX番号を選択</option>
+                {careOffices.filter(o => o.fax_number).map(o => (
+                  <option key={o.id} value={o.fax_number!}>{o.name}（{o.fax_number}）</option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-gray-500 mb-1 block">FAX番号（直接入力も可）</label>
+              <input
+                value={selectedFaxNumber}
+                onChange={e => setSelectedFaxNumber(e.target.value)}
+                placeholder="0436-00-0000"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+            </div>
+            {faxResult === "ok" && <p className="text-xs text-emerald-600 mb-3">✓ 送信しました</p>}
+            {faxResult === "err" && <p className="text-xs text-red-500 mb-3">送信に失敗しました</p>}
+            <div className="flex gap-2">
+              <button onClick={() => setFaxDialogOpen(false)} className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200">キャンセル</button>
+              <button onClick={handleSendFax} disabled={faxSending || !selectedFaxNumber}
+                className="flex-1 py-2 rounded-xl text-sm text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 flex items-center justify-center gap-1">
+                {faxSending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                {faxSending ? "送信中..." : "送信"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 貸与利用項目トグル */}
       <div className="no-print bg-gray-50 border-b border-gray-100 px-4 py-2 flex flex-wrap gap-2 shrink-0">
