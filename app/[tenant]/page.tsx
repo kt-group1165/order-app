@@ -7579,16 +7579,60 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     { label: "事務･配送職員",        fullKey: "staff_admin_full",      partKey: "staff_admin_part" },
   ] as const;
 
-  return (
-    <div className="flex flex-col h-full bg-gray-50">
-      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
-        <h2 className="font-semibold text-gray-800">設定</h2>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+  type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan";
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("menu");
 
-        {/* 会社情報 */}
-        <div>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">会社情報</h3>
+  const menuItems: { id: SettingsPage; label: string; desc: string }[] = [
+    { id: "company",      label: "会社情報",           desc: "事業所番号・住所・担当者など" },
+    { id: "own_offices",  label: "自事業所管理",        desc: "事業所の追加・編集" },
+    { id: "suppliers",    label: "卸会社メールアドレス", desc: "発注メール送信先の管理" },
+    { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
+    { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
+  ];
+
+  const PageHeader = ({ title }: { title: string }) => (
+    <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center gap-3">
+      <button onClick={() => setSettingsPage("menu")} className="text-gray-400 hover:text-gray-600">
+        <ChevronLeft size={20} />
+      </button>
+      <h2 className="font-semibold text-gray-800">{title}</h2>
+    </div>
+  );
+
+  // ── メニュー画面 ──
+  if (settingsPage === "menu") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
+          <h2 className="font-semibold text-gray-800">設定</h2>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="bg-white rounded-xl overflow-hidden border border-gray-100">
+            {menuItems.map((item, idx) => (
+              <button
+                key={item.id}
+                onClick={() => setSettingsPage(item.id)}
+                className={`w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 transition-colors text-left ${idx > 0 ? "border-t border-gray-100" : ""}`}
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{item.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{item.desc}</p>
+                </div>
+                <ChevronRight size={16} className="text-gray-300 shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── 会社情報 ──
+  if (settingsPage === "company") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="会社情報" />
+        <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-white rounded-xl p-4 space-y-3">
             {companyFields.map(({ key, label, placeholder }) => (
               <div key={key}>
@@ -7601,7 +7645,6 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
                 />
               </div>
             ))}
-
             <p className="text-xs font-semibold text-gray-400 pt-2 border-t border-gray-100">重要事項説明書用</p>
             {importantMattersFields.map(({ key, label, placeholder }) => (
               <div key={key}>
@@ -7614,7 +7657,6 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
                 />
               </div>
             ))}
-
             <div>
               <label className="text-xs text-gray-500 block mb-1">職員体制（常勤 / 非常勤）</label>
               <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -7626,74 +7668,83 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
                 {staffRows.map(({ label, fullKey, partKey }) => (
                   <div key={label} className="grid grid-cols-3 items-center border-t border-gray-100 px-3 py-1.5 gap-2">
                     <span className="text-xs text-gray-700">{label}</span>
-                    <input
-                      value={company[fullKey]}
-                      onChange={(e) => setCompany({ ...company, [fullKey]: e.target.value })}
-                      placeholder="0"
-                      className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400"
-                    />
-                    <input
-                      value={company[partKey]}
-                      onChange={(e) => setCompany({ ...company, [partKey]: e.target.value })}
-                      placeholder="0"
-                      className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400"
-                    />
+                    <input value={company[fullKey]} onChange={(e) => setCompany({ ...company, [fullKey]: e.target.value })} placeholder="0" className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400" />
+                    <input value={company[partKey]} onChange={(e) => setCompany({ ...company, [partKey]: e.target.value })} placeholder="0" className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-emerald-400" />
                   </div>
                 ))}
               </div>
             </div>
-
-            <button
-              onClick={handleSaveCompany}
-              disabled={savingCompany}
-              className="w-full py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2 mt-2"
-            >
+            <button onClick={handleSaveCompany} disabled={savingCompany}
+              className="w-full py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2 mt-2">
               {savingCompany ? <Loader2 size={14} className="animate-spin" /> : "会社情報を保存"}
             </button>
             {savedCompany && <p className="text-xs text-emerald-600 font-medium text-center">✓ 保存完了しました</p>}
           </div>
         </div>
+      </div>
+    );
+  }
 
-        {/* 事業所管理 */}
-        <OfficeManagementSection tenantId={tenantId} />
-
-        {/* 卸会社メールアドレス */}
-        <div>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">卸会社メールアドレス</h3>
-          <div className="space-y-3">
-            {suppliers.map((s) => (
-              <div key={s.id} className="bg-white rounded-xl p-4 space-y-2">
-                <p className="text-sm font-semibold text-gray-800">{s.name}</p>
-                <div className="flex gap-2">
-                  <input
-                    type="email"
-                    value={emailMap[s.id] ?? ""}
-                    onChange={(e) => setEmailMap({ ...emailMap, [s.id]: e.target.value })}
-                    placeholder="example@wholesaler.co.jp"
-                    className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
-                  />
-                  <button
-                    onClick={() => handleSave(s.id)}
-                    disabled={saving === s.id}
-                    className="shrink-0 px-4 py-2 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center gap-1"
-                  >
-                    {saving === s.id ? <Loader2 size={14} className="animate-spin" /> : "保存"}
-                  </button>
-                </div>
-                {saved === s.id && (
-                  <p className="text-xs text-emerald-600 font-medium">✓ 保存完了しました</p>
-                )}
-              </div>
-            ))}
-          </div>
+  // ── 自事業所管理 ──
+  if (settingsPage === "own_offices") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="自事業所管理" />
+        <div className="flex-1 overflow-y-auto p-4">
+          <OfficeManagementSection tenantId={tenantId} />
         </div>
+      </div>
+    );
+  }
 
-        {/* ── 居宅事業所マスタ ── */}
-        <CareOfficeSection tenantId={tenantId} />
+  // ── 卸会社メールアドレス ──
+  if (settingsPage === "suppliers") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="卸会社メールアドレス" />
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {suppliers.map((s) => (
+            <div key={s.id} className="bg-white rounded-xl p-4 space-y-2">
+              <p className="text-sm font-semibold text-gray-800">{s.name}</p>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={emailMap[s.id] ?? ""}
+                  onChange={(e) => setEmailMap({ ...emailMap, [s.id]: e.target.value })}
+                  placeholder="example@wholesaler.co.jp"
+                  className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+                />
+                <button onClick={() => handleSave(s.id)} disabled={saving === s.id}
+                  className="shrink-0 px-4 py-2 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center gap-1">
+                  {saving === s.id ? <Loader2 size={14} className="animate-spin" /> : "保存"}
+                </button>
+              </div>
+              {saved === s.id && <p className="text-xs text-emerald-600 font-medium">✓ 保存完了しました</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-        {/* ── 個別援助計画書テンプレート ── */}
+  // ── 居宅事業所マスタ ──
+  if (settingsPage === "care_offices") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="居宅事業所マスタ" />
+        <div className="flex-1 overflow-y-auto p-4">
+          <CareOfficeSection tenantId={tenantId} />
+        </div>
+      </div>
+    );
+  }
+
+  // ── 個別援助計画書テンプレート ──
+  return (
+    <div className="flex flex-col h-full bg-gray-50">
+      <PageHeader title="個別援助計画書テンプレート" />
+      <div className="flex-1 overflow-y-auto p-4">
         <CarePlanTemplateSection tenantId={tenantId} />
-
       </div>
     </div>
   );
