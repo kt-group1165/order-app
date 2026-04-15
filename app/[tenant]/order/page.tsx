@@ -53,21 +53,38 @@ function waitForTap(): Promise<void> {
   return new Promise((resolve) => { _tapResolve = resolve; });
 }
 
-function listenOnce(): Promise<string> {
+function listenOnce(timeoutMs = 3000): Promise<string> {
   return new Promise((resolve) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { resolve(""); return; }
-    const r = new SR();
-    r.lang = "ja-JP";
-    r.interimResults = false;
-    r.maxAlternatives = 1;
     let done = false;
-    const finish = (text: string) => { if (!done) { done = true; resolve(text); } };
-    const timer = setTimeout(() => finish(""), 10000);
-    r.onresult = (e: any) => { clearTimeout(timer); finish(e.results[0][0].transcript as string); };
-    r.onerror = (e: any) => { console.warn("SR:", e.error); clearTimeout(timer); finish(""); };
-    r.onend = () => { clearTimeout(timer); finish(""); };
-    try { r.start(); } catch { finish(""); }
+    let cur: any = null;
+
+    const finish = (text: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { cur?.stop(); } catch {}
+      resolve(text);
+    };
+
+    // 3秒経ったら諦める
+    const timer = setTimeout(() => finish(""), timeoutMs);
+
+    const startR = () => {
+      if (done) return;
+      const r = new SR();
+      cur = r;
+      r.lang = "ja-JP";
+      r.interimResults = false;
+      r.maxAlternatives = 1;
+      r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
+      r.onerror = () => { if (!done) setTimeout(startR, 150); }; // エラー時は再起動
+      r.onend = () => { if (!done) setTimeout(startR, 150); };   // iOS早期終了も再起動
+      try { r.start(); } catch { if (!done) setTimeout(startR, 200); }
+    };
+
+    startR();
   });
 }
 
