@@ -98,8 +98,10 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<"idle" | "speaking" | "listening">("idle");
   const [voiceMessage, setVoiceMessage] = useState("");
+  const [voiceInput, setVoiceInput] = useState("");
   const voiceCancelRef = useRef(false);
   const micTapRef = useRef<(() => void) | null>(null);
+  const voiceInputResolveRef = useRef<((text: string) => void) | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -129,28 +131,33 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       await speak(text);
     };
 
-    const hear = async (): Promise<string> => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (voiceCancelRef.current) return "";
-        setVoiceStatus("listening");
-        setVoiceMessage(attempt === 0 ? "マイクボタンを押して話してください" : "聞こえませんでした。もう一度押してください");
+    // テキスト入力で回答を受け取る（iOSキーボードの🎤も使える）
+    const hear = (): Promise<string> => {
+      if (voiceCancelRef.current) return Promise.resolve("");
+      setVoiceStatus("listening");
+      setVoiceInput("");
+      return new Promise((resolve) => {
+        voiceInputResolveRef.current = (text: string) => {
+          voiceInputResolveRef.current = null;
+          setVoiceInput("");
+          if (text) setVoiceMessage(`「${text}」`);
+          setTimeout(() => resolve(text), text ? 500 : 0);
+        };
 
-        const result = await new Promise<string>((resolve) => {
+        // Android: SpeechRecognitionも同時に起動（マイクボタン押下で）
+        if (!isIOS()) {
           micTapRef.current = () => {
             micTapRef.current = null;
-            if (voiceCancelRef.current) { resolve(""); return; }
             const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-            if (!SR) { resolve(""); return; }
+            if (!SR) return;
             setVoiceMessage("聞いています...");
-            const ios = isIOS();
             let done = false;
             let tries = 0;
             const finish = (text: string) => {
               if (done) return;
               done = true;
               clearTimeout(timer);
-              if (text) setVoiceMessage(`「${text}」`);
-              setTimeout(() => resolve(text), text ? 700 : 0);
+              if (voiceInputResolveRef.current) voiceInputResolveRef.current(text);
             };
             const timer = setTimeout(() => finish(""), 5000);
             const startR = () => {
@@ -161,17 +168,14 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               rec.interimResults = false;
               rec.maxAlternatives = 1;
               rec.onresult = (e: any) => finish(e.results[0][0].transcript as string);
-              rec.onerror = () => { if (!done && !ios && tries < 8) setTimeout(startR, 200); };
-              rec.onend = () => { if (!done && !ios && tries < 8) setTimeout(startR, 200); };
-              try { rec.start(); } catch { if (!done && !ios && tries < 8) setTimeout(startR, 300); }
+              rec.onerror = () => { if (!done && tries < 8) setTimeout(startR, 200); };
+              rec.onend = () => { if (!done && tries < 8) setTimeout(startR, 200); };
+              try { rec.start(); } catch { if (!done && tries < 8) setTimeout(startR, 300); }
             };
             startR();
           };
-        });
-
-        if (result) return result;
-      }
-      return "";
+        }
+      });
     };
 
     try {
@@ -410,14 +414,36 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             <div className="bg-white rounded-2xl p-5 mb-5 min-h-[70px] flex items-center justify-center">
               <p className="text-gray-800 text-base text-center font-medium leading-relaxed">{voiceMessage}</p>
             </div>
-            {/* 話すボタン（ボタン待ち時のみ表示） */}
-            {voiceStatus === "listening" && (voiceMessage === "マイクボタンを押して話してください" || voiceMessage === "聞こえませんでした。もう一度押してください") && (
-              <button
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); micTapRef.current?.(); }}
-                className="w-full bg-red-500 text-white py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 mb-4 active:bg-red-600"
-              >
-                <Mic size={26} /> 話す
-              </button>
+            {/* テキスト入力（listening中） */}
+            {voiceStatus === "listening" && voiceInputResolveRef.current && (
+              <div className="w-full mb-4">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={voiceInput}
+                    onChange={e => setVoiceInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
+                    placeholder="ここに入力（iOSは🎤キーで話す）"
+                    className="flex-1 border-2 border-red-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-red-500 bg-white"
+                    autoFocus
+                  />
+                  {!isIOS() && (
+                    <button
+                      onClick={(e) => { e.preventDefault(); micTapRef.current?.(); }}
+                      className="w-12 h-12 bg-red-500 text-white rounded-xl flex items-center justify-center shrink-0"
+                    >
+                      <Mic size={20} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  onClick={() => { if (voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
+                  disabled={!voiceInput.trim()}
+                  className="w-full mt-2 bg-emerald-500 disabled:opacity-40 text-white font-bold py-3.5 rounded-xl text-base"
+                >
+                  送信
+                </button>
+              </div>
             )}
             <button
               onClick={stopVoice}
