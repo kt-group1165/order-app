@@ -17,7 +17,12 @@ export async function POST(req: NextRequest) {
     const credentials = JSON.parse(credentialsJson);
     const projectId = credentials.project_id;
 
-    const client = new v2.SpeechClient({ credentials });
+    // chirp_2 は東京リージョン(asia-northeast1)で利用可能
+    const location = "asia-northeast1";
+    const client = new v2.SpeechClient({
+      credentials,
+      apiEndpoint: `${location}-speech.googleapis.com`,
+    });
 
     const formData = await req.formData();
     const audio = formData.get("audio") as File;
@@ -27,7 +32,7 @@ export async function POST(req: NextRequest) {
 
     // Google Cloud Speech-to-Text v2 API (自動デコード + chirp_2モデル)
     const [response] = await client.recognize({
-      recognizer: `projects/${projectId}/locations/global/recognizers/_`,
+      recognizer: `projects/${projectId}/locations/${location}/recognizers/_`,
       config: {
         autoDecodingConfig: {},
         languageCodes: ["ja-JP"],
