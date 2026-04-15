@@ -45,11 +45,6 @@ function speak(text: string): Promise<void> {
 
 const isIOS = () => typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
 
-// ボタンonClickから直接r.start()を呼ぶためのコールバック登録
-let _onMicTap: (() => void) | null = null;
-export function onMicButtonTap() {
-  _onMicTap?.();
-}
 
 // 名前マッチング（部分一致）
 function matchClients(text: string, clients: Client[]): Client[] {
@@ -104,6 +99,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const [voiceStatus, setVoiceStatus] = useState<"idle" | "speaking" | "listening">("idle");
   const [voiceMessage, setVoiceMessage] = useState("");
   const voiceCancelRef = useRef(false);
+  const micTapRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -140,8 +136,8 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
         setVoiceMessage(attempt === 0 ? "マイクボタンを押して話してください" : "聞こえませんでした。もう一度押してください");
 
         const result = await new Promise<string>((resolve) => {
-          _onMicTap = () => {
-            _onMicTap = null;
+          micTapRef.current = () => {
+            micTapRef.current = null;
             if (voiceCancelRef.current) { resolve(""); return; }
             const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
             if (!SR) { resolve(""); return; }
@@ -415,9 +411,9 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               <p className="text-gray-800 text-base text-center font-medium leading-relaxed">{voiceMessage}</p>
             </div>
             {/* 話すボタン（ボタン待ち時のみ表示） */}
-            {voiceStatus === "listening" && voiceMessage === "マイクボタンを押して話してください" && (
+            {voiceStatus === "listening" && (voiceMessage === "マイクボタンを押して話してください" || voiceMessage === "聞こえませんでした。もう一度押してください") && (
               <button
-                onClick={onMicButtonTap}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); micTapRef.current?.(); }}
                 className="w-full bg-red-500 text-white py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 mb-4 active:bg-red-600"
               >
                 <Mic size={26} /> 話す
