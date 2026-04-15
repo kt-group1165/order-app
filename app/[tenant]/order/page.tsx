@@ -230,10 +230,15 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             try {
               const res = await fetch("/api/transcribe", { method: "POST", body: fd });
               const data = await res.json();
-              // デバッグ: Whisperの結果を表示
-              setVoiceMessage(`結果: "${data.text ?? ""}" / err: ${data.error ?? "なし"} / ${data.detail ?? ""}`);
-              const text = data.text?.trim() ?? "";
-              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(text); }, 1500);
+              const primary = (data.text ?? "").trim();
+              const alts: string[] = Array.isArray(data.alternatives) ? data.alternatives : [];
+              // 全候補を結合してマッチングに使う(漢字誤変換対策)
+              const uniqueAlts = alts.filter((a) => a && a !== primary);
+              const combined = [primary, ...uniqueAlts].join(" ").trim();
+              // デバッグ: プライマリとそれ以外の候補を表示
+              const altDisplay = uniqueAlts.length > 0 ? ` +候補:${uniqueAlts.slice(0, 3).join("/")}` : "";
+              setVoiceMessage(`結果: "${primary}"${altDisplay} / err: ${data.error ?? "なし"} ${data.detail ?? ""}`);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(combined); }, 1500);
             } catch (e) {
               console.error("transcribe error:", e);
               setVoiceMessage(`通信エラー: ${String(e)}`);
