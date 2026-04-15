@@ -166,7 +166,9 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             "audio/mp4",
             "audio/ogg",
           ].find(t => MediaRecorder.isTypeSupported(t)) ?? "";
-          const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+          // iOS SafariはisTypeSupportedが全てfalseでもデフォルトでmp4録音する
+          const effectiveMime = mimeType || (isIOS() ? "audio/mp4" : "audio/webm");
+          const ext = effectiveMime.includes("mp4") ? "m4a" : effectiveMime.includes("ogg") ? "ogg" : "webm";
 
           const chunks: BlobPart[] = [];
           const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -174,7 +176,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           mr.onstop = async () => {
             stream.getTracks().forEach(t => t.stop());
             setVoiceMessage("認識中...");
-            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+            const blob = new Blob(chunks, { type: effectiveMime });
             const fd = new FormData();
             fd.append("audio", blob, `audio.${ext}`);
             try {
