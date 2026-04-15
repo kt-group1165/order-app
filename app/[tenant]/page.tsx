@@ -452,6 +452,35 @@ export default function TenantPage({
 
 // ─── Orders Tab ─────────────────────────────────────────────────────────────
 
+function MobileOrderUrlButton({ tenantId }: { tenantId: string }) {
+  const [copied, setCopied] = useState(false);
+  const url = typeof window !== "undefined"
+    ? `${window.location.origin}/${tenantId}/order`
+    : "";
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={url}
+      className={`shrink-0 flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-xl border transition-colors ${
+        copied
+          ? "bg-emerald-50 text-emerald-600 border-emerald-300"
+          : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50"
+      }`}
+    >
+      <Send size={13} />
+      {copied ? "コピー済み" : "発注URL"}
+    </button>
+  );
+}
+
 function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: string; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -687,6 +716,7 @@ function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: st
           <Plus size={14} />
           新規発注
         </button>
+        <MobileOrderUrlButton tenantId={tenantId} />
         {/* 未保存変更がある場合に保存ボタンを表示 */}
         {pendingChanges.size > 0 && (
           <button
