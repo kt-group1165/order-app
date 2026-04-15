@@ -59,16 +59,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 東京リージョンのSpeech-to-Textクライアント
-    const location = "asia-northeast1";
-    const client = new v2.SpeechClient({
-      credentials,
-      apiEndpoint: `${location}-speech.googleapis.com`,
-    });
+    // adaptation (カスタム辞書) は global エンドポイント + long モデルでのみ動作する
+    const location = "global";
+    const client = new v2.SpeechClient({ credentials });
 
     const audioBuffer = Buffer.from(await audio.arrayBuffer());
 
-    // longモデル + adaptation(カスタム辞書)で固有名詞精度を向上
+    // long モデル + adaptation で固有名詞の認識精度を向上
     const [response] = await client.recognize({
       recognizer: `projects/${projectId}/locations/${location}/recognizers/_`,
       config: {
@@ -77,9 +74,7 @@ export async function POST(req: NextRequest) {
         model: "long",
         adaptation: {
           phraseSets: [
-            {
-              inlinePhraseSet: { phrases },
-            },
+            { inlinePhraseSet: { phrases } },
           ],
         },
       },
@@ -91,6 +86,32 @@ export async function POST(req: NextRequest) {
         ?.map((r) => r.alternatives?.[0]?.transcript ?? "")
         .join(" ")
         .trim() ?? "";
+
+    // 使用量を記録（totalBilledDurationから課金対象秒数を取得）
+    try {
+      const dur = response.metadata?.totalBilledDuration;
+      const seconds =
+        dur && typeof dur === "object"
+          ? Number(dur.seconds ?? 0) + Number(dur.nanos ?? 0) / 1e9
+          : 0;
+      // long モデル: $0.016/分 ≒ ¥2.4/分（¥150/USD想定）
+      const costJpy = (seconds / 60) * 2.4;
+      if (tenantId && seconds > 0 && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+        );
+        await supabase.from("speech_usage").insert({
+          tenant_id: tenantId,
+          billed_seconds: Number(seconds.toFixed(3)),
+          cost_jpy: Number(costJpy.toFixed(4)),
+          model: "long",
+          text_length: text.length,
+        });
+      }
+    } catch (logErr) {
+      console.error("usage log error:", logErr);
+    }
 
     return NextResponse.json({ text });
   } catch (e) {

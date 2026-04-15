@@ -49,6 +49,7 @@ import {
   type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
 } from "@/lib/billing";
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
+import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -7491,7 +7492,7 @@ function OrderEmailPreviewModal({
 
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
-type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan";
+type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "speech_usage";
 
 function SettingsTab({ tenantId }: { tenantId: string }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -7618,6 +7619,7 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     { id: "suppliers",    label: "卸会社メールアドレス", desc: "発注メール送信先の管理" },
     { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
+    { id: "speech_usage", label: "音声認識の使用状況",   desc: "今月の使用量・料金を確認" },
   ];
 
   const PageHeader = ({ title }: { title: string }) => (
@@ -7769,6 +7771,18 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
     );
   }
 
+  // ── 音声認識の使用状況 ──
+  if (settingsPage === "speech_usage") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="音声認識の使用状況" />
+        <div className="flex-1 overflow-y-auto p-4">
+          <SpeechUsageSection tenantId={tenantId} />
+        </div>
+      </div>
+    );
+  }
+
   // ── 個別援助計画書テンプレート ──
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -7776,6 +7790,88 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
       <div className="flex-1 overflow-y-auto p-4">
         <CarePlanTemplateSection tenantId={tenantId} />
       </div>
+    </div>
+  );
+}
+
+// ─── Speech Usage Section ─────────────────────────────────────────────────────
+function SpeechUsageSection({ tenantId }: { tenantId: string }) {
+  const [summary, setSummary] = useState<SpeechUsageSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getSpeechUsageSummary(tenantId).then(setSummary).finally(() => setLoading(false));
+  }, [tenantId]);
+
+  if (loading) return <p className="text-sm text-gray-400">読み込み中...</p>;
+  if (!summary) return <p className="text-sm text-gray-400">データなし</p>;
+
+  const monthMinutes = (summary.monthSeconds / 60).toFixed(1);
+  const totalMinutes = (summary.totalSeconds / 60).toFixed(1);
+  const freeMinutesRemaining = (summary.freeSecondsRemaining / 60).toFixed(1);
+  const usedRatio = Math.min(100, (summary.monthSeconds / (60 * 60)) * 100);
+
+  return (
+    <div className="space-y-4">
+      {/* 今月の使用状況 */}
+      <div className="bg-white rounded-xl p-4 border border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">今月の使用状況</h3>
+        <div className="space-y-3">
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">使用時間</span>
+            <span className="text-lg font-bold text-gray-800">{monthMinutes}分</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">認識回数</span>
+            <span className="text-sm text-gray-700">{summary.monthCallCount}回</span>
+          </div>
+          {/* 無料枠プログレスバー */}
+          <div>
+            <div className="flex justify-between text-xs text-gray-500 mb-1">
+              <span>無料枠 (月60分)</span>
+              <span>残り {freeMinutesRemaining}分</span>
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full transition-all ${usedRatio >= 100 ? "bg-red-500" : usedRatio >= 80 ? "bg-orange-400" : "bg-emerald-500"}`}
+                style={{ width: `${usedRatio}%` }}
+              />
+            </div>
+          </div>
+          <div className="flex justify-between items-baseline pt-2 border-t border-gray-100">
+            <span className="text-xs text-gray-500">今月の請求見込</span>
+            <span className="text-lg font-bold text-emerald-700">
+              ¥{Math.round(summary.monthBillableCostJpy).toLocaleString()}
+            </span>
+          </div>
+          {summary.monthBillableCostJpy === 0 && summary.monthSeconds > 0 && (
+            <p className="text-xs text-emerald-600">✓ 無料枠内に収まっています</p>
+          )}
+        </div>
+      </div>
+
+      {/* 累計 */}
+      <div className="bg-white rounded-xl p-4 border border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">累計</h3>
+        <div className="space-y-2">
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">累計使用時間</span>
+            <span className="text-sm text-gray-700">{totalMinutes}分</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">累計認識回数</span>
+            <span className="text-sm text-gray-700">{summary.totalCallCount}回</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">理論料金 (無料枠考慮前)</span>
+            <span className="text-sm text-gray-600">¥{summary.totalCostJpy.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 px-1">
+        Google Cloud Speech-to-Text v2 (long モデル + カスタム辞書) / 月60分まで無料 / 超過分 ¥2.4/分
+      </p>
     </div>
   );
 }

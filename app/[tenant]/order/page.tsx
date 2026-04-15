@@ -49,23 +49,55 @@ function speak(text: string): Promise<void> {
 const isIOS = () => typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
 
 
-// 名前マッチング（部分一致）
+// 文字列の正規化（ひらがな/カタカナ統一、空白除去）
+function normalize(s: string): string {
+  if (!s) return "";
+  return s
+    .replace(/\s/g, "")
+    .replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60)); // カタカナ→ひらがな
+}
+
+// 名前マッチング（姓のみ/名のみ/フリガナ/あいまい一致）
 function matchClients(text: string, clients: Client[]): Client[] {
-  return clients.filter(c =>
-    c.name.includes(text) ||
-    (c.furigana ?? "").includes(text) ||
-    text.includes(c.name.split(" ")[0]) ||
-    text.includes((c.furigana ?? "").split(" ")[0])
-  );
+  const t = normalize(text);
+  if (!t) return [];
+  const matched = clients.filter((c) => {
+    const name = normalize(c.name);
+    const furi = normalize(c.furigana ?? "");
+    if (!name && !furi) return false;
+    // 完全/部分一致
+    if (name.includes(t) || t.includes(name)) return true;
+    if (furi && (furi.includes(t) || t.includes(furi))) return true;
+    // 姓のみ・名のみマッチ（スペース区切り対応）
+    const nameParts = c.name.split(/\s+/).map(normalize).filter(Boolean);
+    const furiParts = (c.furigana ?? "").split(/\s+/).map(normalize).filter(Boolean);
+    for (const p of [...nameParts, ...furiParts]) {
+      if (p.length >= 2 && (t.includes(p) || p.includes(t))) return true;
+    }
+    // 先頭2文字が一致（STTが苗字だけ正しく認識したケース）
+    if (name.length >= 2 && t.length >= 2 && name.substring(0, 2) === t.substring(0, 2)) return true;
+    if (furi.length >= 2 && t.length >= 2 && furi.substring(0, 2) === t.substring(0, 2)) return true;
+    return false;
+  });
+  return matched;
 }
 
 function matchEquipment(text: string, equipment: Equipment[]): Equipment[] {
-  const t = text.replace(/\s/g, "");
-  return equipment.filter(eq =>
-    eq.name.includes(t) ||
-    (eq.category ?? "").includes(t) ||
-    t.includes(eq.name.substring(0, 4))
-  );
+  const t = normalize(text);
+  if (!t) return [];
+  return equipment.filter((eq) => {
+    const name = normalize(eq.name);
+    const cat = normalize(eq.category ?? "");
+    if (name.includes(t) || t.includes(name)) return true;
+    if (cat && (cat.includes(t) || t.includes(cat))) return true;
+    // 先頭3文字マッチ
+    if (name.length >= 3 && t.length >= 3 && name.substring(0, 3) === t.substring(0, 3)) return true;
+    // 部分文字列（連続3文字以上）
+    for (let i = 0; i + 3 <= t.length; i++) {
+      if (name.includes(t.substring(i, i + 3))) return true;
+    }
+    return false;
+  });
 }
 
 function parsePrice(text: string): number | null {
