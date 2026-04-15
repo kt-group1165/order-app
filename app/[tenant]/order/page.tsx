@@ -159,20 +159,31 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             return;
           }
 
+          // iOSはaudio/mp4、AndroidはWebM、対応形式を自動選択
+          const mimeType = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+            "audio/ogg",
+          ].find(t => MediaRecorder.isTypeSupported(t)) ?? "";
+          const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+
           const chunks: BlobPart[] = [];
-          const mr = new MediaRecorder(stream);
+          const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
           mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
           mr.onstop = async () => {
             stream.getTracks().forEach(t => t.stop());
             setVoiceMessage("認識中...");
-            const blob = new Blob(chunks, { type: "audio/webm" });
+            const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
             const fd = new FormData();
-            fd.append("audio", blob, "audio.webm");
+            fd.append("audio", blob, `audio.${ext}`);
             try {
               const res = await fetch("/api/transcribe", { method: "POST", body: fd });
               const data = await res.json();
-              if (voiceInputResolveRef.current) voiceInputResolveRef.current(data.text ?? "");
-            } catch {
+              const text = data.text?.trim() ?? "";
+              if (voiceInputResolveRef.current) voiceInputResolveRef.current(text);
+            } catch (e) {
+              console.error("transcribe error:", e);
               if (voiceInputResolveRef.current) voiceInputResolveRef.current("");
             }
           };
