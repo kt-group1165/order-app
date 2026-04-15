@@ -45,17 +45,40 @@ export async function POST(req: NextRequest) {
         supabase.from("clients").select("name, furigana").eq("tenant_id", tenantId),
         supabase.from("equipment").select("name, category").eq("tenant_id", tenantId),
       ]);
+
+      // Google PhraseSet は最大1200件のため優先度順で追加しキャップする
+      const MAX_PHRASES = 1200;
+      const clientNames: { value: string; boost: number }[] = [];
+      const clientFuri: { value: string; boost: number }[] = [];
+      const equipNames: { value: string; boost: number }[] = [];
+      const equipCats = new Map<string, number>();
+
       if (clientsRes.data) {
         for (const c of clientsRes.data) {
-          if (c.name) phrases.push({ value: c.name, boost: 20 });
-          if (c.furigana) phrases.push({ value: c.furigana, boost: 15 });
+          if (c.name) clientNames.push({ value: c.name, boost: 20 });
+          if (c.furigana) clientFuri.push({ value: c.furigana, boost: 15 });
         }
       }
       if (equipmentRes.data) {
         for (const e of equipmentRes.data) {
-          if (e.name) phrases.push({ value: e.name, boost: 18 });
-          if (e.category) phrases.push({ value: e.category, boost: 10 });
+          if (e.name) equipNames.push({ value: e.name, boost: 18 });
+          if (e.category) equipCats.set(e.category, 10);
         }
+      }
+
+      // 追加順：定型語 → 利用者名 → 利用者フリガナ → 用具カテゴリ → 用具名
+      // 上限超過時は用具名から削る
+      const catPhrases = Array.from(equipCats, ([value, boost]) => ({ value, boost }));
+      const reserved = phrases.length + clientNames.length + clientFuri.length + catPhrases.length;
+      const equipBudget = Math.max(0, MAX_PHRASES - reserved);
+      phrases.push(...clientNames);
+      phrases.push(...clientFuri);
+      phrases.push(...catPhrases);
+      phrases.push(...equipNames.slice(0, equipBudget));
+
+      // それでも超過する場合 (利用者が膨大) はさらに削る
+      if (phrases.length > MAX_PHRASES) {
+        phrases.length = MAX_PHRASES;
       }
     }
 
