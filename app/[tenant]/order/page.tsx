@@ -43,49 +43,10 @@ function speak(text: string): Promise<void> {
   });
 }
 
-// ユーザーのタップをPromiseで待つ
-let _tapResolve: (() => void) | null = null;
-export function triggerVoiceTap() {
-  _tapResolve?.();
-  _tapResolve = null;
-}
-function waitForTap(): Promise<void> {
-  return new Promise((resolve) => { _tapResolve = resolve; });
-}
-
-function listenOnce(timeoutMs = 3000): Promise<string> {
-  return new Promise((resolve) => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { resolve(""); return; }
-    let done = false;
-    let cur: any = null;
-
-    const finish = (text: string) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { cur?.stop(); } catch {}
-      resolve(text);
-    };
-
-    // 3秒経ったら諦める
-    const timer = setTimeout(() => finish(""), timeoutMs);
-
-    const startR = () => {
-      if (done) return;
-      const r = new SR();
-      cur = r;
-      r.lang = "ja-JP";
-      r.interimResults = false;
-      r.maxAlternatives = 1;
-      r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
-      r.onerror = () => { if (!done) setTimeout(startR, 150); }; // エラー時は再起動
-      r.onend = () => { if (!done) setTimeout(startR, 150); };   // iOS早期終了も再起動
-      try { r.start(); } catch { if (!done) setTimeout(startR, 200); }
-    };
-
-    startR();
-  });
+// ボタンonClickから直接r.start()を呼ぶためのコールバック登録
+let _onMicTap: (() => void) | null = null;
+export function onMicButtonTap() {
+  _onMicTap?.();
 }
 
 // 名前マッチング（部分一致）
@@ -170,18 +131,43 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       await speak(text);
     };
 
-    const hear = async (): Promise<string> => {
-      if (voiceCancelRef.current) return "";
-      // ボタン待ち状態にして、ユーザーがタップしたら録音開始
+    const hear = (): Promise<string> => {
+      if (voiceCancelRef.current) return Promise.resolve("");
       setVoiceStatus("listening");
       setVoiceMessage("マイクボタンを押して話してください");
-      await waitForTap();
-      if (voiceCancelRef.current) return "";
-      setVoiceMessage("聞いています...");
-      const text = await listenOnce();
-      if (text) setVoiceMessage(`「${text}」`);
-      await new Promise(r => setTimeout(r, 600));
-      return text;
+
+      return new Promise((resolve) => {
+        // ボタンのonClickから直接呼ばれる → iOSもr.start()を許可する
+        _onMicTap = () => {
+          _onMicTap = null;
+          if (voiceCancelRef.current) { resolve(""); return; }
+
+          const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+          if (!SR) { resolve(""); return; }
+
+          setVoiceMessage("聞いています...");
+          const r = new SR();
+          r.lang = "ja-JP";
+          r.interimResults = false;
+          r.maxAlternatives = 1;
+
+          let done = false;
+          const finish = (text: string) => {
+            if (done) return;
+            done = true;
+            if (text) setVoiceMessage(`「${text}」`);
+            setTimeout(() => resolve(text), text ? 600 : 0);
+          };
+
+          // 5秒タイムアウト
+          const timer = setTimeout(() => finish(""), 5000);
+          r.onresult = (e: any) => { clearTimeout(timer); finish(e.results[0][0].transcript as string); };
+          r.onerror = (e: any) => { clearTimeout(timer); console.warn("SR:", e.error); finish(""); };
+          r.onend = () => { clearTimeout(timer); finish(""); };
+
+          r.start(); // ← ユーザーのタップから同期的に呼ばれる
+        };
+      });
     };
 
     try {
@@ -423,7 +409,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             {/* 話すボタン（ボタン待ち時のみ表示） */}
             {voiceStatus === "listening" && voiceMessage === "マイクボタンを押して話してください" && (
               <button
-                onClick={triggerVoiceTap}
+                onClick={onMicButtonTap}
                 className="w-full bg-red-500 text-white py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 mb-4 active:bg-red-600"
               >
                 <Mic size={26} /> 話す
