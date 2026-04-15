@@ -175,18 +175,28 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
           mr.onstop = async () => {
             stream.getTracks().forEach(t => t.stop());
-            setVoiceMessage("認識中...");
+            const totalBytes = chunks.reduce((s, c) => s + (c as Blob).size, 0);
+            // デバッグ: チャンク数・バイト数・形式を表示
+            setVoiceMessage(`認識中... [${chunks.length}ch / ${totalBytes}B / ${ext}]`);
+            if (totalBytes === 0) {
+              setVoiceMessage(`録音データなし [mime:${effectiveMime}] テキスト入力で入力してください`);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(""); }, 2000);
+              return;
+            }
             const blob = new Blob(chunks, { type: effectiveMime });
             const fd = new FormData();
             fd.append("audio", blob, `audio.${ext}`);
             try {
               const res = await fetch("/api/transcribe", { method: "POST", body: fd });
               const data = await res.json();
+              // デバッグ: Whisperの結果を表示
+              setVoiceMessage(`結果: "${data.text ?? ""}" / err: ${data.error ?? "なし"}`);
               const text = data.text?.trim() ?? "";
-              if (voiceInputResolveRef.current) voiceInputResolveRef.current(text);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(text); }, 1500);
             } catch (e) {
               console.error("transcribe error:", e);
-              if (voiceInputResolveRef.current) voiceInputResolveRef.current("");
+              setVoiceMessage(`通信エラー: ${String(e)}`);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(""); }, 2000);
             }
           };
           mr.start(100); // timeslice指定でiOSのondataavailableを確実に発火
