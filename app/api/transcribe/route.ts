@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v2 } from "@google-cloud/speech";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
-    // 環境変数からGoogle Cloudサービスアカウント認証情報を取得
+    // Google Cloud認証情報
     const credentialsJson = process.env.GOOGLE_CREDENTIALS_JSON;
     if (!credentialsJson) {
       return NextResponse.json(
@@ -17,26 +18,70 @@ export async function POST(req: NextRequest) {
     const credentials = JSON.parse(credentialsJson);
     const projectId = credentials.project_id;
 
-    // chirp_2 は東京リージョン(asia-northeast1)で利用可能
+    const formData = await req.formData();
+    const audio = formData.get("audio") as File;
+    const tenantId = (formData.get("tenantId") as string) ?? "";
+    if (!audio) return NextResponse.json({ error: "no audio" }, { status: 400 });
+
+    // 固有名詞をGoogle Speechのカスタム辞書として登録
+    const phrases: { value: string; boost: number }[] = [
+      // 支払区分・定型語（高いboost）
+      { value: "介護保険", boost: 18 },
+      { value: "介護", boost: 15 },
+      { value: "自費", boost: 18 },
+      { value: "特価自費", boost: 18 },
+      { value: "以上", boost: 12 },
+      { value: "終わり", boost: 10 },
+      { value: "なし", boost: 10 },
+      { value: "はい", boost: 8 },
+    ];
+
+    if (tenantId && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      );
+      const [clientsRes, equipmentRes] = await Promise.all([
+        supabase.from("clients").select("name, furigana").eq("tenant_id", tenantId),
+        supabase.from("equipment").select("name, category").eq("tenant_id", tenantId),
+      ]);
+      if (clientsRes.data) {
+        for (const c of clientsRes.data) {
+          if (c.name) phrases.push({ value: c.name, boost: 20 });
+          if (c.furigana) phrases.push({ value: c.furigana, boost: 15 });
+        }
+      }
+      if (equipmentRes.data) {
+        for (const e of equipmentRes.data) {
+          if (e.name) phrases.push({ value: e.name, boost: 18 });
+          if (e.category) phrases.push({ value: e.category, boost: 10 });
+        }
+      }
+    }
+
+    // 東京リージョンのSpeech-to-Textクライアント
     const location = "asia-northeast1";
     const client = new v2.SpeechClient({
       credentials,
       apiEndpoint: `${location}-speech.googleapis.com`,
     });
 
-    const formData = await req.formData();
-    const audio = formData.get("audio") as File;
-    if (!audio) return NextResponse.json({ error: "no audio" }, { status: 400 });
-
     const audioBuffer = Buffer.from(await audio.arrayBuffer());
 
-    // Google Cloud Speech-to-Text v2 API (自動デコード + chirp_2モデル)
+    // longモデル + adaptation(カスタム辞書)で固有名詞精度を向上
     const [response] = await client.recognize({
       recognizer: `projects/${projectId}/locations/${location}/recognizers/_`,
       config: {
         autoDecodingConfig: {},
         languageCodes: ["ja-JP"],
-        model: "chirp_2",
+        model: "long",
+        adaptation: {
+          phraseSets: [
+            {
+              inlinePhraseSet: { phrases },
+            },
+          ],
+        },
       },
       content: audioBuffer,
     });

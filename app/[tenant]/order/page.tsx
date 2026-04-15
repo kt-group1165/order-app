@@ -153,7 +153,15 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           setVoiceMessage("録音中... 話し終わったら「止める」を押してください");
           let stream: MediaStream;
           try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // エコー・ノイズ・ゲイン自動調整を有効化して認識精度を向上
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                channelCount: 1,
+              } as MediaTrackConstraints,
+            });
           } catch {
             setVoiceMessage("マイクの使用を許可してください");
             return;
@@ -186,6 +194,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             const blob = new Blob(chunks, { type: effectiveMime });
             const fd = new FormData();
             fd.append("audio", blob, `audio.${ext}`);
+            fd.append("tenantId", tenantId); // カスタム辞書用にテナントIDを送信
             try {
               const res = await fetch("/api/transcribe", { method: "POST", body: fd });
               const data = await res.json();
