@@ -43,31 +43,45 @@ function speak(text: string): Promise<void> {
   });
 }
 
-function listen(timeoutMs = 8000): Promise<string> {
+function listen(timeoutMs = 12000): Promise<string> {
   return new Promise((resolve) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { resolve(""); return; }
-    const r = new SR();
-    r.lang = "ja-JP";
-    r.interimResults = false;
-    r.maxAlternatives = 1;
     let done = false;
+    let currentR: any = null;
 
     const finish = (text: string) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      try { currentR?.stop(); } catch {}
       resolve(text);
     };
 
-    // タイムアウト
+    // タイムアウト（この時間内に話さなければ空文字）
     const timer = setTimeout(() => finish(""), timeoutMs);
 
-    r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
-    r.onerror = (e: any) => { console.warn("SpeechRecognition error:", e.error); finish(""); };
-    r.onend = () => finish(""); // 結果なしで終了した場合も空文字で続行
+    const startR = () => {
+      if (done) return;
+      const r = new SR();
+      currentR = r;
+      r.lang = "ja-JP";
+      r.interimResults = false;
+      r.maxAlternatives = 1;
+      r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
+      r.onerror = (e: any) => {
+        console.warn("SR error:", e.error);
+        // no-speech や network エラーは再起動で対応
+        if (!done) setTimeout(startR, 200);
+      };
+      r.onend = () => {
+        // iOSが自動停止した場合は再起動して待ち続ける
+        if (!done) setTimeout(startR, 200);
+      };
+      try { r.start(); } catch { if (!done) setTimeout(startR, 300); }
+    };
 
-    try { r.start(); } catch (e) { finish(""); }
+    startR();
   });
 }
 
@@ -155,23 +169,12 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
 
     const hear = async (): Promise<string> => {
       if (voiceCancelRef.current) return "";
-      // 最大3回リトライ
-      for (let i = 0; i < 3; i++) {
-        if (voiceCancelRef.current) return "";
-        setVoiceStatus("listening");
-        setVoiceMessage(i === 0 ? "話してください..." : "もう一度話してください...");
-        const text = await listen(10000);
-        if (text) {
-          setVoiceMessage(`「${text}」`);
-          return text;
-        }
-        if (i < 2) {
-          setVoiceStatus("speaking");
-          setVoiceMessage("聞こえませんでした。もう一度お願いします。");
-          await speak("聞こえませんでした。もう一度お願いします。");
-        }
-      }
-      return "";
+      setVoiceStatus("listening");
+      setVoiceMessage("話してください...");
+      // listen()内部でiOS自動停止を再起動しながら最大12秒待つ
+      const text = await listen(12000);
+      if (text) setVoiceMessage(`「${text}」`);
+      return text;
     };
 
     try {
