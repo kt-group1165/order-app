@@ -36,23 +36,38 @@ function speak(text: string): Promise<void> {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "ja-JP";
-    u.rate = 1.0;
-    u.onend = () => resolve();
+    u.rate = 0.95;
+    u.onend = () => setTimeout(resolve, 400); // 読み上げ後少し待つ
     u.onerror = () => resolve();
     window.speechSynthesis.speak(u);
   });
 }
 
-function listen(): Promise<string> {
-  return new Promise((resolve, reject) => {
+function listen(timeoutMs = 8000): Promise<string> {
+  return new Promise((resolve) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { reject(new Error("音声認識未対応")); return; }
+    if (!SR) { resolve(""); return; }
     const r = new SR();
     r.lang = "ja-JP";
     r.interimResults = false;
-    r.onresult = (e: any) => resolve(e.results[0][0].transcript as string);
-    r.onerror = (e: any) => reject(e);
-    r.start();
+    r.maxAlternatives = 1;
+    let done = false;
+
+    const finish = (text: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(text);
+    };
+
+    // タイムアウト
+    const timer = setTimeout(() => finish(""), timeoutMs);
+
+    r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
+    r.onerror = (e: any) => { console.warn("SpeechRecognition error:", e.error); finish(""); };
+    r.onend = () => finish(""); // 結果なしで終了した場合も空文字で続行
+
+    try { r.start(); } catch (e) { finish(""); }
   });
 }
 
@@ -140,15 +155,23 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
 
     const hear = async (): Promise<string> => {
       if (voiceCancelRef.current) return "";
-      setVoiceStatus("listening");
-      setVoiceMessage("聞いています...");
-      try {
-        const text = await listen();
-        setVoiceMessage(`「${text}」`);
-        return text;
-      } catch {
-        return "";
+      // 最大3回リトライ
+      for (let i = 0; i < 3; i++) {
+        if (voiceCancelRef.current) return "";
+        setVoiceStatus("listening");
+        setVoiceMessage(i === 0 ? "話してください..." : "もう一度話してください...");
+        const text = await listen(10000);
+        if (text) {
+          setVoiceMessage(`「${text}」`);
+          return text;
+        }
+        if (i < 2) {
+          setVoiceStatus("speaking");
+          setVoiceMessage("聞こえませんでした。もう一度お願いします。");
+          await speak("聞こえませんでした。もう一度お願いします。");
+        }
       }
+      return "";
     };
 
     try {
