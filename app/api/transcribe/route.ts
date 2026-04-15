@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
     if (!audio) return NextResponse.json({ error: "no audio" }, { status: 400 });
 
     // 固有名詞をGoogle Speechのカスタム辞書として登録
+    // Google Speech-to-Text v2 adaptation の boost 上限は 20
     const phrases: { value: string; boost: number }[] = [
       // 支払区分・定型語（高いboost）
       { value: "介護保険", boost: 18 },
@@ -57,11 +58,11 @@ export async function POST(req: NextRequest) {
       if (clientsRes.data) {
         for (const c of clientsRes.data) {
           if (c.furigana) {
-            // フリガナはスペースなし・ひらがな版も追加して変換耐性向上
-            clientFuri.push({ value: c.furigana, boost: 30 });
+            // フリガナはスペースなし版も追加して変換耐性向上
+            clientFuri.push({ value: c.furigana, boost: 20 });
             const noSpace = c.furigana.replace(/\s/g, "");
             if (noSpace !== c.furigana) {
-              clientFuri.push({ value: noSpace, boost: 28 });
+              clientFuri.push({ value: noSpace, boost: 20 });
             }
           }
         }
@@ -69,7 +70,7 @@ export async function POST(req: NextRequest) {
       if (equipmentRes.data) {
         for (const e of equipmentRes.data) {
           // 用具名は通常カタカナ/型番なのでそのまま登録
-          if (e.name) equipNames.push({ value: e.name, boost: 22 });
+          if (e.name) equipNames.push({ value: e.name, boost: 18 });
           if (e.category) equipCats.set(e.category, 12);
         }
       }
