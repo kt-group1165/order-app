@@ -37,7 +37,10 @@ function speak(text: string): Promise<void> {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "ja-JP";
     u.rate = 0.95;
-    u.onend = () => setTimeout(resolve, 400); // 読み上げ後少し待つ
+    u.onend = () => {
+      // iOSはオーディオセッションの解放に時間が必要
+      setTimeout(resolve, isIOS() ? 800 : 300);
+    };
     u.onerror = () => resolve();
     window.speechSynthesis.speak(u);
   });
@@ -131,7 +134,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       await speak(text);
     };
 
-    // テキスト入力で回答を受け取る（iOSキーボードの🎤も使える）
+    // MediaRecorder で録音 → Whisper API で文字起こし
     const hear = (): Promise<string> => {
       if (voiceCancelRef.current) return Promise.resolve("");
       setVoiceStatus("listening");
@@ -144,37 +147,44 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           setTimeout(() => resolve(text), text ? 500 : 0);
         };
 
-        // Android: SpeechRecognitionも同時に起動（マイクボタン押下で）
-        if (!isIOS()) {
+        // マイクボタン押下でMediaRecorder録音開始
+        micTapRef.current = async () => {
+          micTapRef.current = null;
+          setVoiceMessage("録音中... 話し終わったら「止める」を押してください");
+          let stream: MediaStream;
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          } catch {
+            setVoiceMessage("マイクの使用を許可してください");
+            return;
+          }
+
+          const chunks: BlobPart[] = [];
+          const mr = new MediaRecorder(stream);
+          mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+          mr.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            setVoiceMessage("認識中...");
+            const blob = new Blob(chunks, { type: "audio/webm" });
+            const fd = new FormData();
+            fd.append("audio", blob, "audio.webm");
+            try {
+              const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+              const data = await res.json();
+              if (voiceInputResolveRef.current) voiceInputResolveRef.current(data.text ?? "");
+            } catch {
+              if (voiceInputResolveRef.current) voiceInputResolveRef.current("");
+            }
+          };
+          mr.start();
+
+          // 止めるボタン用のコールバックを設定
           micTapRef.current = () => {
             micTapRef.current = null;
-            const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-            if (!SR) return;
-            setVoiceMessage("聞いています...");
-            let done = false;
-            let tries = 0;
-            const finish = (text: string) => {
-              if (done) return;
-              done = true;
-              clearTimeout(timer);
-              if (voiceInputResolveRef.current) voiceInputResolveRef.current(text);
-            };
-            const timer = setTimeout(() => finish(""), 5000);
-            const startR = () => {
-              if (done) return;
-              tries++;
-              const rec = new SR();
-              rec.lang = "ja-JP";
-              rec.interimResults = false;
-              rec.maxAlternatives = 1;
-              rec.onresult = (e: any) => finish(e.results[0][0].transcript as string);
-              rec.onerror = () => { if (!done && tries < 8) setTimeout(startR, 200); };
-              rec.onend = () => { if (!done && tries < 8) setTimeout(startR, 200); };
-              try { rec.start(); } catch { if (!done && tries < 8) setTimeout(startR, 300); }
-            };
-            startR();
+            mr.stop();
           };
-        }
+          setVoiceMessage("録音中... 話し終わったら「止める」を押してください");
+        };
       });
     };
 
@@ -414,35 +424,37 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             <div className="bg-white rounded-2xl p-5 mb-5 min-h-[70px] flex items-center justify-center">
               <p className="text-gray-800 text-base text-center font-medium leading-relaxed">{voiceMessage}</p>
             </div>
-            {/* テキスト入力（listening中） */}
+            {/* 録音ボタン */}
             {voiceStatus === "listening" && voiceInputResolveRef.current && (
-              <div className="w-full mb-4">
+              <div className="w-full mb-4 space-y-2">
+                {/* 話す / 止めるボタン */}
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); micTapRef.current?.(); }}
+                  className={`w-full py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:opacity-80 ${
+                    voiceMessage.includes("録音中") ? "bg-gray-700 text-white" : "bg-red-500 text-white"
+                  }`}
+                >
+                  <Mic size={26} />
+                  {voiceMessage.includes("録音中") ? "止める" : "話す"}
+                </button>
+                {/* テキスト入力（補助） */}
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={voiceInput}
                     onChange={e => setVoiceInput(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
-                    placeholder="ここに入力（iOSは🎤キーで話す）"
-                    className="flex-1 border-2 border-red-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-red-500 bg-white"
-                    autoFocus
+                    placeholder="またはここに入力"
+                    className="flex-1 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white"
                   />
-                  {!isIOS() && (
-                    <button
-                      onClick={(e) => { e.preventDefault(); micTapRef.current?.(); }}
-                      className="w-12 h-12 bg-red-500 text-white rounded-xl flex items-center justify-center shrink-0"
-                    >
-                      <Mic size={20} />
-                    </button>
-                  )}
+                  <button
+                    onClick={() => { if (voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
+                    disabled={!voiceInput.trim()}
+                    className="px-4 bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-xl text-sm"
+                  >
+                    送信
+                  </button>
                 </div>
-                <button
-                  onClick={() => { if (voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
-                  disabled={!voiceInput.trim()}
-                  className="w-full mt-2 bg-emerald-500 disabled:opacity-40 text-white font-bold py-3.5 rounded-xl text-base"
-                >
-                  送信
-                </button>
               </div>
             )}
             <button
