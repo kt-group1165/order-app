@@ -43,45 +43,31 @@ function speak(text: string): Promise<void> {
   });
 }
 
-function listen(timeoutMs = 12000): Promise<string> {
+// ユーザーのタップをPromiseで待つ
+let _tapResolve: (() => void) | null = null;
+export function triggerVoiceTap() {
+  _tapResolve?.();
+  _tapResolve = null;
+}
+function waitForTap(): Promise<void> {
+  return new Promise((resolve) => { _tapResolve = resolve; });
+}
+
+function listenOnce(): Promise<string> {
   return new Promise((resolve) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { resolve(""); return; }
+    const r = new SR();
+    r.lang = "ja-JP";
+    r.interimResults = false;
+    r.maxAlternatives = 1;
     let done = false;
-    let currentR: any = null;
-
-    const finish = (text: string) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { currentR?.stop(); } catch {}
-      resolve(text);
-    };
-
-    // タイムアウト（この時間内に話さなければ空文字）
-    const timer = setTimeout(() => finish(""), timeoutMs);
-
-    const startR = () => {
-      if (done) return;
-      const r = new SR();
-      currentR = r;
-      r.lang = "ja-JP";
-      r.interimResults = false;
-      r.maxAlternatives = 1;
-      r.onresult = (e: any) => finish(e.results[0][0].transcript as string);
-      r.onerror = (e: any) => {
-        console.warn("SR error:", e.error);
-        // no-speech や network エラーは再起動で対応
-        if (!done) setTimeout(startR, 200);
-      };
-      r.onend = () => {
-        // iOSが自動停止した場合は再起動して待ち続ける
-        if (!done) setTimeout(startR, 200);
-      };
-      try { r.start(); } catch { if (!done) setTimeout(startR, 300); }
-    };
-
-    startR();
+    const finish = (text: string) => { if (!done) { done = true; resolve(text); } };
+    const timer = setTimeout(() => finish(""), 10000);
+    r.onresult = (e: any) => { clearTimeout(timer); finish(e.results[0][0].transcript as string); };
+    r.onerror = (e: any) => { console.warn("SR:", e.error); clearTimeout(timer); finish(""); };
+    r.onend = () => { clearTimeout(timer); finish(""); };
+    try { r.start(); } catch { finish(""); }
   });
 }
 
@@ -169,11 +155,15 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
 
     const hear = async (): Promise<string> => {
       if (voiceCancelRef.current) return "";
+      // ボタン待ち状態にして、ユーザーがタップしたら録音開始
       setVoiceStatus("listening");
-      setVoiceMessage("話してください...");
-      // listen()内部でiOS自動停止を再起動しながら最大12秒待つ
-      const text = await listen(12000);
+      setVoiceMessage("マイクボタンを押して話してください");
+      await waitForTap();
+      if (voiceCancelRef.current) return "";
+      setVoiceMessage("聞いています...");
+      const text = await listenOnce();
       if (text) setVoiceMessage(`「${text}」`);
+      await new Promise(r => setTimeout(r, 600));
       return text;
     };
 
@@ -396,26 +386,32 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       {voiceActive && (
         <div className="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center px-6">
           <div className="w-full max-w-sm">
-            {/* アニメーション */}
-            <div className="flex justify-center mb-8">
-              <div className={`relative w-28 h-28 rounded-full flex items-center justify-center ${voiceStatus === "listening" ? "bg-red-500" : "bg-emerald-500"}`}>
-                {voiceStatus === "speaking" && <Volume2 size={52} className="text-white" />}
-                {voiceStatus === "listening" && <Mic size={52} className="text-white animate-pulse" />}
+            {/* アイコン */}
+            <div className="flex justify-center mb-6">
+              <div className={`relative w-24 h-24 rounded-full flex items-center justify-center ${
+                voiceStatus === "listening" && voiceMessage === "聞いています..." ? "bg-red-500" : "bg-emerald-500"
+              }`}>
+                {voiceStatus === "speaking" && <Volume2 size={44} className="text-white" />}
+                {voiceStatus === "listening" && voiceMessage !== "聞いています..." && <Mic size={44} className="text-white" />}
+                {voiceStatus === "listening" && voiceMessage === "聞いています..." && <Mic size={44} className="text-white animate-pulse" />}
                 {voiceStatus === "speaking" && (
-                  <div className="absolute inset-0 rounded-full border-4 border-emerald-300 animate-ping opacity-50" />
-                )}
-                {voiceStatus === "listening" && (
-                  <div className="absolute inset-0 rounded-full border-4 border-red-300 animate-ping opacity-50" />
+                  <div className="absolute inset-0 rounded-full border-4 border-emerald-300 animate-ping opacity-40" />
                 )}
               </div>
             </div>
             {/* メッセージ */}
-            <div className="bg-white rounded-2xl p-5 mb-6 min-h-[80px] flex items-center justify-center">
+            <div className="bg-white rounded-2xl p-5 mb-5 min-h-[70px] flex items-center justify-center">
               <p className="text-gray-800 text-base text-center font-medium leading-relaxed">{voiceMessage}</p>
             </div>
-            <p className="text-center text-gray-400 text-sm mb-6">
-              {voiceStatus === "speaking" ? "読み上げ中..." : voiceStatus === "listening" ? "話してください" : ""}
-            </p>
+            {/* 話すボタン（ボタン待ち時のみ表示） */}
+            {voiceStatus === "listening" && voiceMessage === "マイクボタンを押して話してください" && (
+              <button
+                onClick={triggerVoiceTap}
+                className="w-full bg-red-500 text-white py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 mb-4 active:bg-red-600"
+              >
+                <Mic size={26} /> 話す
+              </button>
+            )}
             <button
               onClick={stopVoice}
               className="w-full bg-gray-700 text-white py-4 rounded-xl font-medium text-base"
