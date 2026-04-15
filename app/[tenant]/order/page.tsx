@@ -190,7 +190,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               const res = await fetch("/api/transcribe", { method: "POST", body: fd });
               const data = await res.json();
               // デバッグ: Whisperの結果を表示
-              setVoiceMessage(`結果: "${data.text ?? ""}" / err: ${data.error ?? "なし"}`);
+              setVoiceMessage(`結果: "${data.text ?? ""}" / err: ${data.error ?? "なし"} / ${data.detail ?? ""}`);
               const text = data.text?.trim() ?? "";
               setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(text); }, 1500);
             } catch (e) {

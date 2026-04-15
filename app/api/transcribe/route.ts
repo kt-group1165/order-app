@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ text: transcription.text });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ error: "transcription failed" }, { status: 500 });
+    const detail = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: "transcription failed", detail }, { status: 500 });
   }
 }
