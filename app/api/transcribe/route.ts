@@ -48,35 +48,40 @@ export async function POST(req: NextRequest) {
 
       // Google PhraseSet は最大1200件のため優先度順で追加しキャップする
       const MAX_PHRASES = 1200;
-      const clientNames: { value: string; boost: number }[] = [];
+      // 方針: 利用者は読み(フリガナ)のみ登録してSTTの出力を読みに寄せる
+      // 漢字は登録しない(STTが誤った漢字を出力する原因になる)
       const clientFuri: { value: string; boost: number }[] = [];
       const equipNames: { value: string; boost: number }[] = [];
       const equipCats = new Map<string, number>();
 
       if (clientsRes.data) {
         for (const c of clientsRes.data) {
-          if (c.name) clientNames.push({ value: c.name, boost: 20 });
-          if (c.furigana) clientFuri.push({ value: c.furigana, boost: 15 });
+          if (c.furigana) {
+            // フリガナはスペースなし・ひらがな版も追加して変換耐性向上
+            clientFuri.push({ value: c.furigana, boost: 30 });
+            const noSpace = c.furigana.replace(/\s/g, "");
+            if (noSpace !== c.furigana) {
+              clientFuri.push({ value: noSpace, boost: 28 });
+            }
+          }
         }
       }
       if (equipmentRes.data) {
         for (const e of equipmentRes.data) {
-          if (e.name) equipNames.push({ value: e.name, boost: 18 });
-          if (e.category) equipCats.set(e.category, 10);
+          // 用具名は通常カタカナ/型番なのでそのまま登録
+          if (e.name) equipNames.push({ value: e.name, boost: 22 });
+          if (e.category) equipCats.set(e.category, 12);
         }
       }
 
-      // 追加順：定型語 → 利用者名 → 利用者フリガナ → 用具カテゴリ → 用具名
-      // 上限超過時は用具名から削る
+      // 追加順: 定型語 → 利用者フリガナ → 用具カテゴリ → 用具名
       const catPhrases = Array.from(equipCats, ([value, boost]) => ({ value, boost }));
-      const reserved = phrases.length + clientNames.length + clientFuri.length + catPhrases.length;
+      const reserved = phrases.length + clientFuri.length + catPhrases.length;
       const equipBudget = Math.max(0, MAX_PHRASES - reserved);
-      phrases.push(...clientNames);
       phrases.push(...clientFuri);
       phrases.push(...catPhrases);
       phrases.push(...equipNames.slice(0, equipBudget));
 
-      // それでも超過する場合 (利用者が膨大) はさらに削る
       if (phrases.length > MAX_PHRASES) {
         phrases.length = MAX_PHRASES;
       }
@@ -95,6 +100,9 @@ export async function POST(req: NextRequest) {
         autoDecodingConfig: {},
         languageCodes: ["ja-JP"],
         model: "long",
+        features: {
+          maxAlternatives: 5, // 複数候補を取得して一致検出精度向上
+        },
         adaptation: {
           phraseSets: [
             { inlinePhraseSet: { phrases } },
@@ -103,6 +111,12 @@ export async function POST(req: NextRequest) {
       },
       content: audioBuffer,
     });
+
+    // 最初のセグメントの全候補と、全体の結合テキストを取得
+    const firstResult = response.results?.[0];
+    const alternatives = (firstResult?.alternatives ?? [])
+      .map((a) => (a.transcript ?? "").trim())
+      .filter((t) => t.length > 0);
 
     const text =
       response.results
@@ -136,7 +150,7 @@ export async function POST(req: NextRequest) {
       console.error("usage log error:", logErr);
     }
 
-    return NextResponse.json({ text });
+    return NextResponse.json({ text, alternatives });
   } catch (e) {
     console.error(e);
     const detail = e instanceof Error ? e.message : String(e);
