@@ -43,6 +43,8 @@ function speak(text: string): Promise<void> {
   });
 }
 
+const isIOS = () => typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+
 // ボタンonClickから直接r.start()を呼ぶためのコールバック登録
 let _onMicTap: (() => void) | null = null;
 export function onMicButtonTap() {
@@ -131,43 +133,49 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       await speak(text);
     };
 
-    const hear = (): Promise<string> => {
-      if (voiceCancelRef.current) return Promise.resolve("");
-      setVoiceStatus("listening");
-      setVoiceMessage("マイクボタンを押して話してください");
+    const hear = async (): Promise<string> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (voiceCancelRef.current) return "";
+        setVoiceStatus("listening");
+        setVoiceMessage(attempt === 0 ? "マイクボタンを押して話してください" : "聞こえませんでした。もう一度押してください");
 
-      return new Promise((resolve) => {
-        // ボタンのonClickから直接呼ばれる → iOSもr.start()を許可する
-        _onMicTap = () => {
-          _onMicTap = null;
-          if (voiceCancelRef.current) { resolve(""); return; }
-
-          const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-          if (!SR) { resolve(""); return; }
-
-          setVoiceMessage("聞いています...");
-          const r = new SR();
-          r.lang = "ja-JP";
-          r.interimResults = false;
-          r.maxAlternatives = 1;
-
-          let done = false;
-          const finish = (text: string) => {
-            if (done) return;
-            done = true;
-            if (text) setVoiceMessage(`「${text}」`);
-            setTimeout(() => resolve(text), text ? 600 : 0);
+        const result = await new Promise<string>((resolve) => {
+          _onMicTap = () => {
+            _onMicTap = null;
+            if (voiceCancelRef.current) { resolve(""); return; }
+            const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+            if (!SR) { resolve(""); return; }
+            setVoiceMessage("聞いています...");
+            const ios = isIOS();
+            let done = false;
+            let tries = 0;
+            const finish = (text: string) => {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              if (text) setVoiceMessage(`「${text}」`);
+              setTimeout(() => resolve(text), text ? 700 : 0);
+            };
+            const timer = setTimeout(() => finish(""), 5000);
+            const startR = () => {
+              if (done) return;
+              tries++;
+              const rec = new SR();
+              rec.lang = "ja-JP";
+              rec.interimResults = false;
+              rec.maxAlternatives = 1;
+              rec.onresult = (e: any) => finish(e.results[0][0].transcript as string);
+              rec.onerror = () => { if (!done && !ios && tries < 8) setTimeout(startR, 200); };
+              rec.onend = () => { if (!done && !ios && tries < 8) setTimeout(startR, 200); };
+              try { rec.start(); } catch { if (!done && !ios && tries < 8) setTimeout(startR, 300); }
+            };
+            startR();
           };
+        });
 
-          // 5秒タイムアウト
-          const timer = setTimeout(() => finish(""), 5000);
-          r.onresult = (e: any) => { clearTimeout(timer); finish(e.results[0][0].transcript as string); };
-          r.onerror = (e: any) => { clearTimeout(timer); console.warn("SR:", e.error); finish(""); };
-          r.onend = () => { clearTimeout(timer); finish(""); };
-
-          r.start(); // ← ユーザーのタップから同期的に呼ばれる
-        };
-      });
+        if (result) return result;
+      }
+      return "";
     };
 
     try {
