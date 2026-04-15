@@ -189,7 +189,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               if (voiceInputResolveRef.current) voiceInputResolveRef.current("");
             }
           };
-          mr.start();
+          mr.start(100); // timeslice指定でiOSのondataavailableを確実に発火
 
           // 止めるボタン用のコールバックを設定
           micTapRef.current = () => {
@@ -207,7 +207,8 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       while (!client) {
         await say("利用者のお名前を教えてください。");
         const name = await hear();
-        if (!name || voiceCancelRef.current) break;
+        if (voiceCancelRef.current) break;
+        if (!name) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
 
         const matched = matchClients(name, allClients);
         if (matched.length === 0) {
@@ -242,7 +243,8 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       while (!payment) {
         await say("介護保険ですか、自費ですか？");
         const ans = await hear();
-        if (!ans || voiceCancelRef.current) break;
+        if (voiceCancelRef.current) break;
+        if (!ans) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
         payment = parsePayment(ans);
         if (!payment) await say("介護、または自費とお答えください。");
       }
@@ -256,7 +258,8 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       while (addMore) {
         await say(newCart.length === 0 ? "用具を教えてください。" : "他に用具はありますか？あれば名前を、なければ「以上」と言ってください。");
         const ans = await hear();
-        if (!ans || voiceCancelRef.current) break;
+        if (voiceCancelRef.current) break;
+        if (!ans) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
         if (ans.includes("以上") || ans.includes("ない") || ans.includes("終わり") || ans.includes("なし")) {
           addMore = false;
           break;
