@@ -4,6 +4,7 @@ export type Office = {
   id: string;
   tenant_id: string;
   name: string;
+  business_number: string | null;
   sort_order: number;
   created_at: string;
 };
@@ -38,8 +39,10 @@ export async function createOffice(tenantId: string, name: string): Promise<Offi
   return data;
 }
 
-export async function updateOffice(id: string, name: string): Promise<void> {
-  const { error } = await supabase.from("offices").update({ name }).eq("id", id);
+export async function updateOffice(id: string, name: string, businessNumber?: string | null): Promise<void> {
+  const patch: { name: string; business_number?: string | null } = { name };
+  if (businessNumber !== undefined) patch.business_number = businessNumber;
+  const { error } = await supabase.from("offices").update(patch).eq("id", id);
   if (error) throw error;
 }
 

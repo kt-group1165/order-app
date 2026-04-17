@@ -398,7 +398,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.2</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.7</span>
       </header>
 
       {/* Content */}
@@ -2125,7 +2125,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
-  const [showHospModal, setShowHospModal] = useState(false);
   const [hospFilter, setHospFilter] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
   // 入退院日付入力ダイアログ
@@ -4768,6 +4767,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [tenantInfo, setTenantInfo] = useState<import("@/lib/tenants").Tenant | null>(null);
+  const [offices, setOffices] = useState<Office[]>([]);
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -4779,14 +4779,16 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       getAllOrderItemsByTenant(tenantId),
       getAllOrders(tenantId),
       getTenantById(tenantId),
+      getOffices(tenantId),
       supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
       supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
-    ]).then(([c, eq, items, ords, tenant, insRaw, hospRaw]) => {
+    ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw]) => {
       setClients(c);
       setEquipment(eq);
       setOrderItems(items);
       setOrders(ords);
       setTenantInfo(tenant);
+      setOffices(offs);
       setInsuranceRecords(insRaw as ClientInsuranceRecord[]);
       setHospitalizations(hospRaw as ClientHospitalization[]);
     }).catch(console.error).finally(() => setDataLoading(false));
@@ -4957,7 +4959,14 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const generateTransferData = () => {
     const [y, m] = billingMonth.split("-").map(Number);
     const serviceMonth = `${y}${String(m).padStart(2, "0")}`;
-    const officeNumber = tenantInfo?.business_number?.replace(/-/g, "") ?? "0000000000";
+    // 選択中の事業所の事業所番号を優先、なければテナントの番号にフォールバック
+    const currentOffice = offices.find(o => o.id === currentOfficeId);
+    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
+    const officeNumber = rawOfficeNumber.replace(/-/g, "") || "0000000000";
+    if (currentOfficeId && !currentOffice?.business_number) {
+      alert(`事業所「${currentOffice?.name ?? ""}」に事業所番号が設定されていません。設定タブで登録してください。`);
+      return;
+    }
     const lines: string[] = [];
     const billingGroups = clientGroups.filter((g) => !autoLateClients.has(g.client.id));
 
@@ -8209,6 +8218,7 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editBusinessNumber, setEditBusinessNumber] = useState("");
   const [saving, setSaving] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -8233,7 +8243,8 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
     if (!editName.trim()) return;
     setSaving(id);
     try {
-      await updateOffice(id, editName.trim());
+      const bn = editBusinessNumber.trim();
+      await updateOffice(id, editName.trim(), bn === "" ? null : bn);
       setEditId(null);
       await load();
     } catch { alert("保存に失敗しました"); } finally { setSaving(null); }
@@ -8258,29 +8269,44 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
               <p className="text-xs text-gray-400 p-4 text-center">事業所が登録されていません</p>
             )}
             {offices.map((office, idx) => (
-              <div key={office.id} className={`px-4 py-3 flex items-center gap-2 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
+              <div key={office.id} className={`px-4 py-3 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
                 {editId === office.id ? (
-                  <>
+                  <div className="flex flex-col gap-2">
                     <input
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-emerald-400"
+                      placeholder="事業所名"
+                      className="border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-emerald-400"
                       autoFocus
                     />
-                    <button
-                      onClick={() => handleEdit(office.id)}
-                      disabled={saving === office.id}
-                      className="text-xs font-medium text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-40 flex items-center gap-1"
-                    >
-                      {saving === office.id ? <Loader2 size={12} className="animate-spin" /> : "保存"}
-                    </button>
-                    <button onClick={() => setEditId(null)} className="text-xs text-gray-400">戻す</button>
-                  </>
+                    <input
+                      value={editBusinessNumber}
+                      onChange={(e) => setEditBusinessNumber(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                      placeholder="介護事業所番号（10桁）"
+                      inputMode="numeric"
+                      className="border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-emerald-400 font-mono"
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={() => handleEdit(office.id)}
+                        disabled={saving === office.id}
+                        className="text-xs font-medium text-white bg-emerald-500 px-3 py-1 rounded-lg disabled:opacity-40 flex items-center gap-1"
+                      >
+                        {saving === office.id ? <Loader2 size={12} className="animate-spin" /> : "保存"}
+                      </button>
+                      <button onClick={() => setEditId(null)} className="text-xs text-gray-400">戻す</button>
+                    </div>
+                  </div>
                 ) : (
-                  <>
-                    <span className="flex-1 text-sm text-gray-800">{office.name}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-gray-800 truncate">{office.name}</div>
+                      <div className="text-xs text-gray-400 font-mono mt-0.5">
+                        事業所番号: {office.business_number ?? <span className="text-amber-500">未設定</span>}
+                      </div>
+                    </div>
                     <button
-                      onClick={() => { setEditId(office.id); setEditName(office.name); }}
+                      onClick={() => { setEditId(office.id); setEditName(office.name); setEditBusinessNumber(office.business_number ?? ""); }}
                       className="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg"
                     >
                       編集
@@ -8292,7 +8318,7 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
                     >
                       {deletingId === office.id ? <Loader2 size={12} className="animate-spin" /> : "削除"}
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             ))}
