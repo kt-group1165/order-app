@@ -5,9 +5,13 @@ export type Office = {
   tenant_id: string;
   name: string;
   business_number: string | null;
+  service_type: string | null;
   sort_order: number;
   created_at: string;
 };
+
+// order-app は福祉用具貸与アプリなので、福祉用具の事業所のみ扱う
+export const APP_SERVICE_TYPE = "福祉用具";
 
 export type EquipmentOfficePrice = {
   id: string;
@@ -19,10 +23,12 @@ export type EquipmentOfficePrice = {
 };
 
 export async function getOffices(tenantId: string): Promise<Office[]> {
+  // 福祉用具の事業所 + service_type未設定（旧データ）を返す
   const { data, error } = await supabase
     .from("offices")
     .select("*")
     .eq("tenant_id", tenantId)
+    .or(`service_type.eq.${APP_SERVICE_TYPE},service_type.is.null`)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) throw error;
@@ -30,9 +36,10 @@ export async function getOffices(tenantId: string): Promise<Office[]> {
 }
 
 export async function createOffice(tenantId: string, name: string): Promise<Office> {
+  // order-app から作成される事業所は必ず福祉用具
   const { data, error } = await supabase
     .from("offices")
-    .insert({ tenant_id: tenantId, name, sort_order: 0 })
+    .insert({ tenant_id: tenantId, name, service_type: APP_SERVICE_TYPE, sort_order: 0 })
     .select()
     .single();
   if (error) throw error;

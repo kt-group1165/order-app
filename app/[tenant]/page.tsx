@@ -398,7 +398,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.7</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.8</span>
       </header>
 
       {/* Content */}
