@@ -102,3 +102,62 @@ export async function bulkUpsertOfficePrices(
     .upsert(rows, { onConflict: "tenant_id,product_code,office_id" });
   if (error) throw error;
 }
+
+// ─── 利用者×事業所 適用紐付け ─────────────────────────────────────────────────
+
+export type ClientOfficeAssignment = {
+  tenant_id: string;
+  client_id: string;
+  office_id: string;
+  created_at: string;
+};
+
+export async function getClientOfficeAssignments(tenantId: string): Promise<ClientOfficeAssignment[]> {
+  const { data, error } = await supabase
+    .from("client_office_assignments")
+    .select("*")
+    .eq("tenant_id", tenantId);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function assignClientToOffice(
+  tenantId: string,
+  clientId: string,
+  officeId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("client_office_assignments")
+    .upsert(
+      { tenant_id: tenantId, client_id: clientId, office_id: officeId },
+      { onConflict: "tenant_id,client_id,office_id" }
+    );
+  if (error) throw error;
+}
+
+export async function removeClientFromOffice(
+  tenantId: string,
+  clientId: string,
+  officeId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("client_office_assignments")
+    .delete()
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId)
+    .eq("office_id", officeId);
+  if (error) throw error;
+}
+
+export async function getClientsByOffice(
+  tenantId: string,
+  officeId: string
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("client_office_assignments")
+    .select("client_id")
+    .eq("tenant_id", tenantId)
+    .eq("office_id", officeId);
+  if (error) throw error;
+  return (data ?? []).map((d) => d.client_id);
+}

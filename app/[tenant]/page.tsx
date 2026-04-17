@@ -41,7 +41,7 @@ import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
-import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, type Office, type EquipmentOfficePrice } from "@/lib/offices";
+import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
 import {
   getLateFlags, setLateFlag, removeLateFlag,
   getUnitOverrides, setUnitOverride, removeUnitOverride,
@@ -264,6 +264,8 @@ type PendingChange = {
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
 const PIN_AUTH_KEY = (tenantId: string) => `order_pin_verified_${tenantId}`;
+const CURRENT_OFFICE_KEY = (tenantId: string) => `current_office_${tenantId}`;
+const OFFICE_VIEW_MODE_KEY = (tenantId: string) => `office_view_mode_${tenantId}`;
 
 export default function TenantPage({
   params,
@@ -281,13 +283,38 @@ export default function TenantPage({
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState(false);
   const [pinLoading, setPinLoading] = useState(false);
+  // 事業所切替
+  const [currentOfficeId, setCurrentOfficeId] = useState<string | null>(null);
+  const [officeViewAll, setOfficeViewAll] = useState(false); // false=自事業所のみ, true=全事業所
 
   useEffect(() => {
     getTenants().then((list) => {
       const found = list.find((t) => t.id === tenantId);
       if (found) setTenantName(found.name);
     });
+    // localStorage から事業所設定を復元
+    if (typeof window !== "undefined") {
+      const savedOffice = localStorage.getItem(CURRENT_OFFICE_KEY(tenantId));
+      if (savedOffice) setCurrentOfficeId(savedOffice);
+      const savedMode = localStorage.getItem(OFFICE_VIEW_MODE_KEY(tenantId));
+      if (savedMode === "all") setOfficeViewAll(true);
+    }
   }, [tenantId]);
+
+  const handleOfficeChange = (officeId: string | null) => {
+    setCurrentOfficeId(officeId);
+    if (typeof window !== "undefined") {
+      if (officeId) localStorage.setItem(CURRENT_OFFICE_KEY(tenantId), officeId);
+      else localStorage.removeItem(CURRENT_OFFICE_KEY(tenantId));
+    }
+  };
+
+  const handleOfficeViewModeChange = (viewAll: boolean) => {
+    setOfficeViewAll(viewAll);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(OFFICE_VIEW_MODE_KEY(tenantId), viewAll ? "all" : "mine");
+    }
+  };
 
   // localStorageで認証済みか確認
   useEffect(() => {
@@ -376,13 +403,13 @@ export default function TenantPage({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "orders" && <OrdersTab tenantId={tenantId} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
+        {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
-        {activeTab === "clients" && <ClientsTab tenantId={tenantId} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
+        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} />}
-        {activeTab === "billing" && <BillingTab tenantId={tenantId} />}
+        {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} />}
-        {activeTab === "settings" && <SettingsTab tenantId={tenantId} />}
+        {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
       {/* Bottom Nav */}
@@ -482,7 +509,7 @@ function MobileOrderUrlButton({ tenantId }: { tenantId: string }) {
   );
 }
 
-function OrdersTab({ tenantId, onDirtyChange, onSwitchToClient }: { tenantId: string; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
+function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, onSwitchToClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -2079,7 +2106,7 @@ const KANA_ROWS = [
   { label: "ワ", chars: "ワヲン" },
 ];
 
-function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenantId: string; initialClientId?: string | null; onClearInitialClient?: () => void }) {
+function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; initialClientId?: string | null; onClearInitialClient?: () => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -2116,12 +2143,13 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
   const [jissekiFlags, setJissekiFlags] = useState<Record<string, { half: boolean; daily: boolean; hold: boolean }>>({});
   // テナント（自社）情報
   const [tenantInfo, setTenantInfo] = useState<Tenant | null>(null);
+  const [clientOfficeMap, setClientOfficeMap] = useState<Set<string>>(new Set()); // 自事業所の利用者IDセット
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const [c, items, eq, ords, sup, mem, hospRes, tenant] = await Promise.all([
+        const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments] = await Promise.all([
           getClients(tenantId),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
@@ -2130,6 +2158,7 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
           getMembers(tenantId),
           supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).order("admission_date", { ascending: false }),
           getTenantById(tenantId),
+          getClientOfficeAssignments(tenantId),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -2139,6 +2168,11 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
         setMembers(mem);
         setHospitalizations((hospRes.data ?? []) as ClientHospitalization[]);
         setTenantInfo(tenant);
+        // 事業所別利用者マップ
+        if (currentOfficeId) {
+          const assigned = new Set(assignments.filter(a => a.office_id === currentOfficeId).map(a => a.client_id));
+          setClientOfficeMap(assigned);
+        }
         // 保険レコードは件数が多いので全件ページング取得
         const allInsur: ClientInsuranceRecord[] = [];
         let insurFrom = 0;
@@ -2195,6 +2229,8 @@ function ClientsTab({ tenantId, initialClientId, onClearInitialClient }: { tenan
 
   const filtered = clients
     .filter((c) => {
+      // 事業所フィルタ（自事業所のみモードの場合）
+      if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && !clientOfficeMap.has(c.id)) return false;
       if (hospFilter) return hospFilteredIds!.has(c.id);
       if (kanaFilter) {
         const row = KANA_ROWS.find((r) => r.label === kanaFilter);
@@ -4726,7 +4762,7 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
 
 // ─── Billing Tab ─────────────────────────────────────────────────────────────
 
-function BillingTab({ tenantId }: { tenantId: string }) {
+function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -4809,11 +4845,13 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     });
   }, [billingMonth, orderItems]);
 
-  // 利用者ごとにグループ化
+  // 利用者ごとにグループ化（事業所フィルタ付き）
   const clientGroups = useMemo(() => {
     const map = new Map<string, { client: Client; items: OrderItem[] }>();
     for (const item of activeRentals) {
       const order = orders.find((o) => o.id === item.order_id);
+      // 事業所が選択されている場合、その事業所の注文のみ
+      if (currentOfficeId && order?.office_id && order.office_id !== currentOfficeId) continue;
       if (!order?.client_id) continue;
       const client = clients.find((c) => c.id === order.client_id);
       if (!client) continue;
@@ -7494,7 +7532,13 @@ function OrderEmailPreviewModal({
 
 type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "speech_usage";
 
-function SettingsTab({ tenantId }: { tenantId: string }) {
+function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange, onViewModeChange }: {
+  tenantId: string;
+  currentOfficeId: string | null;
+  officeViewAll: boolean;
+  onOfficeChange: (officeId: string | null) => void;
+  onViewModeChange: (viewAll: boolean) => void;
+}) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -7524,12 +7568,16 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
   const [savingCompany, setSavingCompany] = useState(false);
   const [savedCompany, setSavedCompany] = useState(false);
 
+  const [settingsOffices, setSettingsOffices] = useState<Office[]>([]);
+
   useEffect(() => {
     Promise.all([
       getSuppliers(),
       getTenantById(tenantId),
-    ]).then(([list, tenant]) => {
+      getOffices(tenantId),
+    ]).then(([list, tenant, ofs]) => {
       setSuppliers(list);
+      setSettingsOffices(ofs);
       const map: Record<string, string> = {};
       list.forEach((s) => { map[s.id] = s.email ?? ""; });
       setEmailMap(map);
@@ -7633,12 +7681,56 @@ function SettingsTab({ tenantId }: { tenantId: string }) {
 
   // ── メニュー画面 ──
   if (settingsPage === "menu") {
+    const currentOfficeName = settingsOffices.find(o => o.id === currentOfficeId)?.name;
     return (
       <div className="flex flex-col h-full bg-gray-50">
         <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
           <h2 className="font-semibold text-gray-800">設定</h2>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* 事業所切替セクション */}
+          {settingsOffices.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">現在の事業所</h3>
+              <select
+                value={currentOfficeId ?? ""}
+                onChange={(e) => onOfficeChange(e.target.value || null)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-800 outline-none focus:border-emerald-400 bg-white"
+              >
+                <option value="">（未選択 — 全事業所）</option>
+                {settingsOffices.map(o => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+              {currentOfficeId && (
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={!officeViewAll}
+                      onChange={() => onViewModeChange(false)}
+                      className="accent-emerald-500"
+                    />
+                    <span className="text-sm text-gray-700">{currentOfficeName}の利用者のみ</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={officeViewAll}
+                      onChange={() => onViewModeChange(true)}
+                      className="accent-emerald-500"
+                    />
+                    <span className="text-sm text-gray-700">全事業所の利用者</span>
+                  </label>
+                </div>
+              )}
+              {currentOfficeId && !officeViewAll && (
+                <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-1.5">
+                  利用者タブは{currentOfficeName}に適用された利用者のみ表示されます
+                </p>
+              )}
+            </div>
+          )}
           <div className="bg-white rounded-xl overflow-hidden border border-gray-100">
             {menuItems.map((item, idx) => (
               <button
