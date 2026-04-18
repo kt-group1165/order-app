@@ -398,7 +398,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.8</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.5.9</span>
       </header>
 
       {/* Content */}
@@ -2126,6 +2126,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
   const [hospFilter, setHospFilter] = useState(false);
+  // 新規利用者追加モーダル
+  const [showNewClient, setShowNewClient] = useState(false);
+  const [newClientForm, setNewClientForm] = useState({ name: "", furigana: "", phone: "", mobile: "", address: "" });
+  const [addingClient, setAddingClient] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
   // 入退院日付入力ダイアログ
   const [hospDateDialog, setHospDateDialog] = useState<{ client: Client; mode: "admit" | "discharge"; currentHospId?: string } | null>(null);
@@ -2309,6 +2313,45 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     URL.revokeObjectURL(url);
   };
 
+  const handleAddNewClient = async () => {
+    if (!newClientForm.name.trim()) return;
+    setAddingClient(true);
+    try {
+      const maxNum = clients.reduce((mx, c) => {
+        const n = parseInt(c.user_number ?? "0");
+        return isNaN(n) ? mx : Math.max(mx, n);
+      }, 0);
+      const { data: inserted, error } = await supabase.from("clients").insert({
+        tenant_id: tenantId,
+        user_number: String(maxNum + 1),
+        name: newClientForm.name.trim(),
+        furigana: newClientForm.furigana.trim() || null,
+        phone: newClientForm.phone.trim() || null,
+        mobile: newClientForm.mobile.trim() || null,
+        address: newClientForm.address.trim() || null,
+      }).select().single();
+      if (error) throw error;
+      // 自事業所選択中なら自動で紐付け
+      if (currentOfficeId && inserted) {
+        await supabase.from("client_office_assignments").upsert({
+          tenant_id: tenantId,
+          client_id: inserted.id,
+          office_id: currentOfficeId,
+        }, { onConflict: "tenant_id,client_id,office_id" });
+        setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
+      }
+      const newClients = await getClients(tenantId);
+      setClients(newClients);
+      setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
+      setShowNewClient(false);
+    } catch (e) {
+      alert("利用者の追加に失敗しました");
+      console.error(e);
+    } finally {
+      setAddingClient(false);
+    }
+  };
+
   const parseCsvRow = (line: string): string[] => {
     const result: string[] = [];
     let cur = ""; let inQ = false;
@@ -2379,8 +2422,31 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         else toInsert.push(data);
       }
 
-      if (toInsert.length > 0) await supabase.from("clients").insert(toInsert);
+      let insertedIds: string[] = [];
+      if (toInsert.length > 0) {
+        const { data: inserted } = await supabase.from("clients").insert(toInsert).select("id");
+        insertedIds = (inserted ?? []).map((r: { id: string }) => r.id);
+      }
       for (const { id, data } of toUpdate) await supabase.from("clients").update(data).eq("id", id);
+
+      // 自事業所が選択されていれば、取込/更新した全利用者を自動紐付け
+      if (currentOfficeId) {
+        const allIds = [
+          ...insertedIds,
+          ...toUpdate.map((u) => u.id),
+        ];
+        if (allIds.length > 0) {
+          const assignmentRows = allIds.map((cid) => ({
+            tenant_id: tenantId,
+            client_id: cid,
+            office_id: currentOfficeId,
+          }));
+          // 既存があれば重複エラー回避のため upsert 相当
+          await supabase.from("client_office_assignments").upsert(assignmentRows, {
+            onConflict: "tenant_id,client_id,office_id",
+          });
+        }
+      }
 
       const newClients = await getClients(tenantId);
       setClients(newClients);
@@ -2490,6 +2556,12 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         )}
         {viewMode === "history" && <div className="flex-1" />}
         <div className="flex gap-1 shrink-0">
+          <button
+            onClick={() => setShowNewClient(true)}
+            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors flex items-center gap-1"
+          >
+            <Plus size={12} />新規
+          </button>
           <button
             onClick={openJissekiModal}
             className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors"
@@ -2740,6 +2812,75 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           onClose={() => setNewOrderClient(null)}
           onDone={() => setNewOrderClient(null)}
         />
+      )}
+
+      {/* 新規利用者追加モーダル */}
+      {showNewClient && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-6">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-800">新規利用者追加</h3>
+              <button onClick={() => setShowNewClient(false)}><X size={18} className="text-gray-400" /></button>
+            </div>
+            {currentOfficeId && (
+              <p className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-2.5 py-1.5 mb-3">
+                自事業所に自動で紐付けされます
+              </p>
+            )}
+            <div className="space-y-2">
+              <input
+                type="text"
+                placeholder="氏名（必須）"
+                value={newClientForm.name}
+                onChange={(e) => setNewClientForm({ ...newClientForm, name: e.target.value })}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+              <input
+                type="text"
+                placeholder="ふりがな"
+                value={newClientForm.furigana}
+                onChange={(e) => setNewClientForm({ ...newClientForm, furigana: e.target.value })}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+              <input
+                type="text"
+                placeholder="電話番号"
+                value={newClientForm.phone}
+                onChange={(e) => setNewClientForm({ ...newClientForm, phone: e.target.value })}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+              <input
+                type="text"
+                placeholder="携帯番号"
+                value={newClientForm.mobile}
+                onChange={(e) => setNewClientForm({ ...newClientForm, mobile: e.target.value })}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+              <input
+                type="text"
+                placeholder="住所"
+                value={newClientForm.address}
+                onChange={(e) => setNewClientForm({ ...newClientForm, address: e.target.value })}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+              />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setShowNewClient(false)}
+                className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleAddNewClient}
+                disabled={addingClient || !newClientForm.name.trim()}
+                className="flex-1 py-2 rounded-xl text-sm font-medium text-white bg-emerald-500 hover:bg-emerald-600 transition-colors disabled:opacity-50"
+              >
+                {addingClient ? "追加中…" : "追加"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 入院中一覧モーダル */}
