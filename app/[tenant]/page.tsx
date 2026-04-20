@@ -2122,7 +2122,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[] } | null>(null);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[] } | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
@@ -2426,7 +2426,26 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         return -1;
       };
 
-      const maxNum = clients.reduce((mx, c) => {
+      // DB から最新の利用者を直接取得（in-memory state が 1000件制限でstaleな可能性があるため）
+      const freshClients: { id: string; user_number: string | null }[] = [];
+      {
+        const PAGE = 1000;
+        let from = 0;
+        while (true) {
+          const { data } = await supabase
+            .from("clients")
+            .select("id,user_number")
+            .eq("tenant_id", tenantId)
+            .range(from, from + PAGE - 1);
+          if (!data || data.length === 0) break;
+          freshClients.push(...data);
+          if (data.length < PAGE) break;
+          from += PAGE;
+        }
+      }
+      const existingByUserNumber = new Map(freshClients.filter(c => c.user_number).map(c => [c.user_number as string, c.id]));
+
+      const maxNum = freshClients.reduce((mx, c) => {
         const n = parseInt(c.user_number ?? "0");
         return isNaN(n) ? mx : Math.max(mx, n);
       }, 0);
@@ -2434,12 +2453,16 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
       const toInsert: Omit<Client, "id" | "created_at">[] = [];
       const toUpdate: { id: string; data: Partial<Client> }[] = [];
+      const skipped: { reason: string; line: string }[] = [];
 
       for (const line of lines.slice(1)) {
         if (!line.trim()) continue;
         const cols = parseCsvRow(line);
         const name = cols[col("氏名")]?.trim();
-        if (!name) continue;
+        if (!name) {
+          skipped.push({ reason: "氏名が空", line: line.slice(0, 60) });
+          continue;
+        }
         const userNumber = cols[col("利用者番号")]?.trim() || null;
         const data = {
           tenant_id: tenantId,
@@ -2463,17 +2486,46 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           public_expense: cols[col("公費負担情報")]?.trim() || null,
           gender: null,
         };
-        const existing = userNumber ? clients.find((c) => c.user_number === userNumber) : null;
-        if (existing) toUpdate.push({ id: existing.id, data });
+        const existingId = userNumber ? existingByUserNumber.get(userNumber) : undefined;
+        if (existingId) toUpdate.push({ id: existingId, data });
         else toInsert.push(data);
       }
 
+      // エラー収集
+      const errors: { name: string; user_number: string; message: string }[] = [];
+      const successfullyInserted: { name: string; user_number: string }[] = [];
+      const successfullyUpdated: { name: string; user_number: string }[] = [];
       let insertedIds: string[] = [];
+
+      // INSERT: バッチで試し、失敗したら行ごとに再試行してエラー特定
       if (toInsert.length > 0) {
-        const { data: inserted } = await supabase.from("clients").insert(toInsert).select("id");
-        insertedIds = (inserted ?? []).map((r: { id: string }) => r.id);
+        const { data: inserted, error: batchErr } = await supabase.from("clients").insert(toInsert).select("id");
+        if (!batchErr && inserted) {
+          insertedIds = inserted.map((r: { id: string }) => r.id);
+          toInsert.forEach(d => successfullyInserted.push({ name: d.name, user_number: d.user_number ?? "" }));
+        } else {
+          // バッチ失敗時: 1件ずつ再試行してエラー特定
+          for (const d of toInsert) {
+            const { data: one, error: oneErr } = await supabase.from("clients").insert(d).select("id").single();
+            if (oneErr) {
+              errors.push({ name: d.name, user_number: d.user_number ?? "", message: oneErr.message });
+            } else if (one) {
+              insertedIds.push(one.id);
+              successfullyInserted.push({ name: d.name, user_number: d.user_number ?? "" });
+            }
+          }
+        }
       }
-      for (const { id, data } of toUpdate) await supabase.from("clients").update(data).eq("id", id);
+
+      // UPDATE: 行ごとにエラー収集
+      for (const { id, data } of toUpdate) {
+        const { error: updErr } = await supabase.from("clients").update(data).eq("id", id);
+        if (updErr) {
+          errors.push({ name: data.name ?? "", user_number: data.user_number ?? "", message: updErr.message });
+        } else {
+          successfullyUpdated.push({ name: data.name ?? "", user_number: data.user_number ?? "" });
+        }
+      }
 
       // 自事業所が選択されていれば、取込/更新した全利用者を自動紐付け
       if (currentOfficeId) {
@@ -2487,7 +2539,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
             client_id: cid,
             office_id: currentOfficeId,
           }));
-          // 既存があれば重複エラー回避のため upsert 相当
           await supabase.from("client_office_assignments").upsert(assignmentRows, {
             onConflict: "tenant_id,client_id,office_id",
           });
@@ -2497,10 +2548,16 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const newClients = await getClients(tenantId);
       setClients(newClients);
 
-      // 取込結果サマリを表示
-      const insertedNames = toInsert.map((d) => ({ name: d.name, user_number: d.user_number ?? "" }));
-      const updatedNames = toUpdate.map((u) => ({ name: u.data.name ?? "", user_number: u.data.user_number ?? "" }));
-      setImportResult({ inserted: insertedNames, updated: updatedNames });
+      // スキップ行もエラーとして表示
+      for (const s of skipped) {
+        errors.push({ name: "(スキップ)", user_number: "", message: `${s.reason}: ${s.line}` });
+      }
+
+      setImportResult({
+        inserted: successfullyInserted,
+        updated: successfullyUpdated,
+        errors,
+      });
     } finally {
       setImporting(false);
       if (csvInputRef.current) csvInputRef.current.value = "";
@@ -2594,11 +2651,27 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
               <h3 className="font-semibold text-gray-800 text-sm">
-                ✅ 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件）
+                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
               </h3>
               <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
             <div className="px-5 py-3 overflow-y-auto space-y-4 flex-1">
+              {importResult.errors.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-red-600 mb-1.5">❌ エラー/スキップ（{importResult.errors.length}件）</p>
+                  <div className="bg-red-50 rounded-lg p-2.5 space-y-1 max-h-60 overflow-y-auto">
+                    {importResult.errors.map((e, i) => (
+                      <div key={i} className="text-xs text-gray-700">
+                        <p>
+                          <span className="text-gray-400 mr-2">{e.user_number || "-"}</span>
+                          <span className="font-medium">{e.name || "(氏名なし)"}</span>
+                        </p>
+                        <p className="text-[11px] text-red-500 ml-6">{e.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {importResult.inserted.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-emerald-600 mb-1.5">🆕 新規登録（{importResult.inserted.length}件）</p>
@@ -2625,7 +2698,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   </div>
                 </div>
               )}
-              {importResult.inserted.length === 0 && importResult.updated.length === 0 && (
+              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && (
                 <p className="text-xs text-gray-400 text-center py-6">変更はありませんでした</p>
               )}
             </div>
