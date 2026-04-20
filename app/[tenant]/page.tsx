@@ -5311,29 +5311,35 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                     <p className="text-sm text-gray-400 text-center py-6">保存済みの書類はありません</p>
                   ) : (
                     <div className="space-y-2">
-                      {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).map(doc => (
+                      {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).map(doc => {
+                        // 再生成に対応してる書類タイプ
+                        const canRegenerate = doc.type === "rental_report" || doc.type === "care_plan" || doc.type === "proposal";
+                        return (
                         <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
                           <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
                             <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
                           </div>
-                          <button
-                            onClick={() => {
-                              if (doc.type === "rental_report") {
-                                setRegenDoc(doc); setShowReport(false);
-                              } else if (doc.type === "care_plan") {
-                                setCarePlanInitialParams(doc.params); setShowCarePlan(true);
-                              } else if (doc.type === "proposal") {
-                                setProposalInitialParams(doc.params); setShowProposal(true);
-                              }
-                            }}
-                            className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
+                          {canRegenerate && (
+                            <button
+                              onClick={() => {
+                                if (doc.type === "rental_report") {
+                                  setRegenDoc(doc); setShowReport(false);
+                                } else if (doc.type === "care_plan") {
+                                  setCarePlanInitialParams(doc.params); setShowCarePlan(true);
+                                } else if (doc.type === "proposal") {
+                                  setProposalInitialParams(doc.params); setShowProposal(true);
+                                }
+                              }}
+                              className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
+                          )}
                           <button
                             onClick={async () => { await deleteClientDocument(doc.id); setDocuments(prev => prev.filter(d => d.id !== doc.id)); }}
                             className="shrink-0 text-xs text-red-400 border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-50">削除</button>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
