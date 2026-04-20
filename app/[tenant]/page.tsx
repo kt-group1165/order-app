@@ -2464,6 +2464,9 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           continue;
         }
         const userNumber = cols[col("利用者番号")]?.trim() || null;
+        // clients テーブルの既存カラムのみを含める
+        // 保険関連カラム（被保険者番号/生年月日/認定開始日/保険者番号/利用者負担割合/公費負担情報）は
+        // client_insurance_records テーブル側に保存するため、ここでは含めない
         const data = {
           tenant_id: tenantId,
           user_number: userNumber ?? String(nextNum++),
@@ -2478,12 +2481,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
           certification_end_date: cols[col("認定終了日")]?.trim() || null,
           memo: cols[col("メモ")]?.trim() || null,
-          insured_number: cols[col("被保険者番号")]?.trim() || null,
-          birth_date: cols[col("生年月日")]?.trim() || null,
-          certification_start_date: cols[col("認定開始日")]?.trim() || null,
-          insurer_number: cols[col("保険者番号")]?.trim() || null,
-          copay_rate: cols[col("利用者負担割合")]?.trim() || null,
-          public_expense: cols[col("公費負担情報")]?.trim() || null,
           gender: null,
         };
         const existingId = userNumber ? existingByUserNumber.get(userNumber) : undefined;
