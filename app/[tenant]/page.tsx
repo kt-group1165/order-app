@@ -2122,7 +2122,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number } | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
@@ -2454,6 +2454,17 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const toInsert: Omit<Client, "id" | "created_at">[] = [];
       const toUpdate: { id: string; data: Partial<Client> }[] = [];
       const skipped: { reason: string; line: string }[] = [];
+      // 保険情報を client_insurance_records にも書き込むため、user_number をキーに集めておく
+      const insuranceByUserNumber = new Map<string, {
+        insured_number: string | null;
+        birth_date: string | null;
+        care_level: string | null;
+        certification_start_date: string | null;
+        certification_end_date: string | null;
+        insurer_number: string | null;
+        copay_rate: string | null;
+        public_expense: string | null;
+      }>();
 
       for (const line of lines.slice(1)) {
         if (!line.trim()) continue;
@@ -2490,6 +2501,20 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         const existingId = userNumber ? existingByUserNumber.get(userNumber) : undefined;
         if (existingId) toUpdate.push({ id: existingId, data });
         else toInsert.push(data);
+
+        // 保険情報（いずれかに値があれば保存対象）
+        const ins = {
+          insured_number: data.insured_number,
+          birth_date: data.birth_date,
+          care_level: data.care_level,
+          certification_start_date: data.certification_start_date,
+          certification_end_date: data.certification_end_date,
+          insurer_number: data.insurer_number,
+          copay_rate: data.copay_rate,
+          public_expense: data.public_expense,
+        };
+        const hasAny = Object.values(ins).some(v => v !== null && v !== undefined && v !== "");
+        if (hasAny && data.user_number) insuranceByUserNumber.set(data.user_number, ins);
       }
 
       // エラー収集
@@ -2549,6 +2574,57 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const newClients = await getClients(tenantId);
       setClients(newClients);
 
+      // client_insurance_records への書き込み
+      //   effective_date = 認定開始日（certification_start_date）を基準にして、同じ日付の
+      //   履歴が既に存在すれば UPDATE、無ければ INSERT（履歴として追加）
+      let insuranceAdded = 0;
+      try {
+        const clientIdByUserNumber = new Map<string, string>();
+        for (const c of newClients) {
+          if (c.user_number) clientIdByUserNumber.set(c.user_number, c.id);
+        }
+        for (const [userNumber, ins] of insuranceByUserNumber.entries()) {
+          const clientId = clientIdByUserNumber.get(userNumber);
+          if (!clientId) continue;
+          const effectiveDate = ins.certification_start_date || null;
+          // 同じ effective_date の履歴があるかチェック
+          const { data: existing } = await supabase
+            .from("client_insurance_records")
+            .select("id")
+            .eq("tenant_id", tenantId)
+            .eq("client_id", clientId)
+            .eq("effective_date", effectiveDate ?? "")
+            .maybeSingle();
+          const payload = {
+            tenant_id: tenantId,
+            client_id: clientId,
+            effective_date: effectiveDate,
+            insured_number: ins.insured_number,
+            birth_date: ins.birth_date,
+            care_level: ins.care_level,
+            certification_start_date: ins.certification_start_date,
+            certification_end_date: ins.certification_end_date,
+            insurer_number: ins.insurer_number,
+            copay_rate: ins.copay_rate,
+            public_expense: ins.public_expense,
+          };
+          if (existing) {
+            const { error: upErr } = await supabase
+              .from("client_insurance_records")
+              .update(payload)
+              .eq("id", existing.id);
+            if (!upErr) insuranceAdded++;
+          } else {
+            const { error: insErr } = await supabase
+              .from("client_insurance_records")
+              .insert(payload);
+            if (!insErr) insuranceAdded++;
+          }
+        }
+      } catch {
+        // 保険情報書き込みは致命的でないので握りつぶす
+      }
+
       // 予定と利用者の再紐付け（events.client_id が NULL で、タイトルの「〇〇 様」が
       //   新しく取り込まれた利用者名と一致するものを自動で張り替え）
       let reunited = 0;
@@ -2593,6 +2669,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         updated: successfullyUpdated,
         errors,
         reunited,
+        insuranceAdded,
       });
     } finally {
       setImporting(false);
@@ -2687,7 +2764,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
               <h3 className="font-semibold text-gray-800 text-sm">
-                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
+                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.insuranceAdded > 0 ? ` / 保険情報 ${importResult.insuranceAdded}件` : ""}{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
               </h3>
               <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
@@ -2734,12 +2811,17 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   </div>
                 </div>
               )}
+              {importResult.insuranceAdded > 0 && (
+                <div className="bg-sky-50 rounded-lg p-2.5 text-xs text-sky-800">
+                  🏥 介護保険情報 <strong>{importResult.insuranceAdded}件</strong> を履歴として保存しました（介護保険タブで表示）
+                </div>
+              )}
               {importResult.reunited > 0 && (
                 <div className="bg-amber-50 rounded-lg p-2.5 text-xs text-amber-800">
                   🔗 削除→再取込で切れていた予定 <strong>{importResult.reunited}件</strong> を自動で利用者に再紐付けしました
                 </div>
               )}
-              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && importResult.reunited === 0 && (
+              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && importResult.reunited === 0 && importResult.insuranceAdded === 0 && (
                 <p className="text-xs text-gray-400 text-center py-6">変更はありませんでした</p>
               )}
             </div>
