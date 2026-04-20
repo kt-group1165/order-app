@@ -413,9 +413,17 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
     setVoiceMessage("");
   };
 
-  const filteredClients = clients.filter(c =>
-    !clientSearch || c.name.includes(clientSearch) || (c.furigana ?? "").includes(clientSearch)
-  );
+  const filteredClients = clients
+    .filter(c =>
+      !clientSearch || c.name.includes(clientSearch) || (c.furigana ?? "").includes(clientSearch)
+    )
+    // 事業所・施設は末尾、個人利用者は先頭
+    .sort((a, b) => {
+      const fa = a.is_facility ? 1 : 0;
+      const fb = b.is_facility ? 1 : 0;
+      if (fa !== fb) return fa - fb;
+      return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
+    });
 
   const filteredEquipment = equipment.filter(eq =>
     !equipSearch ||

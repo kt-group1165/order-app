@@ -2249,7 +2249,13 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       }
       return matchClient(c, search);
     })
-    .sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
+    // 事業所・施設は末尾、個人利用者は先頭。各ブロック内はフリガナ順
+    .sort((a, b) => {
+      const fa = a.is_facility ? 1 : 0;
+      const fb = b.is_facility ? 1 : 0;
+      if (fa !== fb) return fa - fb;
+      return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
+    });
 
   // Count active rentals per client
   const activeCount = (clientId: string) =>
@@ -3073,7 +3079,12 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         }
         const insuranceFiltered = clients
           .filter((c) => matchClient(c, search))
-          .sort((a, b) => (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja"));
+          .sort((a, b) => {
+            const fa = a.is_facility ? 1 : 0;
+            const fb = b.is_facility ? 1 : 0;
+            if (fa !== fb) return fa - fb;
+            return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
+          });
         return (
           <div className="flex-1 overflow-y-auto overflow-x-auto bg-white">
             {insuranceFiltered.length === 0 ? (
@@ -6968,7 +6979,15 @@ function NewOrderModal({
                       >
                         選択しない
                       </button>
-                      {clients.filter((c) => matchClient(c, clientSearch)).slice(0, 20).map((c) => (
+                      {clients
+                        .filter((c) => matchClient(c, clientSearch))
+                        .sort((a, b) => {
+                          const fa = a.is_facility ? 1 : 0;
+                          const fb = b.is_facility ? 1 : 0;
+                          if (fa !== fb) return fa - fb;
+                          return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
+                        })
+                        .slice(0, 20).map((c) => (
                         <button
                           key={c.id}
                           onClick={() => { setClientId(c.id); setShowClientList(false); setClientSearch(""); }}
