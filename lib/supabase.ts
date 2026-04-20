@@ -29,6 +29,8 @@ export type Client = {
   insurer_number: string | null;
   copay_rate: string | null;
   public_expense: string | null;
+  // 居宅・施設等フラグ（事業所/施設の場合 true、個人利用者は false）
+  is_facility: boolean;
   created_at: string;
 };
 

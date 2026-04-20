@@ -2292,7 +2292,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       .sort((a, b) => (b.events[0]?.date ?? "").localeCompare(a.events[0]?.date ?? ""));
   })();
 
-  const CSV_HEADERS = ["利用者番号", "氏名", "ふりがな", "電話番号", "携帯番号", "住所", "介護度", "給付率", "ケアマネ名", "ケアマネ事業所", "認定終了日", "メモ"];
+  const CSV_HEADERS = ["利用者番号", "氏名", "ふりがな", "電話番号", "携帯番号", "住所", "介護度", "給付率", "ケアマネ名", "ケアマネ事業所", "認定終了日", "メモ", "居宅・施設等"];
 
   const handleExportCSV = () => {
     const rows = clients.map((c) => [
@@ -2301,6 +2301,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       c.care_level ?? "", c.benefit_rate ?? "",
       c.care_manager ?? "", c.care_manager_org ?? "",
       c.certification_end_date ?? "", c.memo ?? "",
+      c.is_facility ? "1" : "",
     ]);
     const csvText = [CSV_HEADERS, ...rows]
       .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
@@ -2406,6 +2407,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         "フリガナ姓": ["フリガナ（姓）"],
         "フリガナ名": ["フリガナ（名）"],
         "性別": ["性別"],
+        "居宅・施設等": ["居宅・施設等", "事業所フラグ", "施設フラグ"],
         "電話番号": ["電話番号"],
         "携帯番号": ["携帯番号"],
         "住所": ["住所"],
@@ -2556,6 +2558,12 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           })(),
           public_expense: cols[col("公費負担情報")]?.trim() || null,
           gender: cols[col("性別")]?.trim() || null,
+          // 居宅・施設等フラグ: CSVに値があれば true に設定（1/true/はい/チェック/〇 などを真と判定）
+          is_facility: (() => {
+            const v = cols[col("居宅・施設等")]?.trim() || "";
+            if (!v) return false;
+            return /^(1|true|TRUE|yes|YES|はい|チェック|〇|○|●|✓|レ|✔)$/.test(v);
+          })(),
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
@@ -3684,7 +3692,7 @@ function ClientDetail({
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
-  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" });
+  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
@@ -4188,7 +4196,7 @@ function ClientDetail({
                 <button onClick={() => setEditingBasic(true)} className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
               ) : (
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "" }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
                   <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
                 </div>
               )}
@@ -4197,7 +4205,7 @@ function ClientDetail({
               ["氏名", "name"],["ふりがな","furigana"],["性別","gender"],
               ["電話","phone"],["携帯","mobile"],["住所","address"],
               ["ケアマネ","care_manager"],["所属","care_manager_org"],["メモ","memo"],
-            ] as [string, keyof typeof basicForm][]).map(([label, key]) => (
+            ] as [string, "name"|"furigana"|"gender"|"phone"|"mobile"|"address"|"care_manager"|"care_manager_org"|"memo"][]).map(([label, key]) => (
               <div key={key} className="flex items-start gap-3 border-b border-gray-50 pb-2">
                 <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">{label}</span>
                 {editingBasic ? (
@@ -4212,6 +4220,27 @@ function ClientDetail({
                 )}
               </div>
             ))}
+            {/* 居宅・施設等（事業所/施設フラグ） */}
+            <div className="flex items-center gap-3 border-b border-gray-50 pb-2">
+              <span className="w-20 shrink-0 text-xs text-gray-400">居宅・施設等</span>
+              {editingBasic ? (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={basicForm.is_facility}
+                    onChange={(e) => setBasicForm((f) => ({ ...f, is_facility: e.target.checked }))}
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-700">事業所・施設としてマーク</span>
+                </label>
+              ) : (
+                <span className="flex-1 text-sm text-gray-800">
+                  {client.is_facility
+                    ? <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">🏢 事業所・施設</span>
+                    : <span className="text-gray-300">—</span>}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       ) : topTab === "usage" && viewMode === "current" ? (
