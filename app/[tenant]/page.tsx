@@ -2122,6 +2122,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[] } | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
@@ -2495,6 +2496,11 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
       const newClients = await getClients(tenantId);
       setClients(newClients);
+
+      // 取込結果サマリを表示
+      const insertedNames = toInsert.map((d) => ({ name: d.name, user_number: d.user_number ?? "" }));
+      const updatedNames = toUpdate.map((u) => ({ name: u.data.name ?? "", user_number: u.data.user_number ?? "" }));
+      setImportResult({ inserted: insertedNames, updated: updatedNames });
     } finally {
       setImporting(false);
       if (csvInputRef.current) csvInputRef.current.value = "";
@@ -2582,6 +2588,59 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
   return (
     <div className="flex flex-col h-full">
+      {/* 取込結果モーダル */}
+      {importResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
+              <h3 className="font-semibold text-gray-800 text-sm">
+                ✅ 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件）
+              </h3>
+              <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <div className="px-5 py-3 overflow-y-auto space-y-4 flex-1">
+              {importResult.inserted.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-emerald-600 mb-1.5">🆕 新規登録（{importResult.inserted.length}件）</p>
+                  <div className="bg-emerald-50 rounded-lg p-2.5 space-y-0.5 max-h-48 overflow-y-auto">
+                    {importResult.inserted.map((c, i) => (
+                      <p key={i} className="text-xs text-gray-700">
+                        <span className="text-gray-400 mr-2">{c.user_number || "-"}</span>
+                        {c.name}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {importResult.updated.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-indigo-600 mb-1.5">✏️ 更新（{importResult.updated.length}件）</p>
+                  <div className="bg-indigo-50 rounded-lg p-2.5 space-y-0.5 max-h-48 overflow-y-auto">
+                    {importResult.updated.map((c, i) => (
+                      <p key={i} className="text-xs text-gray-700">
+                        <span className="text-gray-400 mr-2">{c.user_number || "-"}</span>
+                        {c.name}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {importResult.inserted.length === 0 && importResult.updated.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-6">変更はありませんでした</p>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 shrink-0">
+              <button
+                onClick={() => setImportResult(null)}
+                className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl text-sm"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
         {(viewMode === "list" || viewMode === "insurance") && (
           <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
