@@ -5199,12 +5199,19 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   };
   const toKana = (s: string) => s.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
   const allKana = Object.values(KANA_MAP).flat();
-  const filteredClients = kanaFilter
+  const filteredClients = (kanaFilter
     ? clients.filter(c => {
         const first = toKana((c.furigana ?? c.name).charAt(0));
         return kanaFilter === "他" ? !allKana.includes(first) : (KANA_MAP[kanaFilter] ?? []).includes(first);
       })
-    : clients;
+    : clients
+  ).slice().sort((a, b) => {
+    // 事業所・施設は末尾、個人利用者は先頭
+    const fa = a.is_facility ? 1 : 0;
+    const fb = b.is_facility ? 1 : 0;
+    if (fa !== fb) return fa - fb;
+    return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
+  });
 
   const DOC_TYPE_COLORS: Record<string, string> = {
     rental_report: "text-blue-600 bg-blue-50",
