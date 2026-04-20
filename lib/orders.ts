@@ -11,25 +11,46 @@ export async function getMembers(tenantId: string): Promise<Member[]> {
   return data ?? [];
 }
 
+// Supabase のデフォルト 1000件制限を回避するためページング取得
 export async function getOrders(tenantId: string): Promise<Order[]> {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .neq("status", "cancelled")
-    .order("ordered_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const PAGE = 1000;
+  const all: Order[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .neq("status", "cancelled")
+      .order("ordered_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 export async function getAllOrders(tenantId: string): Promise<Order[]> {
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("ordered_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const PAGE = 1000;
+  const all: Order[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("ordered_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
@@ -43,13 +64,23 @@ export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
 }
 
 export async function getAllOrderItemsByTenant(tenantId: string): Promise<OrderItem[]> {
-  const { data, error } = await supabase
-    .from("order_items")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const PAGE = 1000;
+  const all: OrderItem[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("order_items")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 export async function updateOrderItemStatus(
