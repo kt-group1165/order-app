@@ -22,6 +22,13 @@ export type Client = {
   care_manager_org: string | null;
   certification_end_date: string | null;
   memo: string | null;
+  // 保険情報（clientsテーブルにも再追加済み。最新値をキャッシュ）
+  insured_number: string | null;
+  birth_date: string | null;
+  certification_start_date: string | null;
+  insurer_number: string | null;
+  copay_rate: string | null;
+  public_expense: string | null;
   created_at: string;
 };
 

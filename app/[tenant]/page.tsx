@@ -2416,6 +2416,20 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         "保険者番号": ["保険者番号"],
         "利用者負担割合": ["利用者負担割合"],
         "公費負担情報": ["公費負担情報"],
+        // 介護保険画面で表示する項目用
+        "保険者名": ["保険者", "保険者名"],
+        "交付年月日": ["交付年月日"],
+        "保険証確認日": ["確認日", "保険証確認日"],
+        "資格取得日": ["資格取得日"],
+        "保険証有効開始日": ["有効開始日"],
+        "保険証有効終了日": ["有効終了日"],
+        "認定年月日": ["認定年月日"],
+        "認定状況": ["認定状況"],
+        "居宅適用期間開始": ["適用期間－開始日（居宅ｻｰﾋﾞｽ区分）"],
+        "居宅適用期間終了": ["適用期間－終了日（居宅ｻｰﾋﾞｽ区分）"],
+        "区分支給限度額": ["区分支給限度基準額（居宅ｻｰﾋﾞｽ区分）"],
+        "留意事項": ["留意事項"],
+        "サービス限定": ["サービス限定"],
       };
       const col = (canonicalName: string): number => {
         const aliases = headerAliases[canonicalName] ?? [canonicalName];
@@ -2451,23 +2465,44 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       }, 0);
       let nextNum = maxNum + 1;
 
-      const toInsert: Omit<Client, "id" | "created_at">[] = [];
-      const toUpdate: { id: string; data: Partial<Client> }[] = [];
       const skipped: { reason: string; line: string }[] = [];
-      // 保険情報を client_insurance_records にも書き込むため、user_number をキーに集めておく
-      const insuranceByUserNumber = new Map<string, {
+      // clients テーブル用: user_number で集約（認定終了日が最新のものを採用）
+      type ClientData = Omit<Client, "id" | "created_at">;
+      const clientByUserNumber = new Map<string, ClientData>();
+      // 保険情報履歴: 1利用者に複数行（認定期間ごと）を蓄積
+      // 画面（介護保険タブ）で表示する項目のみ
+      type InsuranceData = {
         insured_number: string | null;
         birth_date: string | null;
+        insurer_number: string | null;
+        insurer_name: string | null;
+        issued_date: string | null;
+        insurance_confirmed_date: string | null;
+        qualification_date: string | null;
+        insurance_valid_start: string | null;
+        insurance_valid_end: string | null;
+        benefit_rate: string | null;
         care_level: string | null;
+        certification_status: string | null;
+        certification_date: string | null;
         certification_start_date: string | null;
         certification_end_date: string | null;
-        insurer_number: string | null;
+        service_limit_period_start: string | null;
+        service_limit_period_end: string | null;
+        service_limit_amount: number | null;
+        service_memo: string | null;
+        service_restriction: string | null;
+        care_manager: string | null;
+        care_manager_org: string | null;
         copay_rate: string | null;
         public_expense: string | null;
-      }>();
+      };
+      const insuranceRowsByUserNumber = new Map<string, InsuranceData[]>();
 
       for (const line of lines.slice(1)) {
         if (!line.trim()) continue;
+        // カンマだけの実質空行（例: ",,,,,,,,"）はログせずスキップ
+        if (!/[^\s,"]/.test(line)) continue;
         const cols = parseCsvRow(line);
         const name = cols[col("氏名")]?.trim();
         if (!name) {
@@ -2475,8 +2510,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           continue;
         }
         const userNumber = cols[col("利用者番号")]?.trim() || null;
-        // clients テーブルに保存する項目一式（保険関連列を復活させたため再度含める）
-        const data = {
+        // clients テーブルに保存する項目一式
+        const data: ClientData = {
           tenant_id: tenantId,
           user_number: userNumber ?? String(nextNum++),
           name,
@@ -2498,23 +2533,60 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           public_expense: cols[col("公費負担情報")]?.trim() || null,
           gender: null,
         };
-        const existingId = userNumber ? existingByUserNumber.get(userNumber) : undefined;
-        if (existingId) toUpdate.push({ id: existingId, data });
-        else toInsert.push(data);
 
-        // 保険情報（いずれかに値があれば保存対象）
-        const ins = {
-          insured_number: data.insured_number,
-          birth_date: data.birth_date,
-          care_level: data.care_level,
-          certification_start_date: data.certification_start_date,
-          certification_end_date: data.certification_end_date,
-          insurer_number: data.insurer_number,
-          copay_rate: data.copay_rate,
-          public_expense: data.public_expense,
+        // clients: user_number で集約（認定終了日が最新のものを採用）
+        const userNumKey = data.user_number ?? "";
+        const existing = clientByUserNumber.get(userNumKey);
+        const newEnd = data.certification_end_date ?? "";
+        const oldEnd = existing?.certification_end_date ?? "";
+        if (!existing || newEnd > oldEnd) {
+          clientByUserNumber.set(userNumKey, data);
+        }
+
+        // 保険情報: 1行 = 1認定期間。画面表示項目を全て取り込み
+        const amountRaw = cols[col("区分支給限度額")]?.trim() || "";
+        const amountNum = amountRaw && !isNaN(Number(amountRaw)) ? Number(amountRaw) : null;
+        const ins: InsuranceData = {
+          insured_number: data.insured_number ?? null,
+          birth_date: data.birth_date ?? null,
+          insurer_number: data.insurer_number ?? null,
+          insurer_name: cols[col("保険者名")]?.trim() || null,
+          issued_date: cols[col("交付年月日")]?.trim() || null,
+          insurance_confirmed_date: cols[col("保険証確認日")]?.trim() || null,
+          qualification_date: cols[col("資格取得日")]?.trim() || null,
+          insurance_valid_start: cols[col("保険証有効開始日")]?.trim() || null,
+          insurance_valid_end: cols[col("保険証有効終了日")]?.trim() || null,
+          benefit_rate: data.benefit_rate ?? null,
+          care_level: data.care_level ?? null,
+          certification_status: cols[col("認定状況")]?.trim() || null,
+          certification_date: cols[col("認定年月日")]?.trim() || null,
+          certification_start_date: data.certification_start_date ?? null,
+          certification_end_date: data.certification_end_date ?? null,
+          service_limit_period_start: cols[col("居宅適用期間開始")]?.trim() || null,
+          service_limit_period_end: cols[col("居宅適用期間終了")]?.trim() || null,
+          service_limit_amount: amountNum,
+          service_memo: cols[col("留意事項")]?.trim() || null,
+          service_restriction: cols[col("サービス限定")]?.trim() || null,
+          care_manager: data.care_manager ?? null,
+          care_manager_org: data.care_manager_org ?? null,
+          copay_rate: data.copay_rate ?? null,
+          public_expense: data.public_expense ?? null,
         };
         const hasAny = Object.values(ins).some(v => v !== null && v !== undefined && v !== "");
-        if (hasAny && data.user_number) insuranceByUserNumber.set(data.user_number, ins);
+        if (hasAny && data.user_number) {
+          const arr = insuranceRowsByUserNumber.get(data.user_number) ?? [];
+          arr.push(ins);
+          insuranceRowsByUserNumber.set(data.user_number, arr);
+        }
+      }
+
+      // 集約済みの clients データを toInsert / toUpdate に振り分け
+      const toInsert: ClientData[] = [];
+      const toUpdate: { id: string; data: Partial<Client> }[] = [];
+      for (const data of clientByUserNumber.values()) {
+        const existingId = existingByUserNumber.get(data.user_number ?? "");
+        if (existingId) toUpdate.push({ id: existingId, data });
+        else toInsert.push(data);
       }
 
       // エラー収集
@@ -2574,51 +2646,76 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const newClients = await getClients(tenantId);
       setClients(newClients);
 
-      // client_insurance_records への書き込み
-      //   effective_date = 認定開始日（certification_start_date）を基準にして、同じ日付の
-      //   履歴が既に存在すれば UPDATE、無ければ INSERT（履歴として追加）
+      // client_insurance_records への書き込み（認定期間ごとに1行＝複数行履歴として保存）
+      //   effective_date = 認定開始日をキーにして重複チェック
+      //   同じ effective_date の履歴があれば UPDATE、無ければ INSERT
       let insuranceAdded = 0;
       try {
         const clientIdByUserNumber = new Map<string, string>();
         for (const c of newClients) {
           if (c.user_number) clientIdByUserNumber.set(c.user_number, c.id);
         }
-        for (const [userNumber, ins] of insuranceByUserNumber.entries()) {
+        for (const [userNumber, insArray] of insuranceRowsByUserNumber.entries()) {
           const clientId = clientIdByUserNumber.get(userNumber);
           if (!clientId) continue;
-          const effectiveDate = ins.certification_start_date || null;
-          // 同じ effective_date の履歴があるかチェック
-          const { data: existing } = await supabase
+          // この利用者の既存保険履歴を取得（effective_dateで突合）
+          const { data: existingRecords } = await supabase
             .from("client_insurance_records")
-            .select("id")
+            .select("id, effective_date")
             .eq("tenant_id", tenantId)
-            .eq("client_id", clientId)
-            .eq("effective_date", effectiveDate ?? "")
-            .maybeSingle();
-          const payload = {
-            tenant_id: tenantId,
-            client_id: clientId,
-            effective_date: effectiveDate,
-            insured_number: ins.insured_number,
-            birth_date: ins.birth_date,
-            care_level: ins.care_level,
-            certification_start_date: ins.certification_start_date,
-            certification_end_date: ins.certification_end_date,
-            insurer_number: ins.insurer_number,
-            copay_rate: ins.copay_rate,
-            public_expense: ins.public_expense,
-          };
-          if (existing) {
-            const { error: upErr } = await supabase
-              .from("client_insurance_records")
-              .update(payload)
-              .eq("id", existing.id);
-            if (!upErr) insuranceAdded++;
-          } else {
-            const { error: insErr } = await supabase
-              .from("client_insurance_records")
-              .insert(payload);
-            if (!insErr) insuranceAdded++;
+            .eq("client_id", clientId);
+          const existingByDate = new Map<string, string>();
+          for (const r of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
+            existingByDate.set(r.effective_date ?? "", r.id);
+          }
+          for (const ins of insArray) {
+            const effectiveDate = ins.certification_start_date || null;
+            const payload = {
+              tenant_id: tenantId,
+              client_id: clientId,
+              effective_date: effectiveDate,
+              insured_number: ins.insured_number,
+              birth_date: ins.birth_date,
+              insurer_number: ins.insurer_number,
+              insurer_name: ins.insurer_name,
+              issued_date: ins.issued_date,
+              insurance_confirmed_date: ins.insurance_confirmed_date,
+              qualification_date: ins.qualification_date,
+              insurance_valid_start: ins.insurance_valid_start,
+              insurance_valid_end: ins.insurance_valid_end,
+              benefit_rate: ins.benefit_rate,
+              care_level: ins.care_level,
+              certification_status: ins.certification_status,
+              certification_date: ins.certification_date,
+              certification_start_date: ins.certification_start_date,
+              certification_end_date: ins.certification_end_date,
+              service_limit_period_start: ins.service_limit_period_start,
+              service_limit_period_end: ins.service_limit_period_end,
+              service_limit_amount: ins.service_limit_amount,
+              service_memo: ins.service_memo,
+              service_restriction: ins.service_restriction,
+              care_manager: ins.care_manager,
+              care_manager_org: ins.care_manager_org,
+              copay_rate: ins.copay_rate,
+              public_expense: ins.public_expense,
+            };
+            const existingId = existingByDate.get(effectiveDate ?? "");
+            if (existingId) {
+              const { error: upErr } = await supabase
+                .from("client_insurance_records")
+                .update(payload)
+                .eq("id", existingId);
+              if (!upErr) insuranceAdded++;
+            } else {
+              const { error: insErr } = await supabase
+                .from("client_insurance_records")
+                .insert(payload);
+              if (!insErr) {
+                insuranceAdded++;
+                // 同じバッチ内で同一 effective_date が重複しないよう記録
+                existingByDate.set(effectiveDate ?? "", "newly-inserted");
+              }
+            }
           }
         }
       } catch {
