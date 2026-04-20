@@ -2542,7 +2542,17 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           birth_date: cols[col("生年月日")]?.trim() || null,
           certification_start_date: cols[col("認定開始日")]?.trim() || null,
           insurer_number: cols[col("保険者番号")]?.trim() || null,
-          copay_rate: cols[col("利用者負担割合")]?.trim() || null,
+          copay_rate: (() => {
+            // 利用者負担割合が直接CSVにあればそれを使う
+            const direct = cols[col("利用者負担割合")]?.trim();
+            if (direct) return direct;
+            // 無ければ給付率から計算（給付率70 → 負担割合30）
+            const benefit = cols[col("給付率")]?.trim();
+            if (benefit && !isNaN(Number(benefit))) {
+              return String(100 - Number(benefit));
+            }
+            return null;
+          })(),
           public_expense: cols[col("公費負担情報")]?.trim() || null,
           gender: null,
         };
