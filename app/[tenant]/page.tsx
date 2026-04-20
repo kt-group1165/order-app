@@ -2374,11 +2374,56 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const handleImportCSV = async (file: File) => {
     setImporting(true);
     try {
-      const text = await file.text();
-      const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim());
+      // エンコーディング判定：UTF-8 BOMがあればUTF-8、無ければShift-JISを試す
+      //   介護ソフト出力CSVはShift-JISが多いが、order-app自身の出力はUTF-8 BOM付き
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const hasUtf8Bom = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
+      let text: string;
+      if (hasUtf8Bom) {
+        text = new TextDecoder("utf-8").decode(buffer);
+      } else {
+        // Shift-JIS で試す。変換不能文字（U+FFFD）が多ければ UTF-8 フォールバック
+        const sjisText = new TextDecoder("shift-jis", { fatal: false }).decode(buffer);
+        const replacementCount = (sjisText.match(/\uFFFD/g) ?? []).length;
+        if (replacementCount > 5) {
+          text = new TextDecoder("utf-8").decode(buffer);
+        } else {
+          text = sjisText;
+        }
+      }
+      const lines = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim());
       if (lines.length < 2) return;
       const headers = parseCsvRow(lines[0]);
-      const col = (name: string) => headers.indexOf(name);
+      // ヘッダー別名対応：calendar-app や介護ソフト由来のヘッダー名も受け付ける
+      const headerAliases: Record<string, string[]> = {
+        "利用者番号": ["利用者番号"],
+        "氏名": ["氏名", "利用者名"],
+        "ふりがな": ["ふりがな", "フリガナ"],
+        "電話番号": ["電話番号"],
+        "携帯番号": ["携帯番号"],
+        "住所": ["住所"],
+        "介護度": ["介護度", "要介護度"],
+        "給付率": ["給付率"],
+        "ケアマネ名": ["ケアマネ名", "担当ケアマネジャー"],
+        "ケアマネ事業所": ["ケアマネ事業所", "支援事業所（正式名称）", "支援事業所"],
+        "認定終了日": ["認定終了日", "認定有効期間－終了日"],
+        "メモ": ["メモ"],
+        "被保険者番号": ["被保険者番号"],
+        "生年月日": ["生年月日"],
+        "認定開始日": ["認定開始日", "認定有効期間－開始日"],
+        "保険者番号": ["保険者番号"],
+        "利用者負担割合": ["利用者負担割合"],
+        "公費負担情報": ["公費負担情報"],
+      };
+      const col = (canonicalName: string): number => {
+        const aliases = headerAliases[canonicalName] ?? [canonicalName];
+        for (const alias of aliases) {
+          const idx = headers.indexOf(alias);
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
 
       const maxNum = clients.reduce((mx, c) => {
         const n = parseInt(c.user_number ?? "0");
