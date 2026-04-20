@@ -2405,6 +2405,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         "ふりがな": ["ふりがな", "フリガナ"],
         "フリガナ姓": ["フリガナ（姓）"],
         "フリガナ名": ["フリガナ（名）"],
+        "性別": ["性別"],
         "電話番号": ["電話番号"],
         "携帯番号": ["携帯番号"],
         "住所": ["住所"],
@@ -2554,7 +2555,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
             return null;
           })(),
           public_expense: cols[col("公費負担情報")]?.trim() || null,
-          gender: null,
+          gender: cols[col("性別")]?.trim() || null,
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
