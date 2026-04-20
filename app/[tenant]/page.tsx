@@ -3070,11 +3070,28 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
       {/* 保険情報一覧ビュー */}
       {viewMode === "insurance" && (() => {
-        // 各利用者の最新の保険情報レコードを取得
+        // 各利用者の「最新認定の最良レコード」を取得
+        //   1. effective_date が最新のものを選ぶ
+        //   2. 同じ effective_date なら copay_rate が埋まってるレコードを優先
+        //   3. それも同じなら benefit_rate が埋まってるレコードを優先
         const insuranceByClient = new Map<string, ClientInsuranceRecord>();
+        const scoreRec = (r: ClientInsuranceRecord): number =>
+          (r.copay_rate ? 2 : 0) + (r.benefit_rate ? 1 : 0);
         for (const rec of allInsuranceRecords) {
-          if (!insuranceByClient.has(rec.client_id)) {
+          const existing = insuranceByClient.get(rec.client_id);
+          if (!existing) {
             insuranceByClient.set(rec.client_id, rec);
+            continue;
+          }
+          const existingDate = existing.effective_date ?? "";
+          const recDate = rec.effective_date ?? "";
+          if (recDate > existingDate) {
+            insuranceByClient.set(rec.client_id, rec);
+          } else if (recDate === existingDate) {
+            // 同じ effective_date の場合は情報が充実してるものを採用
+            if (scoreRec(rec) > scoreRec(existing)) {
+              insuranceByClient.set(rec.client_id, rec);
+            }
           }
         }
         const insuranceFiltered = clients
