@@ -2122,7 +2122,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[] } | null>(null);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number } | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
@@ -2545,6 +2545,40 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const newClients = await getClients(tenantId);
       setClients(newClients);
 
+      // 予定と利用者の再紐付け（events.client_id が NULL で、タイトルの「〇〇 様」が
+      //   新しく取り込まれた利用者名と一致するものを自動で張り替え）
+      let reunited = 0;
+      try {
+        // client_id が NULL の予定を取得
+        const { data: orphanEvents } = await supabase
+          .from("events")
+          .select("id,title")
+          .eq("tenant_id", tenantId)
+          .is("client_id", null)
+          .is("deleted_at", null);
+        if (orphanEvents && orphanEvents.length > 0) {
+          // 名前→id マップ
+          const nameToId = new Map<string, string>();
+          for (const c of newClients) {
+            if (!nameToId.has(c.name)) nameToId.set(c.name, c.id);
+          }
+          // タイトルから「〇〇 様」パターンを抽出して client_id 解決
+          const updates: { id: string; client_id: string }[] = [];
+          for (const ev of orphanEvents as Array<{ id: string; title: string }>) {
+            const m = ev.title.match(/^(.+?) 様(?:[ 　].*)?$/);
+            if (!m) continue;
+            const clientId = nameToId.get(m[1].trim());
+            if (clientId) updates.push({ id: ev.id, client_id: clientId });
+          }
+          for (const u of updates) {
+            const { error: reErr } = await supabase.from("events").update({ client_id: u.client_id }).eq("id", u.id);
+            if (!reErr) reunited++;
+          }
+        }
+      } catch {
+        // 再紐付け失敗は致命的でないので握りつぶす
+      }
+
       // スキップ行もエラーとして表示
       for (const s of skipped) {
         errors.push({ name: "(スキップ)", user_number: "", message: `${s.reason}: ${s.line}` });
@@ -2554,6 +2588,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         inserted: successfullyInserted,
         updated: successfullyUpdated,
         errors,
+        reunited,
       });
     } finally {
       setImporting(false);
@@ -2648,7 +2683,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
               <h3 className="font-semibold text-gray-800 text-sm">
-                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
+                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
               </h3>
               <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
@@ -2695,7 +2730,12 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   </div>
                 </div>
               )}
-              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && (
+              {importResult.reunited > 0 && (
+                <div className="bg-amber-50 rounded-lg p-2.5 text-xs text-amber-800">
+                  🔗 削除→再取込で切れていた予定 <strong>{importResult.reunited}件</strong> を自動で利用者に再紐付けしました
+                </div>
+              )}
+              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && importResult.reunited === 0 && (
                 <p className="text-xs text-gray-400 text-center py-6">変更はありませんでした</p>
               )}
             </div>
