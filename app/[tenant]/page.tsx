@@ -5130,6 +5130,7 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showContracts, setShowContracts] = useState(false);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
+  const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -5312,8 +5313,14 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                   ) : (
                     <div className="space-y-2">
                       {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).map(doc => {
-                        // 再生成に対応してる書類タイプ
-                        const canRegenerate = doc.type === "rental_report" || doc.type === "care_plan" || doc.type === "proposal";
+                        // 再生成（または内容再表示）対応タイプ
+                        const canRegenerate =
+                          doc.type === "rental_report" ||
+                          doc.type === "care_plan" ||
+                          doc.type === "proposal" ||
+                          doc.type === "supplier_email" ||
+                          doc.type === "rental_contract" ||
+                          doc.type === "important_matters";
                         return (
                         <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
                           <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
@@ -5323,13 +5330,25 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                           </div>
                           {canRegenerate && (
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 if (doc.type === "rental_report") {
                                   setRegenDoc(doc); setShowReport(false);
                                 } else if (doc.type === "care_plan") {
                                   setCarePlanInitialParams(doc.params); setShowCarePlan(true);
                                 } else if (doc.type === "proposal") {
                                   setProposalInitialParams(doc.params); setShowProposal(true);
+                                } else if (doc.type === "rental_contract" || doc.type === "important_matters") {
+                                  setShowContracts(true);
+                                } else if (doc.type === "supplier_email") {
+                                  const orderId = doc.params?.orderId as string | undefined;
+                                  if (!orderId) return;
+                                  const [{ data: orderData }, items, suppliers, members] = await Promise.all([
+                                    supabase.from("orders").select("*").eq("id", orderId).single(),
+                                    getOrderItems(orderId),
+                                    getSuppliers(),
+                                    getMembers(tenantId),
+                                  ]);
+                                  if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members, sentAt: doc.created_at });
                                 }
                               }}
                               className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
@@ -5384,6 +5403,22 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
           companyInfo={companyInfo} tenantId={tenantId}
           onClose={() => setShowContracts(false)}
           onSaved={async () => { await refreshDocs(); setShowContracts(false); }}
+        />
+      )}
+      {emailPreview && selectedClient && (
+        <OrderEmailPreviewModal
+          order={emailPreview.order}
+          orderItems={emailPreview.items}
+          clients={[selectedClient]}
+          equipment={equipment}
+          suppliers={emailPreview.suppliers}
+          members={emailPreview.members}
+          emailType="new_order"
+          tenantId={tenantId}
+          sentAt={emailPreview.sentAt}
+          onClose={() => setEmailPreview(null)}
+          onBack={() => setEmailPreview(null)}
+          onDone={() => setEmailPreview(null)}
         />
       )}
     </div>
