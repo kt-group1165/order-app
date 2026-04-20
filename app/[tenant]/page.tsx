@@ -1272,7 +1272,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   }, [equipment]);
 
   const handleExportCSV = () => {
-    const headers = ["用具名", "TAISコード", "カテゴリ", "レンタル価格", "全国平均価格", "限度額", "商品コード"];
+    const headers = ["用具名", "TAISコード", "カテゴリ", "レンタル価格", "全国平均価格", "限度額", "商品コード", "選定理由", "提案理由"];
     const rows = localEquipment.map(e => [
       e.name,
       e.tais_code ?? "",
@@ -1281,6 +1281,8 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
       e.national_avg_price?.toString() ?? "",
       e.price_limit?.toString() ?? "",
       e.product_code,
+      e.selection_reason ?? "",
+      e.proposal_reason ?? "",
     ]);
     const csv = [headers, ...rows]
       .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))

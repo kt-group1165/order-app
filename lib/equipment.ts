@@ -133,6 +133,7 @@ export type EquipmentImportRow = {
   national_avg_price?: number;
   price_limit?: number;
   selection_reason?: string;
+  proposal_reason?: string;
 };
 
 export type ImportResult = {
@@ -250,6 +251,7 @@ export async function importEquipment(
         check("全国平均価格", found.national_avg_price, row.national_avg_price);
         check("TAISコード", found.tais_code, row.tais_code);
         check("選定理由", found.selection_reason, row.selection_reason);
+        check("提案理由", found.proposal_reason, row.proposal_reason);
 
         if (fieldChanges.length > 0) {
           result.changes.push(...fieldChanges);
@@ -266,6 +268,8 @@ export async function importEquipment(
             updates.tais_code = row.tais_code ?? null;
           if (row.selection_reason !== undefined)
             updates.selection_reason = row.selection_reason ?? null;
+          if (row.proposal_reason !== undefined)
+            updates.proposal_reason = row.proposal_reason ?? null;
 
           const { error } = await supabase
             .from("equipment_master")
@@ -297,6 +301,7 @@ export async function importEquipment(
             national_avg_price: row.national_avg_price ?? null,
             price_limit: row.price_limit ?? null,
             selection_reason: row.selection_reason ?? null,
+            proposal_reason: row.proposal_reason ?? null,
             comparison_product_codes: [],
             sort_order: nextSortOrder,
           });
@@ -338,6 +343,7 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
     else if (lower.includes("全国平均") || lower.includes("national_avg")) colMap.national_avg_price = i;
     else if (lower.includes("限度額") || lower.includes("上限価格") || lower.includes("price_limit")) colMap.price_limit = i;
     else if (lower.includes("選定")) colMap.selection_reason = i;
+    else if (lower.includes("提案")) colMap.proposal_reason = i;
   });
 
   if (colMap.name === undefined) {
@@ -372,6 +378,7 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
       national_avg_price: getNum("national_avg_price"),
       price_limit: getNum("price_limit"),
       selection_reason: get("selection_reason") || undefined,
+      proposal_reason: get("proposal_reason") || undefined,
     });
   }
   return rows;
