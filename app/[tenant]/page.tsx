@@ -2400,7 +2400,11 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const headerAliases: Record<string, string[]> = {
         "利用者番号": ["利用者番号"],
         "氏名": ["氏名", "利用者名"],
+        "姓": ["利用者名（姓）", "姓"],
+        "名": ["利用者名（名）", "名"],
         "ふりがな": ["ふりがな", "フリガナ"],
+        "フリガナ姓": ["フリガナ（姓）"],
+        "フリガナ名": ["フリガナ（名）"],
         "電話番号": ["電話番号"],
         "携帯番号": ["携帯番号"],
         "住所": ["住所"],
@@ -2504,9 +2508,18 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         // カンマだけの実質空行（例: ",,,,,,,,"）はログせずスキップ
         if (!/[^\s,"]/.test(line)) continue;
         const cols = parseCsvRow(line);
-        const name = cols[col("氏名")]?.trim();
+        // 氏名: 「利用者名」列、もしくは「利用者名（姓）」+「利用者名（名）」から構築
+        const directName = cols[col("氏名")]?.trim() || "";
+        const lastName = cols[col("姓")]?.trim() || "";
+        const firstName = cols[col("名")]?.trim() || "";
+        const name = directName || `${lastName} ${firstName}`.trim();
+        // フリガナも同様に姓/名 → 統合のフォールバック
+        const directFurigana = cols[col("ふりがな")]?.trim() || "";
+        const fLast = cols[col("フリガナ姓")]?.trim() || "";
+        const fFirst = cols[col("フリガナ名")]?.trim() || "";
+        const furigana = directFurigana || `${fLast} ${fFirst}`.trim() || null;
         if (!name) {
-          skipped.push({ reason: "氏名が空", line: line.slice(0, 60) });
+          // 氏名が完全に空（姓・名・利用者名の全てが空）→ ログせず静かにスキップ
           continue;
         }
         const userNumber = cols[col("利用者番号")]?.trim() || null;
@@ -2515,7 +2528,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           tenant_id: tenantId,
           user_number: userNumber ?? String(nextNum++),
           name,
-          furigana: cols[col("ふりがな")]?.trim() || null,
+          furigana: furigana,
           phone: cols[col("電話番号")]?.trim() || null,
           mobile: cols[col("携帯番号")]?.trim() || null,
           address: cols[col("住所")]?.trim() || null,
