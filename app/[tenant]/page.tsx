@@ -3187,7 +3187,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                     <div className="flex-1 min-w-0 flex items-center gap-1">
                       <span className={`w-20 shrink-0 text-sm font-medium truncate ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>{client.name}</span>
                       <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
-                      {client.gender && <span className="shrink-0 text-xs text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{client.gender}</span>}
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
                           <span className="text-xs px-1 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">介護</span>
