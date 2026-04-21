@@ -3880,6 +3880,29 @@ function ClientDetail({
   const [editingBasic, setEditingBasic] = useState(false);
   const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
+  // 本登録モーダル（仮登録→正式登録）
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteSaving, setPromoteSaving] = useState(false);
+  const [promoteForm, setPromoteForm] = useState({
+    name: client.name,
+    furigana: client.furigana ?? "",
+    gender: client.gender ?? "",
+    phone: client.phone ?? "",
+    mobile: client.mobile ?? "",
+    address: client.address ?? "",
+    is_facility: client.is_facility ?? false,
+    care_manager: client.care_manager ?? "",
+    care_manager_org: client.care_manager_org ?? "",
+    care_level: client.care_level ?? "",
+    benefit_rate: client.benefit_rate ?? "",
+    copay_rate: client.copay_rate ?? "",
+    insured_number: client.insured_number ?? "",
+    birth_date: client.birth_date ?? "",
+    insurer_number: client.insurer_number ?? "",
+    certification_start_date: client.certification_start_date ?? "",
+    certification_end_date: client.certification_end_date ?? "",
+    memo: client.memo ?? "",
+  });
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [selectedInsuranceId, setSelectedInsuranceId] = useState<string | null>(null);
@@ -4387,18 +4410,28 @@ function ClientDetail({
                 <div className="flex gap-2">
                   {client.is_provisional && (
                     <button
-                      onClick={async () => {
-                        if (!confirm("この利用者を本登録しますか？\n（仮フラグが外れます。氏名・住所は現状のまま。詳細な情報の入力は編集から。）")) return;
-                        setBasicSaving(true);
-                        try {
-                          await promoteProvisionalClient(client.id, {});
-                          Object.assign(client, { is_provisional: false });
-                        } catch (e) {
-                          alert("本登録に失敗しました");
-                          console.error(e);
-                        } finally {
-                          setBasicSaving(false);
-                        }
+                      onClick={() => {
+                        setPromoteForm({
+                          name: client.name,
+                          furigana: client.furigana ?? "",
+                          gender: client.gender ?? "",
+                          phone: client.phone ?? "",
+                          mobile: client.mobile ?? "",
+                          address: client.address ?? "",
+                          is_facility: client.is_facility ?? false,
+                          care_manager: client.care_manager ?? "",
+                          care_manager_org: client.care_manager_org ?? "",
+                          care_level: client.care_level ?? "",
+                          benefit_rate: client.benefit_rate ?? "",
+                          copay_rate: client.copay_rate ?? "",
+                          insured_number: client.insured_number ?? "",
+                          birth_date: client.birth_date ?? "",
+                          insurer_number: client.insurer_number ?? "",
+                          certification_start_date: client.certification_start_date ?? "",
+                          certification_end_date: client.certification_end_date ?? "",
+                          memo: client.memo ?? "",
+                        });
+                        setPromoteOpen(true);
                       }}
                       disabled={basicSaving}
                       className="text-xs text-white bg-amber-500 hover:bg-amber-600 px-3 py-1 rounded-lg disabled:opacity-50"
@@ -5291,6 +5324,218 @@ function ClientDetail({
           );
         })()
       ) : null}
+
+      {/* 仮登録→本登録モーダル */}
+      {promoteOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 shrink-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-gray-800">本登録する</h3>
+                <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded">🏷️ 仮登録</span>
+              </div>
+              <button onClick={() => setPromoteOpen(false)} disabled={promoteSaving}>
+                <X size={18} className="text-gray-400" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                必要項目を埋めて「本登録」を押すと、仮フラグが外れて正式な利用者になります。関連する予定・発注はそのまま引き継がれます（UUIDは維持）。
+              </p>
+              {/* 基本情報 */}
+              <section className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-500">基本情報</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="text-[11px] text-gray-400 block mb-1">氏名 <span className="text-red-400">*</span></label>
+                    <input type="text" value={promoteForm.name} onChange={(e) => setPromoteForm((f) => ({ ...f, name: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">ふりがな</label>
+                    <input type="text" value={promoteForm.furigana} onChange={(e) => setPromoteForm((f) => ({ ...f, furigana: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">性別</label>
+                    <select value={promoteForm.gender} onChange={(e) => setPromoteForm((f) => ({ ...f, gender: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400">
+                      <option value="">—</option><option value="男性">男性</option><option value="女性">女性</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">電話</label>
+                    <input type="text" value={promoteForm.phone} onChange={(e) => setPromoteForm((f) => ({ ...f, phone: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">携帯</label>
+                    <input type="text" value={promoteForm.mobile} onChange={(e) => setPromoteForm((f) => ({ ...f, mobile: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[11px] text-gray-400 block mb-1">住所</label>
+                    <input type="text" value={promoteForm.address} onChange={(e) => setPromoteForm((f) => ({ ...f, address: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                      <input type="checkbox" checked={promoteForm.is_facility} onChange={(e) => setPromoteForm((f) => ({ ...f, is_facility: e.target.checked }))} className="w-4 h-4" />
+                      居宅・施設等（事業所・施設としてマーク）
+                    </label>
+                  </div>
+                </div>
+              </section>
+              {/* ケアマネ */}
+              <section className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-500">ケアマネジャー</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">担当ケアマネ</label>
+                    <input type="text" value={promoteForm.care_manager} onChange={(e) => setPromoteForm((f) => ({ ...f, care_manager: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">所属事業所</label>
+                    <input type="text" value={promoteForm.care_manager_org} onChange={(e) => setPromoteForm((f) => ({ ...f, care_manager_org: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                </div>
+              </section>
+              {/* 保険情報 */}
+              <section className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-500">保険情報（任意）</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">被保険者番号</label>
+                    <input type="text" value={promoteForm.insured_number} onChange={(e) => setPromoteForm((f) => ({ ...f, insured_number: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">生年月日</label>
+                    <input type="date" value={promoteForm.birth_date} onChange={(e) => setPromoteForm((f) => ({ ...f, birth_date: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">要介護度</label>
+                    <input type="text" value={promoteForm.care_level} placeholder="例: 要介護2"
+                      onChange={(e) => setPromoteForm((f) => ({ ...f, care_level: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">保険者番号</label>
+                    <input type="text" value={promoteForm.insurer_number} onChange={(e) => setPromoteForm((f) => ({ ...f, insurer_number: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">給付率 (%)</label>
+                    <input type="text" value={promoteForm.benefit_rate}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPromoteForm((f) => {
+                          // 給付率を変更したら負担割合を自動計算
+                          const n = parseInt(v);
+                          const copay = !isNaN(n) ? String(100 - n) : f.copay_rate;
+                          return { ...f, benefit_rate: v, copay_rate: copay };
+                        });
+                      }}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">負担割合 (%)</label>
+                    <input type="text" value={promoteForm.copay_rate} onChange={(e) => setPromoteForm((f) => ({ ...f, copay_rate: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">認定開始日</label>
+                    <input type="date" value={promoteForm.certification_start_date} onChange={(e) => setPromoteForm((f) => ({ ...f, certification_start_date: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-400 block mb-1">認定終了日</label>
+                    <input type="date" value={promoteForm.certification_end_date} onChange={(e) => setPromoteForm((f) => ({ ...f, certification_end_date: e.target.value }))}
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400" />
+                  </div>
+                </div>
+              </section>
+              {/* メモ */}
+              <section className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-500">メモ</h4>
+                <textarea value={promoteForm.memo} onChange={(e) => setPromoteForm((f) => ({ ...f, memo: e.target.value }))} rows={2}
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-400 resize-none" />
+              </section>
+            </div>
+            <div className="flex gap-2 px-5 py-3 border-t border-gray-100 shrink-0">
+              <button onClick={() => setPromoteOpen(false)} disabled={promoteSaving}
+                className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 disabled:opacity-50">
+                キャンセル
+              </button>
+              <button
+                onClick={async () => {
+                  if (!promoteForm.name.trim()) { alert("氏名を入力してください"); return; }
+                  setPromoteSaving(true);
+                  try {
+                    // 数値/日付は空文字なら null に
+                    const n = (v: string) => v.trim() || null;
+                    await promoteProvisionalClient(client.id, {
+                      name: promoteForm.name.trim(),
+                      furigana: n(promoteForm.furigana),
+                      gender: n(promoteForm.gender),
+                      phone: n(promoteForm.phone),
+                      mobile: n(promoteForm.mobile),
+                      address: n(promoteForm.address),
+                      is_facility: promoteForm.is_facility,
+                      care_manager: n(promoteForm.care_manager),
+                      care_manager_org: n(promoteForm.care_manager_org),
+                      care_level: n(promoteForm.care_level),
+                      benefit_rate: n(promoteForm.benefit_rate),
+                      copay_rate: n(promoteForm.copay_rate),
+                      insured_number: n(promoteForm.insured_number),
+                      birth_date: n(promoteForm.birth_date),
+                      insurer_number: n(promoteForm.insurer_number),
+                      certification_start_date: n(promoteForm.certification_start_date),
+                      certification_end_date: n(promoteForm.certification_end_date),
+                      memo: n(promoteForm.memo),
+                    });
+                    // client オブジェクトを直接更新（local state 反映）
+                    Object.assign(client, {
+                      is_provisional: false,
+                      name: promoteForm.name.trim(),
+                      furigana: n(promoteForm.furigana),
+                      gender: n(promoteForm.gender),
+                      phone: n(promoteForm.phone),
+                      mobile: n(promoteForm.mobile),
+                      address: n(promoteForm.address),
+                      is_facility: promoteForm.is_facility,
+                      care_manager: n(promoteForm.care_manager),
+                      care_manager_org: n(promoteForm.care_manager_org),
+                      care_level: n(promoteForm.care_level),
+                      benefit_rate: n(promoteForm.benefit_rate),
+                      copay_rate: n(promoteForm.copay_rate),
+                      insured_number: n(promoteForm.insured_number),
+                      birth_date: n(promoteForm.birth_date),
+                      insurer_number: n(promoteForm.insurer_number),
+                      certification_start_date: n(promoteForm.certification_start_date),
+                      certification_end_date: n(promoteForm.certification_end_date),
+                      memo: n(promoteForm.memo),
+                    });
+                    setPromoteOpen(false);
+                  } catch (e) {
+                    const msg = (e as { message?: string })?.message ?? String(e);
+                    alert(`本登録に失敗しました\n${msg}`);
+                    console.error(e);
+                  } finally {
+                    setPromoteSaving(false);
+                  }
+                }}
+                disabled={promoteSaving || !promoteForm.name.trim()}
+                className="flex-1 py-2 rounded-xl text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50">
+                {promoteSaving ? "保存中…" : "本登録する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
