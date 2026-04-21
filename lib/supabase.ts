@@ -31,6 +31,8 @@ export type Client = {
   public_expense: string | null;
   // 居宅・施設等フラグ（事業所/施設の場合 true、個人利用者は false）
   is_facility: boolean;
+  // カレンダー上で自由入力された仮登録。本登録時に false に変わる
+  is_provisional: boolean;
   created_at: string;
 };
 

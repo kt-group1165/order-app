@@ -582,7 +582,10 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
                 <button key={client.id} onClick={() => { setSelectedClient(client); setStep("payment"); }}
                   className="w-full bg-white rounded-xl border border-gray-200 px-4 py-4 text-left flex items-center justify-between active:bg-emerald-50">
                   <div>
-                    <p className="font-semibold text-gray-800 text-base">{client.name}</p>
+                    <p className="font-semibold text-gray-800 text-base flex items-center gap-1.5">
+                      {client.name}
+                      {client.is_provisional && <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">仮</span>}
+                    </p>
                     {client.furigana && <p className="text-xs text-gray-400 mt-0.5">{client.furigana}</p>}
                   </div>
                   <ChevronRight size={20} className="text-gray-300 shrink-0" />

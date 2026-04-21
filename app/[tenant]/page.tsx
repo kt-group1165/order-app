@@ -36,7 +36,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
-import { getClients } from "@/lib/clients";
+import { getClients, promoteProvisionalClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -2323,37 +2323,130 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     URL.revokeObjectURL(url);
   };
 
+  // 似た仮登録の検出（姓か住所が一致していれば候補）
+  function findSimilarProvisionals(name: string, address: string): Client[] {
+    const nameTrim = name.trim();
+    const addrTrim = address.trim();
+    if (!nameTrim && !addrTrim) return [];
+    // 姓（先頭のスペースまでの文字列）を比較対象にする
+    const surname = nameTrim.split(/[\s　]/)[0];
+    return clients.filter((c) => {
+      if (!c.is_provisional) return false;
+      const cName = c.name ?? "";
+      const cAddr = c.address ?? "";
+      // 完全一致 / 姓一致 / 住所部分一致のいずれか
+      if (nameTrim && cName === nameTrim) return true;
+      if (surname && surname.length >= 1 && cName.startsWith(surname)) return true;
+      if (addrTrim && cAddr && (cAddr.includes(addrTrim) || addrTrim.includes(cAddr))) return true;
+      return false;
+    });
+  }
+
+  // 紐付け候補モーダル用のステート
+  const [similarProvisionalCandidates, setSimilarProvisionalCandidates] = useState<Client[] | null>(null);
+
+  // 実際に新規利用者を作成する処理（紐付けなし or 紐付け確認後）
+  const insertFreshClient = async () => {
+    const maxNum = clients.reduce((mx, c) => {
+      const n = parseInt(c.user_number ?? "0");
+      return isNaN(n) ? mx : Math.max(mx, n);
+    }, 0);
+    const { data: inserted, error } = await supabase.from("clients").insert({
+      tenant_id: tenantId,
+      user_number: String(maxNum + 1),
+      name: newClientForm.name.trim(),
+      furigana: newClientForm.furigana.trim() || null,
+      phone: newClientForm.phone.trim() || null,
+      mobile: newClientForm.mobile.trim() || null,
+      address: newClientForm.address.trim() || null,
+      is_provisional: false,
+    }).select().single();
+    if (error) throw error;
+    if (currentOfficeId && inserted) {
+      await supabase.from("client_office_assignments").upsert({
+        tenant_id: tenantId,
+        client_id: inserted.id,
+        office_id: currentOfficeId,
+      }, { onConflict: "tenant_id,client_id,office_id" });
+      setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
+    }
+  };
+
+  // 仮登録を本登録化する（その場で編集扱い、UUIDは維持）
+  const promoteProvisional = async (provisionalId: string) => {
+    const maxNum = clients.reduce((mx, c) => {
+      const n = parseInt(c.user_number ?? "0");
+      return isNaN(n) ? mx : Math.max(mx, n);
+    }, 0);
+    await promoteProvisionalClient(provisionalId, {
+      user_number: String(maxNum + 1),
+      name: newClientForm.name.trim(),
+      furigana: newClientForm.furigana.trim() || null,
+      phone: newClientForm.phone.trim() || null,
+      mobile: newClientForm.mobile.trim() || null,
+      address: newClientForm.address.trim() || null,
+    });
+    if (currentOfficeId) {
+      await supabase.from("client_office_assignments").upsert({
+        tenant_id: tenantId,
+        client_id: provisionalId,
+        office_id: currentOfficeId,
+      }, { onConflict: "tenant_id,client_id,office_id" });
+      setClientOfficeMap((prev) => new Set([...prev, provisionalId]));
+    }
+  };
+
   const handleAddNewClient = async () => {
     if (!newClientForm.name.trim()) return;
+    // 類似仮登録が無いか確認
+    const similar = findSimilarProvisionals(newClientForm.name, newClientForm.address);
+    if (similar.length > 0) {
+      setSimilarProvisionalCandidates(similar);
+      return;
+    }
     setAddingClient(true);
     try {
-      const maxNum = clients.reduce((mx, c) => {
-        const n = parseInt(c.user_number ?? "0");
-        return isNaN(n) ? mx : Math.max(mx, n);
-      }, 0);
-      const { data: inserted, error } = await supabase.from("clients").insert({
-        tenant_id: tenantId,
-        user_number: String(maxNum + 1),
-        name: newClientForm.name.trim(),
-        furigana: newClientForm.furigana.trim() || null,
-        phone: newClientForm.phone.trim() || null,
-        mobile: newClientForm.mobile.trim() || null,
-        address: newClientForm.address.trim() || null,
-      }).select().single();
-      if (error) throw error;
-      // 自事業所選択中なら自動で紐付け
-      if (currentOfficeId && inserted) {
-        await supabase.from("client_office_assignments").upsert({
-          tenant_id: tenantId,
-          client_id: inserted.id,
-          office_id: currentOfficeId,
-        }, { onConflict: "tenant_id,client_id,office_id" });
-        setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
-      }
+      await insertFreshClient();
       const newClients = await getClients(tenantId);
       setClients(newClients);
       setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
       setShowNewClient(false);
+    } catch (e) {
+      alert("利用者の追加に失敗しました");
+      console.error(e);
+    } finally {
+      setAddingClient(false);
+    }
+  };
+
+  // 紐付けモーダルから選択: その仮登録を本登録化して終了
+  const handleLinkToProvisional = async (provisionalId: string) => {
+    setAddingClient(true);
+    try {
+      await promoteProvisional(provisionalId);
+      const newClients = await getClients(tenantId);
+      setClients(newClients);
+      setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
+      setShowNewClient(false);
+      setSimilarProvisionalCandidates(null);
+    } catch (e) {
+      alert("本登録に失敗しました");
+      console.error(e);
+    } finally {
+      setAddingClient(false);
+    }
+  };
+
+  // 紐付けモーダルから「別人として新規作成」を選んだ場合
+  const handleSkipProvisionalLink = async () => {
+    setAddingClient(true);
+    try {
+      await insertFreshClient();
+      const newClients = await getClients(tenantId);
+      setClients(newClients);
+      setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
+      setShowNewClient(false);
+      setSimilarProvisionalCandidates(null);
     } catch (e) {
       alert("利用者の追加に失敗しました");
       console.error(e);
@@ -2572,6 +2665,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
             if (!v) return false;
             return /^(1|true|TRUE|yes|YES|はい|チェック|〇|○|●|✓|レ|✔)$/.test(v);
           })(),
+          // CSV 取込は正式データなので仮登録フラグは常に false
+          is_provisional: false,
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
@@ -3134,7 +3229,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                         className="hover:bg-gray-50 cursor-pointer"
                         onClick={() => { setSelectedClientInitialViewMode("insurance"); setSelectedClient(client); }}
                       >
-                        <td className="px-3 py-2 font-medium text-gray-800">{client.name}</td>
+                        <td className="px-3 py-2 font-medium text-gray-800">
+                          {client.name}
+                          {client.is_provisional && <span className="ml-1 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded align-middle">仮</span>}
+                        </td>
                         <td className="px-3 py-2 text-gray-600">{client.gender ?? dash}</td>
                         <td className="px-3 py-2 text-gray-600">{rec?.care_level ?? dash}</td>
                         <td className="px-3 py-2 text-gray-600">{rec?.insured_number ?? dash}</td>
@@ -3215,7 +3313,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                     className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1">
-                      <span className={`w-20 shrink-0 text-sm font-medium truncate ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>{client.name}</span>
+                      <span className={`w-20 shrink-0 text-sm font-medium truncate ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>
+                        {client.name}
+                        {client.is_provisional && <span className="ml-1 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded align-middle">仮</span>}
+                      </span>
                       <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
@@ -3335,6 +3436,55 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                 className="flex-1 py-2 rounded-xl text-sm font-medium text-white bg-emerald-500 hover:bg-emerald-600 transition-colors disabled:opacity-50"
               >
                 {addingClient ? "追加中…" : "追加"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 似た仮登録の紐付け確認モーダル */}
+      {similarProvisionalCandidates && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-800">似た仮登録があります</h3>
+              <button onClick={() => setSimilarProvisionalCandidates(null)}><X size={18} className="text-gray-400" /></button>
+            </div>
+            <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2.5 py-2 mb-3">
+              🏷️ カレンダーで仮登録された以下の利用者がヒットしました。同一人物の場合、紐付けて本登録すると、関連する予定・発注もそのまま引き継がれます。
+            </p>
+            <ul className="space-y-2 mb-4 max-h-64 overflow-y-auto">
+              {similarProvisionalCandidates.map((c) => (
+                <li key={c.id} className="border border-amber-200 rounded-xl p-3 bg-amber-50/40">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium text-gray-800">{c.name}</span>
+                    <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">仮</span>
+                  </div>
+                  <p className="text-xs text-gray-500 truncate">{c.address ?? "（住所未登録）"}</p>
+                  <button
+                    onClick={() => handleLinkToProvisional(c.id)}
+                    disabled={addingClient}
+                    className="mt-2 w-full py-1.5 rounded-lg text-xs font-medium text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50"
+                  >
+                    この仮登録と紐付けて本登録
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSimilarProvisionalCandidates(null)}
+                disabled={addingClient}
+                className="flex-1 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
+              >
+                戻る
+              </button>
+              <button
+                onClick={handleSkipProvisionalLink}
+                disabled={addingClient}
+                className="flex-1 py-2 rounded-xl text-sm font-medium text-white bg-gray-500 hover:bg-gray-600 disabled:opacity-50"
+              >
+                {addingClient ? "追加中…" : "別人として新規作成"}
               </button>
             </div>
           </div>
@@ -4220,9 +4370,37 @@ function ClientDetail({
         <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-sm font-semibold text-gray-800">基本情報</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-gray-800">基本情報</h3>
+                {client.is_provisional && (
+                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded">🏷️ 仮登録</span>
+                )}
+              </div>
               {!editingBasic ? (
-                <button onClick={() => setEditingBasic(true)} className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
+                <div className="flex gap-2">
+                  {client.is_provisional && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm("この利用者を本登録しますか？\n（仮フラグが外れます。氏名・住所は現状のまま。詳細な情報の入力は編集から。）")) return;
+                        setBasicSaving(true);
+                        try {
+                          await promoteProvisionalClient(client.id, {});
+                          Object.assign(client, { is_provisional: false });
+                        } catch (e) {
+                          alert("本登録に失敗しました");
+                          console.error(e);
+                        } finally {
+                          setBasicSaving(false);
+                        }
+                      }}
+                      disabled={basicSaving}
+                      className="text-xs text-white bg-amber-500 hover:bg-amber-600 px-3 py-1 rounded-lg disabled:opacity-50"
+                    >
+                      本登録する
+                    </button>
+                  )}
+                  <button onClick={() => setEditingBasic(true)} className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
+                </div>
               ) : (
                 <div className="flex gap-2">
                   <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
