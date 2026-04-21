@@ -2129,6 +2129,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
   const [hospFilter, setHospFilter] = useState(false);
+  // 仮登録のみ表示フィルタ
+  const [provisionalFilter, setProvisionalFilter] = useState(false);
   // 新規利用者追加モーダル
   const [showNewClient, setShowNewClient] = useState(false);
   const [newClientForm, setNewClientForm] = useState({ name: "", furigana: "", phone: "", mobile: "", address: "" });
@@ -2239,6 +2241,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     .filter((c) => {
       // 事業所フィルタ（自事業所のみモードの場合）
       if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && !clientOfficeMap.has(c.id)) return false;
+      // 仮登録のみ表示
+      if (provisionalFilter && !c.is_provisional) return false;
       if (hospFilter) return hospFilteredIds!.has(c.id);
       if (kanaFilter) {
         const row = KANA_ROWS.find((r) => r.label === kanaFilter);
@@ -3266,16 +3270,20 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         ) : (
           <>
             <button
-              onClick={() => setKanaFilter("")}
-              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
             >すべて</button>
             {KANA_ROWS.map((row) => (
               <button
                 key={row.label}
-                onClick={() => setKanaFilter(kanaFilter === row.label ? "" : row.label)}
+                onClick={() => { setKanaFilter(kanaFilter === row.label ? "" : row.label); setProvisionalFilter(false); }}
                 className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${kanaFilter === row.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
               >{row.label}行</button>
             ))}
+            <button
+              onClick={() => { setProvisionalFilter(!provisionalFilter); setKanaFilter(""); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${provisionalFilter ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-700 hover:bg-amber-100"}`}
+            >🏷️ 仮登録</button>
           </>
         )}
       </div>
