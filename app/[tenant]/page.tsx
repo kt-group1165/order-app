@@ -31,6 +31,7 @@ import {
   CreditCard,
   AlertTriangle,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
@@ -4276,6 +4277,62 @@ function ClientDetail({
           <FileText size={14} />
           報告書
         </button>
+        {/* 削除 / 復元ボタン（ソフト削除） */}
+        {client.deleted_at ? (
+          <button
+            onClick={async () => {
+              if (!confirm("この利用者を復元しますか？")) return;
+              setBasicSaving(true);
+              try {
+                await restoreClient(client.id);
+                Object.assign(client, { deleted_at: null });
+                alert("復元しました");
+                onBack();
+              } catch (e) {
+                const msg = (e as { message?: string })?.message ?? String(e);
+                alert(`復元に失敗しました\n${msg}`);
+              } finally {
+                setBasicSaving(false);
+              }
+            }}
+            disabled={basicSaving}
+            title="削除済み利用者を復元"
+            className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1.5 rounded-xl disabled:opacity-50 transition-colors"
+          >
+            <RotateCcw size={14} />
+            復元
+          </button>
+        ) : (
+          <button
+            onClick={async () => {
+              const orderCount = clientItems.length;
+              if (!client.is_provisional && orderCount > 0) {
+                alert(`この利用者には発注履歴が ${orderCount} 件あるため削除できません。\n\n削除したい場合は、先に発注をキャンセルまたは完了してください。`);
+                return;
+              }
+              const extraNote = client.is_provisional && orderCount > 0
+                ? `\n（発注 ${orderCount} 件は残ります）`
+                : "";
+              if (!confirm(`利用者「${client.name}」を削除しますか？${extraNote}\n\nソフト削除のため、ゴミ箱から復元可能です。`)) return;
+              setBasicSaving(true);
+              try {
+                await softDeleteClient(client.id);
+                onBack();
+              } catch (e) {
+                const msg = (e as { message?: string })?.message ?? String(e);
+                alert(`削除に失敗しました\n${msg}`);
+              } finally {
+                setBasicSaving(false);
+              }
+            }}
+            disabled={basicSaving}
+            title="この利用者を削除（ソフト削除）"
+            className="flex items-center gap-1.5 text-xs text-red-500 border border-red-200 px-2.5 py-1.5 rounded-xl hover:bg-red-50 disabled:opacity-50 transition-colors"
+          >
+            <Trash2 size={14} />
+            削除
+          </button>
+        )}
       </div>
 
       {/* 発注メール再送モーダル */}
