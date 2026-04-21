@@ -3320,10 +3320,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                     className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1">
-                      <span className={`w-20 shrink-0 text-sm font-medium truncate ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>
-                        {client.name}
-                        {client.is_provisional && <span className="ml-1 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded align-middle">仮</span>}
-                      </span>
+                      <div className={`w-20 shrink-0 flex items-center gap-0.5 text-sm font-medium ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>
+                        <span className="truncate min-w-0">{client.name}</span>
+                        {client.is_provisional && <span className="shrink-0 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded">仮</span>}
+                      </div>
                       <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
