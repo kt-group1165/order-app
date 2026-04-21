@@ -2134,6 +2134,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [newClientForm, setNewClientForm] = useState({ name: "", furigana: "", phone: "", mobile: "", address: "" });
   const [addingClient, setAddingClient] = useState(false);
   const [hospModalMonth, setHospModalMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
+  // 紐付け候補モーダル用のステート（フックなので early return より前に配置）
+  const [similarProvisionalCandidates, setSimilarProvisionalCandidates] = useState<Client[] | null>(null);
   // 入退院日付入力ダイアログ
   const [hospDateDialog, setHospDateDialog] = useState<{ client: Client; mode: "admit" | "discharge"; currentHospId?: string } | null>(null);
   const [hospDateInput, setHospDateInput] = useState(() => new Date().toISOString().slice(0, 10));
@@ -2341,9 +2343,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       return false;
     });
   }
-
-  // 紐付け候補モーダル用のステート
-  const [similarProvisionalCandidates, setSimilarProvisionalCandidates] = useState<Client[] | null>(null);
 
   // 実際に新規利用者を作成する処理（紐付けなし or 紐付け確認後）
   const insertFreshClient = async () => {
