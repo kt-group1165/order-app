@@ -1,17 +1,24 @@
 import { supabase, Client } from "./supabase";
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
-export async function getClients(tenantId: string): Promise<Client[]> {
+// 既定では削除済み（deleted_at IS NOT NULL）を除外する
+export async function getClients(tenantId: string, opts: { includeDeleted?: boolean; onlyDeleted?: boolean } = {}): Promise<Client[]> {
   const PAGE = 1000;
   const all: Client[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await supabase
+    let q = supabase
       .from("clients")
       .select("*")
       .eq("tenant_id", tenantId)
       .order("furigana", { ascending: true, nullsFirst: false })
       .range(from, from + PAGE - 1);
+    if (opts.onlyDeleted) {
+      q = q.not("deleted_at", "is", null);
+    } else if (!opts.includeDeleted) {
+      q = q.is("deleted_at", null);
+    }
+    const { data, error } = await q;
     if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...data);
@@ -19,6 +26,24 @@ export async function getClients(tenantId: string): Promise<Client[]> {
     from += PAGE;
   }
   return all;
+}
+
+// ソフト削除
+export async function softDeleteClient(clientId: string): Promise<void> {
+  const { error } = await supabase
+    .from("clients")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", clientId);
+  if (error) throw error;
+}
+
+// 復元
+export async function restoreClient(clientId: string): Promise<void> {
+  const { error } = await supabase
+    .from("clients")
+    .update({ deleted_at: null })
+    .eq("id", clientId);
+  if (error) throw error;
 }
 
 // 仮登録の本登録化（編集フローで使用）

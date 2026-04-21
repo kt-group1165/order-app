@@ -33,6 +33,8 @@ export type Client = {
   is_facility: boolean;
   // カレンダー上で自由入力された仮登録。本登録時に false に変わる
   is_provisional: boolean;
+  // ソフト削除日時（null なら未削除）
+  deleted_at: string | null;
   created_at: string;
 };
 

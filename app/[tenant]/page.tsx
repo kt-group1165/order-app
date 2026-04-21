@@ -36,7 +36,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
-import { getClients, promoteProvisionalClient } from "@/lib/clients";
+import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -2131,6 +2131,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [hospFilter, setHospFilter] = useState(false);
   // 仮登録のみ表示フィルタ
   const [provisionalFilter, setProvisionalFilter] = useState(false);
+  // ゴミ箱フィルタ（削除済みのみ表示）
+  const [trashFilter, setTrashFilter] = useState(false);
   // 新規利用者追加モーダル
   const [showNewClient, setShowNewClient] = useState(false);
   const [newClientForm, setNewClientForm] = useState({ name: "", furigana: "", phone: "", mobile: "", address: "" });
@@ -2160,7 +2162,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       setLoading(true);
       try {
         const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments] = await Promise.all([
-          getClients(tenantId),
+          getClients(tenantId, { onlyDeleted: trashFilter }),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
           getOrders(tenantId),
@@ -2208,7 +2210,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         setLoading(false);
       }
     })();
-  }, [tenantId]);
+  }, [tenantId, trashFilter]);
 
   if (selectedClient) {
     return (
@@ -2670,6 +2672,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           })(),
           // CSV 取込は正式データなので仮登録フラグは常に false
           is_provisional: false,
+          // CSV 取込時点では未削除
+          deleted_at: null,
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
@@ -3270,20 +3274,24 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         ) : (
           <>
             <button
-              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); }}
-              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter && !trashFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
             >すべて</button>
             {KANA_ROWS.map((row) => (
               <button
                 key={row.label}
-                onClick={() => { setKanaFilter(kanaFilter === row.label ? "" : row.label); setProvisionalFilter(false); }}
+                onClick={() => { setKanaFilter(kanaFilter === row.label ? "" : row.label); setProvisionalFilter(false); setTrashFilter(false); }}
                 className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${kanaFilter === row.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
               >{row.label}行</button>
             ))}
             <button
-              onClick={() => { setProvisionalFilter(!provisionalFilter); setKanaFilter(""); }}
+              onClick={() => { setProvisionalFilter(!provisionalFilter); setKanaFilter(""); setTrashFilter(false); }}
               className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${provisionalFilter ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-700 hover:bg-amber-100"}`}
             >🏷️ 仮登録</button>
+            <button
+              onClick={() => { setTrashFilter(!trashFilter); setKanaFilter(""); setProvisionalFilter(false); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${trashFilter ? "bg-gray-600 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+            >🗑️ ゴミ箱</button>
           </>
         )}
       </div>
@@ -4440,6 +4448,59 @@ function ClientDetail({
                     </button>
                   )}
                   <button onClick={() => setEditingBasic(true)} className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
+                  {/* 削除 / 復元 ボタン */}
+                  {client.deleted_at ? (
+                    <button
+                      onClick={async () => {
+                        if (!confirm("この利用者を復元しますか？")) return;
+                        setBasicSaving(true);
+                        try {
+                          await restoreClient(client.id);
+                          Object.assign(client, { deleted_at: null });
+                          alert("復元しました");
+                          onBack();
+                        } catch (e) {
+                          const msg = (e as { message?: string })?.message ?? String(e);
+                          alert(`復元に失敗しました\n${msg}`);
+                        } finally {
+                          setBasicSaving(false);
+                        }
+                      }}
+                      disabled={basicSaving}
+                      className="text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1 rounded-lg disabled:opacity-50"
+                    >
+                      復元
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        // 発注履歴の有無をチェック（仮登録は無条件で削除可）
+                        const orderCount = clientItems.length;
+                        if (!client.is_provisional && orderCount > 0) {
+                          alert(`この利用者には発注履歴が ${orderCount} 件あるため削除できません。\n\n削除したい場合は、先に発注をキャンセルまたは完了してください。`);
+                          return;
+                        }
+                        const extraNote = client.is_provisional && orderCount > 0
+                          ? `\n（発注 ${orderCount} 件は残ります）`
+                          : "";
+                        if (!confirm(`利用者「${client.name}」を削除しますか？${extraNote}\n\nソフト削除のため、ゴミ箱から復元可能です。`)) return;
+                        setBasicSaving(true);
+                        try {
+                          await softDeleteClient(client.id);
+                          onBack();
+                        } catch (e) {
+                          const msg = (e as { message?: string })?.message ?? String(e);
+                          alert(`削除に失敗しました\n${msg}`);
+                        } finally {
+                          setBasicSaving(false);
+                        }
+                      }}
+                      disabled={basicSaving}
+                      className="text-xs text-red-600 border border-red-200 px-3 py-1 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                    >
+                      削除
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="flex gap-2">
