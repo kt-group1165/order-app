@@ -2677,6 +2677,9 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           deleted_at: null,
           // 紹介機関は CSV 取込に含まれていない（画面で後から手入力）
           referrer_org: null,
+          // マスタ紐付けは CSV 取込では設定しない（後で SQL で一括処理）
+          care_office_id: null,
+          care_manager_id: null,
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
@@ -6736,11 +6739,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   const nextMonth = () => { const d = new Date(y, m, 1); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const toThisMonth = () => { const d = new Date(); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
-  // データ: 売上帳票の手入力項目 + 書類チェック
+  // データ: 売上帳票の手入力項目 + 書類チェック + 居宅/ケアマネマスタ
   const [salesRecords, setSalesRecords] = useState<import("@/lib/sales").SalesRecord[]>([]);
   const [documents, setDocuments] = useState<Array<{ client_id: string; type: string }>>([]);
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number }>>([]);
+  const [careOfficesMap, setCareOfficesMap] = useState<Map<string, string>>(new Map()); // id -> name
+  const [careManagersMap, setCareManagersMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -6748,21 +6753,35 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       setLoading(true);
       try {
         const { getSalesRecords } = await import("@/lib/sales");
-        const [sr, docs, priceHist, ppRes] = await Promise.all([
+        const [sr, docs, priceHist, ppRes, offRes, mgrRes] = await Promise.all([
           getSalesRecords(tenantId),
           supabase.from("client_documents").select("client_id, type").eq("tenant_id", tenantId),
           getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
           supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
+          supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId),
+          supabase.from("care_managers").select("id, name").eq("tenant_id", tenantId),
         ]);
         setSalesRecords(sr);
         setDocuments((docs.data ?? []) as Array<{ client_id: string; type: string }>);
         setPriceHistory(priceHist);
         setPurchasePrices((ppRes.data ?? []) as Array<{ product_code: string; supplier_id: string; purchase_price: number }>);
+        const om = new Map<string, string>();
+        (offRes.data ?? []).forEach((o: { id: string; name: string }) => om.set(o.id, o.name));
+        setCareOfficesMap(om);
+        const mm = new Map<string, string>();
+        (mgrRes.data ?? []).forEach((m: { id: string; name: string }) => mm.set(m.id, m.name));
+        setCareManagersMap(mm);
       } finally {
         setLoading(false);
       }
     })();
   }, [tenantId, month, orderItems]);
+
+  // 居宅名 / ケアマネ名：care_office_id 優先、なければテキスト
+  const getCareOfficeName = (c: Client): string =>
+    (c.care_office_id ? careOfficesMap.get(c.care_office_id) : null) ?? c.care_manager_org ?? "";
+  const getCareManagerName = (c: Client): string =>
+    (c.care_manager_id ? careManagersMap.get(c.care_manager_id) : null) ?? c.care_manager ?? "";
 
   // 当月の売上帳票行を生成（自動集計）
   const rows = useMemo(() => {
@@ -6939,8 +6958,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         hasDoc(r.client.id, "proposal") ? "✓" : "",
         hasDoc(r.client.id, "care_plan") ? "✓" : "",
         r.client.referrer_org ?? "",
-        r.client.care_manager_org ?? "",
-        r.client.care_manager ?? "",
+        getCareOfficeName(r.client),
+        getCareManagerName(r.client),
         sr?.sales_rep ?? "",
         sr?.delivery_person ?? "",
         r.client.name,
@@ -7038,8 +7057,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
                     <td className="border border-gray-200 px-2 py-1 text-center">{hasDoc(r.client.id, "proposal") ? "✓" : ""}</td>
                     <td className="border border-gray-200 px-2 py-1 text-center">{hasDoc(r.client.id, "care_plan") ? "✓" : ""}</td>
                     <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.referrer_org ?? ""}</td>
-                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.care_manager_org ?? ""}</td>
-                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.care_manager ?? ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{getCareOfficeName(r.client)}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{getCareManagerName(r.client)}</td>
                     <td className="border border-gray-200 px-0 py-0">
                       <input type="text" defaultValue={sr?.sales_rep ?? ""}
                         onBlur={(e) => saveSalesField(r.orderItemId, r.eventType, "sales_rep", e.target.value)}

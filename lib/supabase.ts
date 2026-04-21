@@ -20,6 +20,9 @@ export type Client = {
   benefit_rate: string | null;
   care_manager: string | null;
   care_manager_org: string | null;
+  // マスタ紐付け（あればこちらを優先、無ければテキストを使用）
+  care_office_id: string | null;
+  care_manager_id: string | null;
   // 紹介機関（居宅の「紹介者」：地域包括、病院等）
   referrer_org: string | null;
   certification_end_date: string | null;
