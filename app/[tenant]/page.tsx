@@ -2675,6 +2675,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           is_provisional: false,
           // CSV 取込時点では未削除
           deleted_at: null,
+          // 紹介機関は CSV 取込に含まれていない（画面で後から手入力）
+          referrer_org: null,
         };
 
         // clients: user_number で集約（認定終了日が最新のものを採用）
@@ -3887,7 +3889,7 @@ function ClientDetail({
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
-  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
+  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
   // 本登録モーダル（仮登録→正式登録）
   const [promoteOpen, setPromoteOpen] = useState(false);
@@ -4561,7 +4563,7 @@ function ClientDetail({
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
                   <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
                 </div>
               )}
@@ -4569,8 +4571,10 @@ function ClientDetail({
             {([
               ["氏名", "name"],["ふりがな","furigana"],["性別","gender"],
               ["電話","phone"],["携帯","mobile"],["住所","address"],
-              ["ケアマネ","care_manager"],["所属","care_manager_org"],["メモ","memo"],
-            ] as [string, "name"|"furigana"|"gender"|"phone"|"mobile"|"address"|"care_manager"|"care_manager_org"|"memo"][]).map(([label, key]) => (
+              ["紹介機関","referrer_org"],
+              ["居宅","care_manager_org"],["ケアマネ","care_manager"],
+              ["メモ","memo"],
+            ] as [string, "name"|"furigana"|"gender"|"phone"|"mobile"|"address"|"care_manager"|"care_manager_org"|"referrer_org"|"memo"][]).map(([label, key]) => (
               <div key={key} className="flex items-start gap-3 border-b border-gray-50 pb-2">
                 <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">{label}</span>
                 {editingBasic ? (
@@ -5978,6 +5982,8 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
 // ─── Billing Tab ─────────────────────────────────────────────────────────────
 
 function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
+  // サブタブ（請求明細 / 売上帳票）
+  const [subTab, setSubTab] = useState<"billing" | "sales">("billing");
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -6362,8 +6368,33 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     ),
   ];
 
+  if (subTab === "sales") {
+    return (
+      <div className="flex flex-col h-full bg-white text-sm">
+        {/* サブタブ切替 */}
+        <div className="border-b border-gray-200 bg-white px-3 py-2 shrink-0 flex items-center gap-2">
+          <button onClick={() => setSubTab("billing")} className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200">請求明細</button>
+          <button onClick={() => setSubTab("sales")} className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-500 text-white">売上帳票</button>
+        </div>
+        <SalesReportTab
+          tenantId={tenantId}
+          clients={clients}
+          orderItems={orderItems}
+          orders={orders}
+          equipment={equipment}
+          currentOfficeId={currentOfficeId}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-white text-sm">
+      {/* サブタブ切替 */}
+      <div className="border-b border-gray-200 bg-white px-3 py-2 shrink-0 flex items-center gap-2">
+        <button onClick={() => setSubTab("billing")} className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-500 text-white">請求明細</button>
+        <button onClick={() => setSubTab("sales")} className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200">売上帳票</button>
+      </div>
       {/* ── ツールバー ── */}
       <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
@@ -6683,6 +6714,357 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         />
       )}
     </div>
+  );
+}
+
+// ─── Sales Report Tab（売上帳票：介護保険レンタル） ─────────────────────
+function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, currentOfficeId }: {
+  tenantId: string;
+  clients: Client[];
+  orderItems: OrderItem[];
+  orders: Order[];
+  equipment: Equipment[];
+  currentOfficeId: string | null;
+}) {
+  // 月選択（デフォルト：今月）
+  const [month, setMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [y, m] = month.split("-").map(Number);
+  const prevMonth = () => { const d = new Date(y, m - 2, 1); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+  const nextMonth = () => { const d = new Date(y, m, 1); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+  const toThisMonth = () => { const d = new Date(); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+
+  // データ: 売上帳票の手入力項目 + 書類チェック
+  const [salesRecords, setSalesRecords] = useState<import("@/lib/sales").SalesRecord[]>([]);
+  const [documents, setDocuments] = useState<Array<{ client_id: string; type: string }>>([]);
+  const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
+  const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const { getSalesRecords } = await import("@/lib/sales");
+        const [sr, docs, priceHist, ppRes] = await Promise.all([
+          getSalesRecords(tenantId),
+          supabase.from("client_documents").select("client_id, type").eq("tenant_id", tenantId),
+          getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
+          supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
+        ]);
+        setSalesRecords(sr);
+        setDocuments((docs.data ?? []) as Array<{ client_id: string; type: string }>);
+        setPriceHistory(priceHist);
+        setPurchasePrices((ppRes.data ?? []) as Array<{ product_code: string; supplier_id: string; purchase_price: number }>);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [tenantId, month, orderItems]);
+
+  // 当月の売上帳票行を生成（自動集計）
+  const rows = useMemo(() => {
+    const monthStart = `${month}-01`;
+    const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10);
+
+    type RowType = {
+      key: string;
+      orderItemId: string;
+      eventType: "start" | "end";
+      salesDate: string;
+      rType: "新規" | "追加" | "一部解約" | "全部解約";
+      isHalfMonth: boolean;
+      client: Client;
+      item: OrderItem;
+      order: Order;
+      equipmentName: string;
+      rentalPrice: number;  // 月額
+      purchasePrice: number;
+    };
+    const result: RowType[] = [];
+
+    // 月額取得（その月有効な rental_price、なければ equipment.rental_price）
+    const getMonthlyPrice = (productCode: string): number => {
+      // price_history from getPriceHistory: { product_code, rental_price, valid_from }
+      const hist = priceHistory
+        .filter((p) => p.product_code === productCode && p.valid_from <= monthEnd)
+        .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
+      if (hist.length > 0) return hist[0].rental_price;
+      const eq = equipment.find((e) => e.product_code === productCode);
+      return eq?.rental_price ?? 0;
+    };
+
+    // 仕入単価取得
+    const getPurchasePrice = (productCode: string, supplierId: string | null): number => {
+      if (!supplierId) return 0;
+      const p = purchasePrices.find((p) => p.product_code === productCode && p.supplier_id === supplierId);
+      return p?.purchase_price ?? 0;
+    };
+
+    for (const item of orderItems) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order) continue;
+      // 事業所フィルタ
+      if (currentOfficeId && order.office_id && order.office_id !== currentOfficeId) continue;
+      // 介護保険適用のみ
+      const pt = item.payment_type ?? order.payment_type;
+      if (pt !== "介護") continue;
+
+      const client = clients.find((c) => c.id === order.client_id);
+      if (!client) continue;
+      const eq = equipment.find((e) => e.product_code === item.product_code);
+      const equipmentName = eq?.name ?? item.product_code;
+
+      // ── レンタル開始イベント ──
+      if (item.rental_start_date && item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd) {
+        // 新規 vs 追加の判定: この開始日時点で同一利用者の他の介護レンタルが active なら「追加」
+        const hasPrior = orderItems.some((o2) => {
+          if (o2.id === item.id) return false;
+          const o2order = orders.find((oo) => oo.id === o2.order_id);
+          if (!o2order || o2order.client_id !== client.id) return false;
+          const o2pt = o2.payment_type ?? o2order.payment_type;
+          if (o2pt !== "介護") return false;
+          if (!o2.rental_start_date) return false;
+          if (o2.rental_start_date >= item.rental_start_date!) return false;  // 本アイテムより前に開始
+          if (o2.status === "cancelled") return false;
+          if (o2.status === "terminated" && o2.rental_end_date && o2.rental_end_date < item.rental_start_date!) return false;
+          return true;
+        });
+        const rType = hasPrior ? "追加" : "新規";
+        const day = parseInt(item.rental_start_date.split("-")[2]);
+        const isHalf = day >= 16;
+        result.push({
+          key: `${item.id}-start`,
+          orderItemId: item.id,
+          eventType: "start",
+          salesDate: item.rental_start_date,
+          rType,
+          isHalfMonth: isHalf,
+          client,
+          item,
+          order,
+          equipmentName,
+          rentalPrice: getMonthlyPrice(item.product_code),
+          purchasePrice: getPurchasePrice(item.product_code, item.supplier_id),
+        });
+      }
+
+      // ── レンタル終了イベント ──
+      if (item.status === "terminated" && item.rental_end_date && item.rental_end_date >= monthStart && item.rental_end_date <= monthEnd) {
+        // 一部解約 vs 全部解約: この終了日時点で他に active なアイテムが残るなら「一部解約」
+        const hasOtherActive = orderItems.some((o2) => {
+          if (o2.id === item.id) return false;
+          const o2order = orders.find((oo) => oo.id === o2.order_id);
+          if (!o2order || o2order.client_id !== client.id) return false;
+          const o2pt = o2.payment_type ?? o2order.payment_type;
+          if (o2pt !== "介護") return false;
+          if (!o2.rental_start_date) return false;
+          if (o2.status === "cancelled") return false;
+          if (o2.rental_start_date > item.rental_end_date!) return false;
+          if (o2.status === "terminated" && o2.rental_end_date && o2.rental_end_date <= item.rental_end_date!) return false;
+          return true;
+        });
+        const rType: "一部解約" | "全部解約" = hasOtherActive ? "一部解約" : "全部解約";
+        const day = parseInt(item.rental_end_date.split("-")[2]);
+        const isHalf = day <= 15;
+        result.push({
+          key: `${item.id}-end`,
+          orderItemId: item.id,
+          eventType: "end",
+          salesDate: item.rental_end_date,
+          rType,
+          isHalfMonth: isHalf,
+          client,
+          item,
+          order,
+          equipmentName,
+          rentalPrice: getMonthlyPrice(item.product_code),
+          purchasePrice: getPurchasePrice(item.product_code, item.supplier_id),
+        });
+      }
+    }
+
+    // 売上日昇順
+    return result.sort((a, b) => a.salesDate.localeCompare(b.salesDate));
+  }, [orderItems, orders, clients, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
+
+  // 書類チェック関数
+  const hasDoc = (clientId: string, docType: string) =>
+    documents.some((d) => d.client_id === clientId && d.type === docType);
+  const hasContract = (clientId: string) =>
+    hasDoc(clientId, "contract") && hasDoc(clientId, "important_matters");
+
+  // 売上帳票レコード（手入力分）を取得
+  const getSalesRec = (orderItemId: string, eventType: "start" | "end") =>
+    salesRecords.find((s) => s.order_item_id === orderItemId && s.event_type === eventType);
+
+  // セル編集
+  const saveSalesField = async (orderItemId: string, eventType: "start" | "end", field: "cancellation_reason" | "sales_rep" | "delivery_person" | "input_by" | "notes", value: string) => {
+    try {
+      const { upsertSalesRecord, getSalesRecords } = await import("@/lib/sales");
+      await upsertSalesRecord(tenantId, orderItemId, eventType, { [field]: value || null });
+      const sr = await getSalesRecords(tenantId);
+      setSalesRecords(sr);
+    } catch (e) {
+      console.error(e);
+      alert("保存に失敗しました");
+    }
+  };
+
+  // CSV 出力
+  const exportCSV = () => {
+    const headers = [
+      "NO", "売上日", "入力者", "R項目", "契約書", "R契約日", "R解約日", "解約理由",
+      "提案書", "個別援助計画", "紹介機関", "居宅", "ケアマネージャー様氏名",
+      "受注担当者名", "納品・回収", "利用者名", "商品名",
+      "R売上(1ヶ月分)", "R売上(半月分)", "R引上金額(1ヶ月分)", "R引上金額(半月分)", "仕入金額",
+    ];
+    const rowsCsv = rows.map((r, idx) => {
+      const sr = getSalesRec(r.orderItemId, r.eventType);
+      const revenueFull = r.eventType === "start" && !r.isHalfMonth ? r.rentalPrice : "";
+      const revenueHalf = r.eventType === "start" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : "";
+      const liftFull = r.eventType === "end" && !r.isHalfMonth ? r.rentalPrice : "";
+      const liftHalf = r.eventType === "end" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : "";
+      return [
+        idx + 1,
+        r.salesDate,
+        sr?.input_by ?? "",
+        r.rType,
+        hasContract(r.client.id) ? "✓" : "",
+        r.item.rental_start_date ?? "",
+        r.item.rental_end_date ?? "",
+        sr?.cancellation_reason ?? "",
+        hasDoc(r.client.id, "proposal") ? "✓" : "",
+        hasDoc(r.client.id, "care_plan") ? "✓" : "",
+        r.client.referrer_org ?? "",
+        r.client.care_manager_org ?? "",
+        r.client.care_manager ?? "",
+        sr?.sales_rep ?? "",
+        sr?.delivery_person ?? "",
+        r.client.name,
+        r.equipmentName,
+        revenueFull,
+        revenueHalf,
+        liftFull,
+        liftHalf,
+        r.purchasePrice || "",
+      ];
+    });
+    const csvText = [headers, ...rowsCsv]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `売上帳票_介護保険レンタル_${month}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      {/* ツールバー（月ナビ + CSV） */}
+      <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
+          <button onClick={prevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={14} /></button>
+          <span className="font-semibold text-gray-800 px-2">{y}年 {m}月</span>
+          <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
+        </div>
+        <button onClick={toThisMonth} className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">本日の月へ</button>
+        <span className="border border-blue-500 rounded bg-blue-100 px-2.5 py-1 text-blue-800 font-semibold">介護保険レンタル</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-gray-500 text-xs">{rows.length} 件</span>
+          <button onClick={exportCSV}
+            className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
+            <Download size={13} />CSV出力
+          </button>
+        </div>
+      </div>
+
+      {/* テーブル */}
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-indigo-400" /></div>
+      ) : rows.length === 0 ? (
+        <p className="text-center text-sm text-gray-400 py-16">この月に該当する売上データがありません</p>
+      ) : (
+        <div className="flex-1 overflow-auto">
+          <table className="text-xs border-collapse min-w-max">
+            <thead className="bg-gray-50 sticky top-0 z-10">
+              <tr>
+                {[
+                  "NO", "売上日", "入力者", "R項目", "契約", "R契約日", "R解約日", "解約理由",
+                  "提案", "援助計画", "紹介機関", "居宅", "ケアマネ様氏名",
+                  "受注担当", "納品・回収", "利用者名", "商品名",
+                  "R売上\n(1ヶ月)", "R売上\n(半月)", "R引上\n(1ヶ月)", "R引上\n(半月)", "仕入",
+                ].map((h) => (
+                  <th key={h} className="border border-gray-300 px-2 py-1 font-medium text-gray-600 whitespace-pre-line text-center">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => {
+                const sr = getSalesRec(r.orderItemId, r.eventType);
+                const revenueFull = r.eventType === "start" && !r.isHalfMonth ? r.rentalPrice : null;
+                const revenueHalf = r.eventType === "start" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : null;
+                const liftFull = r.eventType === "end" && !r.isHalfMonth ? r.rentalPrice : null;
+                const liftHalf = r.eventType === "end" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : null;
+                const yen = (v: number | null) => v !== null ? `¥${v.toLocaleString()}` : "";
+                const rTypeColor =
+                  r.rType === "新規" ? "bg-blue-50 text-blue-700" :
+                  r.rType === "追加" ? "bg-emerald-50 text-emerald-700" :
+                  r.rType === "一部解約" ? "bg-amber-50 text-amber-700" :
+                  "bg-red-50 text-red-700";
+                return (
+                  <tr key={r.key} className="hover:bg-gray-50">
+                    <td className="border border-gray-200 px-2 py-1 text-center text-gray-500">{idx + 1}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.salesDate}</td>
+                    <td className="border border-gray-200 px-0 py-0">
+                      <input type="text" defaultValue={sr?.input_by ?? ""}
+                        onBlur={(e) => saveSalesField(r.orderItemId, r.eventType, "input_by", e.target.value)}
+                        className="w-24 px-2 py-1 outline-none focus:bg-yellow-50" />
+                    </td>
+                    <td className={`border border-gray-200 px-2 py-1 text-center font-medium ${rTypeColor}`}>{r.rType}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-center">{hasContract(r.client.id) ? "✓" : ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.item.rental_start_date ?? ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.item.rental_end_date ?? ""}</td>
+                    <td className="border border-gray-200 px-0 py-0">
+                      <input type="text" defaultValue={sr?.cancellation_reason ?? ""}
+                        onBlur={(e) => saveSalesField(r.orderItemId, r.eventType, "cancellation_reason", e.target.value)}
+                        className="w-32 px-2 py-1 outline-none focus:bg-yellow-50" />
+                    </td>
+                    <td className="border border-gray-200 px-2 py-1 text-center">{hasDoc(r.client.id, "proposal") ? "✓" : ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-center">{hasDoc(r.client.id, "care_plan") ? "✓" : ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.referrer_org ?? ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.care_manager_org ?? ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.client.care_manager ?? ""}</td>
+                    <td className="border border-gray-200 px-0 py-0">
+                      <input type="text" defaultValue={sr?.sales_rep ?? ""}
+                        onBlur={(e) => saveSalesField(r.orderItemId, r.eventType, "sales_rep", e.target.value)}
+                        className="w-24 px-2 py-1 outline-none focus:bg-yellow-50" />
+                    </td>
+                    <td className="border border-gray-200 px-0 py-0">
+                      <input type="text" defaultValue={sr?.delivery_person ?? ""}
+                        onBlur={(e) => saveSalesField(r.orderItemId, r.eventType, "delivery_person", e.target.value)}
+                        className="w-24 px-2 py-1 outline-none focus:bg-yellow-50" />
+                    </td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap font-medium text-gray-800">{r.client.name}</td>
+                    <td className="border border-gray-200 px-2 py-1 whitespace-nowrap">{r.equipmentName}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(revenueFull)}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(revenueHalf)}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(liftFull)}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(liftHalf)}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{r.purchasePrice ? `¥${r.purchasePrice.toLocaleString()}` : ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
 
