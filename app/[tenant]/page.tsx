@@ -3892,8 +3892,61 @@ function ClientDetail({
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
-  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
+  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
+  // 居宅/ケアマネマスタ（ドロップダウン用）
+  const [careOfficesList, setCareOfficesList] = useState<Array<{ id: string; name: string }>>([]);
+  const [careManagersList, setCareManagersList] = useState<Array<{ id: string; care_office_id: string; name: string }>>([]);
+  useEffect(() => {
+    (async () => {
+      const [offRes, mgrRes] = await Promise.all([
+        supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId).order("name"),
+        supabase.from("care_managers").select("id, care_office_id, name").eq("tenant_id", tenantId).eq("active", true).order("name"),
+      ]);
+      setCareOfficesList((offRes.data ?? []) as Array<{ id: string; name: string }>);
+      setCareManagersList((mgrRes.data ?? []) as Array<{ id: string; care_office_id: string; name: string }>);
+    })();
+  }, [tenantId]);
+
+  // 居宅選択時（"__ADD__" で新規追加プロンプト）
+  async function handleOfficeChange(value: string) {
+    if (value === "__ADD__") {
+      const name = window.prompt("新しい居宅介護支援事業所の名前を入力してください");
+      if (!name?.trim()) return;
+      const { data, error } = await supabase.from("care_offices").insert({ tenant_id: tenantId, name: name.trim() }).select("id, name").single();
+      if (error) { alert("追加に失敗しました\n" + error.message); return; }
+      const newOffice = data as { id: string; name: string };
+      setCareOfficesList((prev) => [...prev, newOffice].sort((a, b) => a.name.localeCompare(b.name, "ja")));
+      setBasicForm((f) => ({ ...f, care_office_id: newOffice.id, care_manager_org: newOffice.name, care_manager_id: "", care_manager: "" }));
+      return;
+    }
+    const office = careOfficesList.find((o) => o.id === value);
+    setBasicForm((f) => ({
+      ...f,
+      care_office_id: value,
+      care_manager_org: office?.name ?? "",
+      // 居宅を変えたらケアマネはクリア（事業所ごとに紐付いているため）
+      care_manager_id: "",
+      care_manager: "",
+    }));
+  }
+
+  // ケアマネ選択時
+  async function handleManagerChange(value: string) {
+    if (value === "__ADD__") {
+      if (!basicForm.care_office_id) { alert("先に居宅を選択してください"); return; }
+      const name = window.prompt("新しいケアマネジャーの氏名を入力してください");
+      if (!name?.trim()) return;
+      const { data, error } = await supabase.from("care_managers").insert({ tenant_id: tenantId, care_office_id: basicForm.care_office_id, name: name.trim(), active: true }).select("id, care_office_id, name").single();
+      if (error) { alert("追加に失敗しました\n" + error.message); return; }
+      const newMgr = data as { id: string; care_office_id: string; name: string };
+      setCareManagersList((prev) => [...prev, newMgr].sort((a, b) => a.name.localeCompare(b.name, "ja")));
+      setBasicForm((f) => ({ ...f, care_manager_id: newMgr.id, care_manager: newMgr.name }));
+      return;
+    }
+    const mgr = careManagersList.find((m) => m.id === value);
+    setBasicForm((f) => ({ ...f, care_manager_id: value, care_manager: mgr?.name ?? "" }));
+  }
   // 本登録モーダル（仮登録→正式登録）
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [promoteSaving, setPromoteSaving] = useState(false);
@@ -4566,8 +4619,20 @@ function ClientDetail({
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
-                  <button onClick={async () => { setBasicSaving(true); await supabase.from("clients").update(basicForm).eq("id", client.id); setBasicSaving(false); setEditingBasic(false); Object.assign(client, basicForm); }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
+                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                  <button onClick={async () => {
+                    setBasicSaving(true);
+                    // 空文字のIDは NULL に変換して保存
+                    const payload = {
+                      ...basicForm,
+                      care_office_id: basicForm.care_office_id || null,
+                      care_manager_id: basicForm.care_manager_id || null,
+                    };
+                    await supabase.from("clients").update(payload).eq("id", client.id);
+                    setBasicSaving(false);
+                    setEditingBasic(false);
+                    Object.assign(client, payload);
+                  }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
                 </div>
               )}
             </div>
@@ -4575,9 +4640,7 @@ function ClientDetail({
               ["氏名", "name"],["ふりがな","furigana"],["性別","gender"],
               ["電話","phone"],["携帯","mobile"],["住所","address"],
               ["紹介機関","referrer_org"],
-              ["居宅","care_manager_org"],["ケアマネ","care_manager"],
-              ["メモ","memo"],
-            ] as [string, "name"|"furigana"|"gender"|"phone"|"mobile"|"address"|"care_manager"|"care_manager_org"|"referrer_org"|"memo"][]).map(([label, key]) => (
+            ] as [string, "name"|"furigana"|"gender"|"phone"|"mobile"|"address"|"referrer_org"][]).map(([label, key]) => (
               <div key={key} className="flex items-start gap-3 border-b border-gray-50 pb-2">
                 <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">{label}</span>
                 {editingBasic ? (
@@ -4592,6 +4655,69 @@ function ClientDetail({
                 )}
               </div>
             ))}
+            {/* 居宅（マスタ連携） */}
+            <div className="flex items-start gap-3 border-b border-gray-50 pb-2">
+              <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">居宅</span>
+              {editingBasic ? (
+                <select
+                  value={basicForm.care_office_id}
+                  onChange={(e) => handleOfficeChange(e.target.value)}
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400 bg-white"
+                >
+                  <option value="">—</option>
+                  {careOfficesList.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                  <option value="__ADD__">＋ 新規追加...</option>
+                </select>
+              ) : (
+                <span className="flex-1 text-sm text-gray-800">
+                  {client.care_office_id
+                    ? (careOfficesList.find((o) => o.id === client.care_office_id)?.name ?? client.care_manager_org ?? <span className="text-gray-300">—</span>)
+                    : (client.care_manager_org || <span className="text-gray-300">—</span>)}
+                </span>
+              )}
+            </div>
+            {/* ケアマネ（マスタ連携。居宅が選択されていないと選べない） */}
+            <div className="flex items-start gap-3 border-b border-gray-50 pb-2">
+              <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">ケアマネ</span>
+              {editingBasic ? (
+                <select
+                  value={basicForm.care_manager_id}
+                  onChange={(e) => handleManagerChange(e.target.value)}
+                  disabled={!basicForm.care_office_id}
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400 bg-white disabled:bg-gray-50 disabled:text-gray-400"
+                >
+                  <option value="">—</option>
+                  {careManagersList
+                    .filter((m) => m.care_office_id === basicForm.care_office_id)
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  <option value="__ADD__">＋ 新規追加...</option>
+                </select>
+              ) : (
+                <span className="flex-1 text-sm text-gray-800">
+                  {client.care_manager_id
+                    ? (careManagersList.find((m) => m.id === client.care_manager_id)?.name ?? client.care_manager ?? <span className="text-gray-300">—</span>)
+                    : (client.care_manager || <span className="text-gray-300">—</span>)}
+                </span>
+              )}
+            </div>
+            {/* メモ */}
+            <div className="flex items-start gap-3 border-b border-gray-50 pb-2">
+              <span className="w-20 shrink-0 text-xs text-gray-400 pt-0.5">メモ</span>
+              {editingBasic ? (
+                <input
+                  type="text"
+                  value={basicForm.memo}
+                  onChange={(e) => setBasicForm((f) => ({ ...f, memo: e.target.value }))}
+                  className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400"
+                />
+              ) : (
+                <span className="flex-1 text-sm text-gray-800">{client.memo || <span className="text-gray-300">—</span>}</span>
+              )}
+            </div>
             {/* 居宅・施設等（事業所/施設フラグ） */}
             <div className="flex items-center gap-3 border-b border-gray-50 pb-2">
               <span className="w-20 shrink-0 text-xs text-gray-400">居宅・施設等</span>
