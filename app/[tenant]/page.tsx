@@ -9828,7 +9828,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     </div>
   );
 
-  // CSV取込：厚労省オープンデータから住所・電話・FAX を補完
+  // CSV取込：厚労省オープンデータを care_offices_opendata に保存
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const handleImportOpendata = async (file: File) => {
@@ -9849,47 +9849,48 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       };
       const header = parseCsvLine(lines[0]);
       const col = (n: string) => header.indexOf(n);
-      const iPref = col("都道府県名"), iName = col("事業所名"),
-            iAddr = col("住所"), iPhone = col("電話番号"), iFax = col("FAX番号");
-      if (iPref < 0 || iName < 0) { alert("必要な列（都道府県名 / 事業所名）が見つかりません"); return; }
+      const iPref = col("都道府県名"), iCity = col("市区町村名"), iName = col("事業所名"),
+            iKana = col("事業所名カナ"), iSvc = col("サービスの種類"),
+            iAddr = col("住所"), iAddrDet = col("方書（ビル名等）"),
+            iPhone = col("電話番号"), iFax = col("FAX番号"),
+            iCorp = col("法人の名称"), iCorpNum = col("法人番号"),
+            iOfficeNum = col("事業所番号"), iUrl = col("URL"),
+            iLat = col("緯度"), iLng = col("経度");
+      if (iPref < 0 || iName < 0 || iOfficeNum < 0) { alert("必要な列（都道府県名 / 事業所名 / 事業所番号）が見つかりません"); return; }
 
       // 千葉県分のみ抽出
       const chibaRows = lines.slice(1).map(parseCsvLine).filter((r) => r[iPref] === "千葉県");
-      const byName = new Map<string, { addr: string; phone: string; fax: string }>();
-      for (const r of chibaRows) {
-        const name = (r[iName] ?? "").trim();
-        if (!name) continue;
-        byName.set(name, {
-          addr: (r[iAddr] ?? "").trim(),
-          phone: (r[iPhone] ?? "").trim(),
-          fax: (r[iFax] ?? "").trim(),
-        });
-      }
+      const rows = chibaRows
+        .map((r) => ({
+          office_number: (r[iOfficeNum] ?? "").trim(),
+          prefecture: (r[iPref] ?? "").trim(),
+          city: iCity >= 0 ? (r[iCity] ?? "").trim() : null,
+          name: (r[iName] ?? "").trim(),
+          name_kana: iKana >= 0 ? (r[iKana] ?? "").trim() : null,
+          service_type: iSvc >= 0 ? (r[iSvc] ?? "").trim() : null,
+          address: (r[iAddr] ?? "").trim() || null,
+          address_detail: iAddrDet >= 0 ? (r[iAddrDet] ?? "").trim() || null : null,
+          phone_number: (r[iPhone] ?? "").trim() || null,
+          fax_number: (r[iFax] ?? "").trim() || null,
+          corp_name: iCorp >= 0 ? (r[iCorp] ?? "").trim() || null : null,
+          corp_number: iCorpNum >= 0 ? (r[iCorpNum] ?? "").trim() || null : null,
+          url: iUrl >= 0 ? (r[iUrl] ?? "").trim() || null : null,
+          latitude: iLat >= 0 && r[iLat] ? Number(r[iLat]) : null,
+          longitude: iLng >= 0 && r[iLng] ? Number(r[iLng]) : null,
+          imported_at: new Date().toISOString(),
+        }))
+        .filter((r) => r.office_number && r.name);
 
-      // 既存マスタと名前一致で補完
-      let filled = 0, skipped = 0;
-      for (const o of offices) {
-        const data = byName.get(o.name);
-        if (!data) { skipped++; continue; }
-        // 既存値がある欄は上書きしない。全て埋まってるならスキップ
-        const patch: { address?: string; phone_number?: string; fax_number?: string } = {};
-        if (!o.address && data.addr) patch.address = data.addr;
-        if (!o.phone_number && data.phone) patch.phone_number = data.phone;
-        if (!o.fax_number && data.fax) patch.fax_number = data.fax;
-        if (Object.keys(patch).length === 0) { skipped++; continue; }
-        await upsertCareOffice(tenantId, {
-          id: o.id,
-          name: o.name,
-          fax_number: patch.fax_number ?? o.fax_number ?? null,
-          phone_number: patch.phone_number ?? o.phone_number ?? null,
-          address: patch.address ?? o.address ?? null,
-          email: o.email ?? null,
-          notes: o.notes ?? null,
-        });
-        filled++;
+      // 500件ずつバッチで upsert
+      const BATCH = 500;
+      let inserted = 0;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH);
+        const { error } = await supabase.from("care_offices_opendata").upsert(batch, { onConflict: "office_number" });
+        if (error) throw error;
+        inserted += batch.length;
       }
-      await load();
-      alert(`取込完了\n補完：${filled}件\nスキップ：${skipped}件\n（CSV にあってマスタに無い事業所は登録しません）`);
+      alert(`取込完了\n千葉県 ${inserted} 件をオープンデータに登録しました。\n「＋ 事業所追加」から検索して選択できます。`);
     } catch (e) {
       const msg = (e as { message?: string })?.message ?? String(e);
       alert(`取込に失敗しました\n${msg}`);
@@ -9898,6 +9899,42 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       if (importInputRef.current) importInputRef.current.value = "";
     }
   };
+
+  // ── オープンデータ検索（＋事業所追加 内で使う） ──
+  const [opendataQuery, setOpendataQuery] = useState("");
+  const [opendataResults, setOpendataResults] = useState<Array<{
+    office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null; city: string | null;
+  }>>([]);
+  const [opendataSearching, setOpendataSearching] = useState(false);
+
+  async function searchOpendata(q: string) {
+    setOpendataQuery(q);
+    if (q.trim().length < 2) { setOpendataResults([]); return; }
+    setOpendataSearching(true);
+    try {
+      const { data } = await supabase
+        .from("care_offices_opendata")
+        .select("office_number, name, address, phone_number, fax_number, city")
+        .eq("prefecture", "千葉県")
+        .ilike("name", `%${q.trim()}%`)
+        .limit(30);
+      setOpendataResults((data ?? []) as typeof opendataResults);
+    } finally {
+      setOpendataSearching(false);
+    }
+  }
+
+  function pickOpendata(row: { name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
+    setForm({
+      name: row.name,
+      address: row.address ?? "",
+      phone_number: row.phone_number ?? "",
+      fax_number: row.fax_number ?? "",
+      email: "",
+    });
+    setOpendataQuery("");
+    setOpendataResults([]);
+  }
 
   return (
     <div>
@@ -9931,13 +9968,46 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
           <>
             {addingNew && (
               <div className="p-4 border-b border-gray-100 space-y-2 bg-emerald-50">
+                {/* オープンデータ検索 */}
+                <div className="bg-white rounded-lg border border-blue-200 p-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Search size={14} className="text-blue-500 shrink-0" />
+                    <input
+                      type="text"
+                      value={opendataQuery}
+                      onChange={(e) => searchOpendata(e.target.value)}
+                      placeholder="オープンデータから検索（2文字以上）"
+                      className="flex-1 text-xs px-2 py-1 border border-blue-200 rounded outline-none focus:ring-1 focus:ring-blue-300"
+                    />
+                  </div>
+                  {opendataSearching && <p className="text-xs text-gray-400 text-center py-1">検索中...</p>}
+                  {opendataResults.length > 0 && (
+                    <ul className="max-h-48 overflow-y-auto bg-gray-50 rounded border border-gray-100 divide-y divide-gray-100">
+                      {opendataResults.map((r) => (
+                        <li key={r.office_number}>
+                          <button
+                            type="button"
+                            onClick={() => pickOpendata(r)}
+                            className="w-full px-2 py-1.5 text-left text-xs hover:bg-blue-50"
+                          >
+                            <p className="font-medium text-gray-800">{r.name}</p>
+                            <p className="text-[11px] text-gray-500 truncate">{r.city ?? ""} {r.address ?? ""}</p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {opendataQuery.trim().length >= 2 && !opendataSearching && opendataResults.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-1">該当なし（オープンデータ未取込 or 事業所名不一致）</p>
+                  )}
+                </div>
                 <FormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" />
                 <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                 <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                 <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
                 <FormRow label="メール" field="email" placeholder="example@example.com" />
                 <div className="flex gap-2 pt-1">
-                  <button onClick={() => setAddingNew(false)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
+                  <button onClick={() => { setAddingNew(false); setOpendataQuery(""); setOpendataResults([]); }} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
                   <button onClick={handleSave} disabled={saving || !form.name?.trim()} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
                     {saving ? "保存中..." : "保存"}
                   </button>
