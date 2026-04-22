@@ -9763,7 +9763,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   const startNew = () => {
     setAddingNew(true);
     setEditingId(null);
-    setForm({ name: "", fax_number: "", phone_number: "", address: "", email: "" });
+    setForm({ name: "", fax_number: "", phone_number: "", address: "", email: "", office_number: "" });
   };
 
   const handleSave = async () => {
@@ -9778,6 +9778,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
         address: form.address ?? null,
         email: form.email ?? null,
         notes: form.notes ?? null,
+        office_number: form.office_number?.trim() || null,
       });
       setEditingId(null);
       setAddingNew(false);
@@ -9924,14 +9925,16 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     }
   }
 
-  function pickOpendata(row: { name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
-    setForm({
+  function pickOpendata(row: { office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
+    // 編集中の場合は既存の email/notes を保持、新規の場合は空で開始
+    setForm((prev) => ({
+      ...prev,
       name: row.name,
       address: row.address ?? "",
       phone_number: row.phone_number ?? "",
       fax_number: row.fax_number ?? "",
-      email: "",
-    });
+      office_number: row.office_number,
+    }));
     setOpendataQuery("");
     setOpendataResults([]);
   }
@@ -10002,6 +10005,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                   )}
                 </div>
                 <FormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" />
+                <FormRow label="事業所番号" field="office_number" placeholder="1270102658" />
                 <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                 <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                 <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
@@ -10056,9 +10060,10 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                         {opendataQuery.trim().length >= 2 && !opendataSearching && opendataResults.length === 0 && (
                           <p className="text-xs text-gray-400 text-center py-1">該当なし</p>
                         )}
-                        <p className="text-[10px] text-gray-500 px-1">選ぶと事業所名・住所・電話・FAXが上書きされます（ID はそのまま）</p>
+                        <p className="text-[10px] text-gray-500 px-1">選ぶと事業所名・事業所番号・住所・電話・FAXが上書きされます（ID はそのまま）</p>
                       </div>
                       <FormRow label="事業所名 *" field="name" />
+                      <FormRow label="事業所番号" field="office_number" placeholder="1270102658" />
                       <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                       <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                       <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
@@ -10084,6 +10089,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                             {office.address && <span className="text-xs text-gray-400">{office.address}</span>}
                             {office.fax_number && <span className="text-xs text-gray-400">FAX: {office.fax_number}</span>}
                             {office.phone_number && <span className="text-xs text-gray-400">TEL: {office.phone_number}</span>}
+                            {office.office_number && <span className="text-xs text-gray-400">事業所番号: {office.office_number}</span>}
                           </div>
                         </button>
                         <div className="flex gap-1.5 shrink-0">

@@ -9,6 +9,8 @@ export type CareOffice = {
   address: string | null;
   email: string | null;
   notes: string | null;
+  // 厚労省介護サービス情報公表システムの事業所番号（10桁）
+  office_number: string | null;
   created_at: string;
 };
 
