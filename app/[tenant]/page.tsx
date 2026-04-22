@@ -9939,7 +9939,11 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
 
   function pickOpendata(row: { office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
     // 既存の事業所番号と異なる場合は警告
-    const existingOfficeNum = (form.office_number ?? "").trim();
+    // 編集中は元の office.office_number も参照（form がまだ未反映の可能性）
+    const existingFromForm = (form.office_number ?? "").trim();
+    const existingFromOffice = editingId ? (offices.find((o) => o.id === editingId)?.office_number ?? "").trim() : "";
+    const existingOfficeNum = existingFromForm || existingFromOffice;
+    console.log("[pickOpendata] form.office_number=", form.office_number, "editing.office_number=", existingFromOffice, "existing=", existingOfficeNum, "selected=", row.office_number);
     if (existingOfficeNum && existingOfficeNum !== row.office_number) {
       const ok = window.confirm(
         `⚠️ 事業所番号が異なります\n\n` +
