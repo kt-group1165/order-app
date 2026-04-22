@@ -9938,6 +9938,18 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   }
 
   function pickOpendata(row: { office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
+    // 既存の事業所番号と異なる場合は警告
+    const existingOfficeNum = (form.office_number ?? "").trim();
+    if (existingOfficeNum && existingOfficeNum !== row.office_number) {
+      const ok = window.confirm(
+        `⚠️ 事業所番号が異なります\n\n` +
+        `現在: ${existingOfficeNum}\n` +
+        `選択: ${row.office_number}（${row.name}）\n\n` +
+        `別の事業所を選択しようとしています。本当に上書きしますか？\n` +
+        `（この居宅に紐付いている利用者・ケアマネも実質的に別事業所扱いになります）`
+      );
+      if (!ok) return;
+    }
     // 編集中の場合は既存の email/notes を保持、新規の場合は空で開始
     setForm((prev) => ({
       ...prev,
