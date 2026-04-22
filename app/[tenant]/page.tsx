@@ -6121,7 +6121,31 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [offices, setOffices] = useState<Office[]>([]);
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
+  const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const [invoiceClient, setInvoiceClient] = useState<Client | null>(null);
+
+  // 会社情報（請求書／領収書モーダル用）
+  const companyInfoForDoc: CompanyInfo = useMemo(() => {
+    if (!tenantInfo) return COMPANY_INFO_DEFAULTS;
+    return {
+      businessNumber:      tenantInfo.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
+      companyName:         tenantInfo.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
+      companyAddress:      tenantInfo.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
+      tel:                 tenantInfo.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
+      fax:                 tenantInfo.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
+      staffName:           tenantInfo.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
+      serviceArea:         tenantInfo.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
+      businessDays:        tenantInfo.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
+      businessHours:       tenantInfo.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
+      staffManagerFull:    tenantInfo.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
+      staffManagerPart:    tenantInfo.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
+      staffSpecialistFull: tenantInfo.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
+      staffSpecialistPart: tenantInfo.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
+      staffAdminFull:      tenantInfo.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
+      staffAdminPart:      tenantInfo.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
+    };
+  }, [tenantInfo]);
 
   useEffect(() => {
     Promise.all([
@@ -6142,6 +6166,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       setOffices(offs);
       setInsuranceRecords(insRaw as ClientInsuranceRecord[]);
       setHospitalizations(hospRaw as ClientHospitalization[]);
+      // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
+      const codes = [...new Set(items.map((i: OrderItem) => i.product_code))];
+      if (codes.length > 0) {
+        getPriceHistory(tenantId, codes).then(setPriceHistoryAll).catch(() => {});
+      }
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId]);
   const [billingMonth, setBillingMonth] = useState(() => {
@@ -6725,6 +6754,10 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                         onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
                         className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
                       >提供表</button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setInvoiceClient(client); }}
+                        className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+                      >📄 請求書発行</button>
                     </div>
                     <div className="px-2 py-2.5 border-l border-gray-100 text-right font-mono">
                       {isLate ? <span className="text-gray-300">—</span> : totalUnits.toLocaleString()}
@@ -6840,6 +6873,22 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
           hospitalizations={hospitalizations.filter(h => h.client_id === rentalGridClient.client.id)}
           month={billingMonth}
           onClose={() => setRentalGridClient(null)}
+        />
+      )}
+
+      {/* ── 請求書／領収書モーダル ── */}
+      {invoiceClient && (
+        <InvoiceReceiptModal
+          client={invoiceClient}
+          orders={orders}
+          orderItems={orderItems}
+          equipment={equipment}
+          companyInfo={companyInfoForDoc}
+          priceHistory={priceHistoryAll}
+          tenantId={tenantId}
+          defaultMonth={billingMonth}
+          hospitalizations={hospitalizations.filter(h => h.client_id === invoiceClient.id)}
+          onClose={() => setInvoiceClient(null)}
         />
       )}
     </div>
@@ -13090,6 +13139,555 @@ const REQUEST_LABELS = [
   "当月分のサービス提供票をお送りください。",
   "この度の変更後のサービス提供票をお送り下さい。",
 ];
+
+// ─── 請求書／領収書 モーダル ───────────────────────────────────────────────
+// 介護保険対象レンタルの当月利用料を集計し、請求書または領収書として A4 印刷
+// 可能なプレビューで表示する。保存時には invoices テーブルに番号を採番して
+// upsert し、再発行時は同じ番号を再利用する。
+function InvoiceReceiptModal({
+  client,
+  orders,
+  orderItems,
+  equipment,
+  companyInfo,
+  priceHistory,
+  tenantId,
+  defaultMonth,
+  hospitalizations,
+  onClose,
+}: {
+  client: Client;
+  orders: Order[];
+  orderItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  priceHistory: EquipmentPriceHistory[];
+  tenantId: string;
+  defaultMonth: string;  // YYYY-MM
+  hospitalizations: ClientHospitalization[];
+  onClose: () => void;
+}) {
+  const [targetMonth, setTargetMonth] = useState(defaultMonth);
+  const [mode, setMode] = useState<"invoice" | "receipt">("invoice");
+  const [saving, setSaving] = useState(false);
+  const [invoiceNumber, setInvoiceNumber] = useState<number | null>(null);
+  const [yearIssued, setYearIssued] = useState<number | null>(null);
+  const [issuedDate, setIssuedDate] = useState<string | null>(null);
+  const [loadingExisting, setLoadingExisting] = useState(true);
+
+  const [y, m] = targetMonth.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const monthStartStr = `${targetMonth}-01`;
+  const monthEndStr = `${targetMonth}-${String(daysInMonth).padStart(2, "0")}`;
+
+  // 対象月に発生した介護保険レンタル明細
+  const careItems = useMemo(() => {
+    const clientOrderIds = new Set(orders.filter(o => o.client_id === client.id).map(o => o.id));
+    const resolvePay = (i: OrderItem): "介護" | "自費" | "特価自費" => {
+      if (i.payment_type) return i.payment_type;
+      return orders.find(o => o.id === i.order_id)?.payment_type ?? "介護";
+    };
+    return orderItems.filter((item) => {
+      if (!clientOrderIds.has(item.order_id)) return false;
+      if (resolvePay(item) !== "介護") return false;
+      if (!item.rental_start_date) return false;
+      if (item.rental_start_date > monthEndStr) return false;
+      if (item.status === "terminated" && item.rental_end_date && item.rental_end_date < monthStartStr) return false;
+      if (item.status !== "rental_started" && item.status !== "terminated") return false;
+      return true;
+    }).sort((a, b) => {
+      const na = equipment.find(e => e.product_code === a.product_code)?.name ?? a.product_code;
+      const nb = equipment.find(e => e.product_code === b.product_code)?.name ?? b.product_code;
+      return na.localeCompare(nb, "ja");
+    });
+  }, [orders, orderItems, equipment, client.id, monthStartStr, monthEndStr]);
+
+  const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+  const histPrice = (code: string, ym: string) =>
+    getPriceForMonth(priceHistory, code, ym) ?? undefined;
+
+  // 対象月の請求対象日（入院除外を考慮した開始〜終了）
+  const periodInfo = useMemo(() => {
+    const pld = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+    const billingDays = new Set<number>();
+    for (const item of careItems) {
+      const start = pld(item.rental_start_date!);
+      const end = item.rental_end_date ? pld(item.rental_end_date) : new Date(y, m, 0);
+      for (let d = 1; d <= daysInMonth; d++) {
+        const date = new Date(y, m - 1, d);
+        if (date >= start && date <= end) {
+          const inHosp = hospitalizations.some(h => {
+            const admit = pld(h.admission_date);
+            const discharge = h.discharge_date ? pld(h.discharge_date) : new Date(y, m, 0);
+            return date >= admit && date <= discharge;
+          });
+          if (!inHosp) billingDays.add(d);
+        }
+      }
+    }
+    const sortedDays = [...billingDays].sort((a, b) => a - b);
+    const firstDay = sortedDays[0] ?? null;
+    const lastDay = sortedDays[sortedDays.length - 1] ?? null;
+    return { billingDays, firstDay, lastDay };
+  }, [careItems, hospitalizations, y, m, daysInMonth]);
+
+  // 明細行の単位数・金額を算出
+  const detailRows = useMemo(() => {
+    return careItems.map((item) => {
+      const eq = getEq(item.product_code);
+      const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
+      const units = calcMonthUnits(item, y, m, histPrice(item.product_code, targetMonth)) ?? 0;
+      const quantity = item.quantity || 1;
+      const totalUnits = units * quantity;
+      // 課税区分（現状 equipment に持たせていないので一律「非課税」扱い）
+      const isTaxable = false;
+      return {
+        item,
+        eqName: eq?.name ?? item.product_code,
+        category: eq?.category ?? "",
+        price,
+        units,
+        quantity,
+        totalUnits,
+        isTaxable,
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [careItems, priceHistory, targetMonth, y, m]);
+
+  const totalUnits = detailRows.reduce((s, r) => s + r.totalUnits, 0);
+  const insuredAmount = totalUnits * 10;
+  const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
+  const copayRate = 100 - benefitRate;
+  const copayAmount = Math.floor(insuredAmount * copayRate / 100);
+
+  // 課税分・非課税分（現状は全部非課税）
+  const taxableCopay = detailRows.reduce((s, r) => {
+    if (!r.isTaxable) return s;
+    return s + Math.floor(r.totalUnits * 10 * copayRate / 100);
+  }, 0);
+  const nonTaxableCopay = copayAmount - taxableCopay;
+  const taxAmount = Math.floor(taxableCopay * 10 / 110); // 課税分に含まれる消費税（税込想定）
+  const taxableBase = taxableCopay - taxAmount;
+
+  // 既存番号のチェック（対象月で既に発行済みなら再利用）
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingExisting(true);
+    setInvoiceNumber(null);
+    setYearIssued(null);
+    setIssuedDate(null);
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("invoices")
+          .select("invoice_number, year_issued, issued_date")
+          .eq("tenant_id", tenantId)
+          .eq("client_id", client.id)
+          .eq("billing_month", targetMonth)
+          .maybeSingle();
+        if (cancelled) return;
+        if (data) {
+          setInvoiceNumber(data.invoice_number as number);
+          setYearIssued(data.year_issued as number);
+          setIssuedDate((data.issued_date as string | null) ?? null);
+        }
+      } catch {
+        // invoices テーブル未作成等は無視
+      } finally {
+        if (!cancelled) setLoadingExisting(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, client.id, targetMonth]);
+
+  // 和暦ラベル
+  const eraYM = toJapaneseEraYM(y, m);
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const issuedDateDisplay = issuedDate ?? todayStr;
+  const issuedDateJa = toJapaneseEra(new Date(issuedDateDisplay + "T00:00:00"));
+
+  // 番号表示
+  const displayNumber = invoiceNumber !== null && yearIssued !== null
+    ? `No. ${yearIssued}-${String(invoiceNumber).padStart(4, "0")}-01`
+    : "No. 未発行";
+
+  // 月切替
+  const changeMonth = (delta: number) => {
+    const d = new Date(y, m - 1 + delta, 1);
+    setTargetMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  // 保存・採番
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const nowYear = new Date().getFullYear();
+      let useNumber = invoiceNumber;
+      let useYear = yearIssued;
+      const useDate = issuedDate ?? todayStr;
+
+      if (useNumber === null || useYear === null) {
+        // 新規採番
+        const { data: maxData } = await supabase
+          .from("invoices")
+          .select("invoice_number")
+          .eq("tenant_id", tenantId)
+          .order("invoice_number", { ascending: false })
+          .limit(1);
+        const currentMax = (maxData && maxData.length > 0) ? (maxData[0].invoice_number as number) : 0;
+        useNumber = currentMax + 1;
+        useYear = nowYear;
+      }
+
+      const snapshot = {
+        client: {
+          id: client.id,
+          name: client.name,
+          user_number: client.user_number,
+          address: client.address,
+          care_manager_org: client.care_manager_org,
+          benefit_rate: client.benefit_rate,
+        },
+        company: companyInfo,
+        rows: detailRows.map(r => ({
+          product_code: r.item.product_code,
+          name: r.eqName,
+          category: r.category,
+          price: r.price,
+          units: r.units,
+          quantity: r.quantity,
+          total_units: r.totalUnits,
+          is_taxable: r.isTaxable,
+          rental_start_date: r.item.rental_start_date,
+          rental_end_date: r.item.rental_end_date,
+        })),
+        total_units: totalUnits,
+        insured_amount: insuredAmount,
+        benefit_rate: benefitRate,
+        copay_rate: copayRate,
+        copay_amount: copayAmount,
+        taxable_copay: taxableCopay,
+        non_taxable_copay: nonTaxableCopay,
+        tax_amount: taxAmount,
+        taxable_base: taxableBase,
+        period: {
+          first_day: periodInfo.firstDay,
+          last_day: periodInfo.lastDay,
+        },
+      };
+
+      const { error } = await supabase.from("invoices").upsert({
+        tenant_id: tenantId,
+        client_id: client.id,
+        billing_month: targetMonth,
+        invoice_number: useNumber,
+        year_issued: useYear,
+        issued_date: useDate,
+        copay_amount: copayAmount,
+        data: snapshot,
+      }, { onConflict: "tenant_id,client_id,billing_month" });
+      if (error) throw error;
+
+      setInvoiceNumber(useNumber);
+      setYearIssued(useYear);
+      setIssuedDate(useDate);
+      alert(`保存しました: No. ${useYear}-${String(useNumber).padStart(4, "0")}-01`);
+    } catch (e) {
+      console.error(e);
+      alert("保存に失敗しました。invoices テーブルの作成状態を確認してください。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 印刷用スタイル
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.id = "__invoice_print__";
+    style.textContent = `
+      @page { size: A4 portrait; margin: 10mm; }
+      @media print {
+        body > * { visibility: hidden !important; }
+        #invoice-receipt-modal, #invoice-receipt-modal * { visibility: visible !important; }
+        #invoice-receipt-modal {
+          position: fixed !important; top: 0 !important; left: 0 !important;
+          width: 100% !important; height: auto !important;
+          background: white !important; z-index: 99999 !important;
+          overflow: visible !important;
+        }
+        .no-print { display: none !important; }
+        .invoice-sheet { box-shadow: none !important; margin: 0 auto !important; }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => { document.getElementById("__invoice_print__")?.remove(); };
+  }, []);
+
+  // 郵便番号（clients の postal_code を保持している場合のみ表示、型が無いので safe access）
+  const postalCode = (client as unknown as { postal_code?: string | null }).postal_code ?? null;
+
+  // カレンダー用 DOW
+  const DOW = ["日", "月", "火", "水", "木", "金", "土"];
+  const firstDow = new Date(y, m - 1, 1).getDay();
+  // 開始日・終了日（表示用）
+  const startDayMark = new Set<number>();
+  const endDayMark = new Set<number>();
+  for (const item of careItems) {
+    if (item.rental_start_date && item.rental_start_date >= monthStartStr && item.rental_start_date <= monthEndStr) {
+      startDayMark.add(parseInt(item.rental_start_date.split("-")[2], 10));
+    }
+    if (item.rental_end_date && item.rental_end_date >= monthStartStr && item.rental_end_date <= monthEndStr) {
+      endDayMark.add(parseInt(item.rental_end_date.split("-")[2], 10));
+    }
+  }
+
+  const title = mode === "invoice" ? "利用料請求書" : "利用料領収書";
+  const amountLabel = mode === "invoice" ? "今回ご請求額" : "領収金額";
+  const dateLabel = mode === "invoice" ? "発行日" : "領収日";
+
+  return (
+    <div id="invoice-receipt-modal" className="fixed inset-0 bg-black/70 z-[60] flex flex-col">
+
+      {/* 操作バー */}
+      <div className="no-print bg-white border-b border-gray-200 px-4 py-3 flex flex-wrap items-center gap-3 shrink-0">
+        <button onClick={onClose}><X size={20} className="text-gray-500" /></button>
+        <span className="font-semibold text-gray-800">請求書／領収書</span>
+        <div className="flex items-center gap-1 border border-gray-300 rounded-lg bg-white px-1">
+          <button onClick={() => changeMonth(-1)} className="p-1 text-gray-500 hover:text-gray-800"><ChevronLeft size={14} /></button>
+          <span className="font-semibold text-gray-800 px-2 text-sm">{eraYM}</span>
+          <button onClick={() => changeMonth(1)} className="p-1 text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
+        </div>
+        <div className="flex items-center gap-1 border border-gray-300 rounded-lg overflow-hidden">
+          <button onClick={() => setMode("invoice")}
+            className={`px-3 py-1 text-sm ${mode === "invoice" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+            請求書
+          </button>
+          <button onClick={() => setMode("receipt")}
+            className={`px-3 py-1 text-sm ${mode === "receipt" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+            領収書
+          </button>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick={handleSave} disabled={saving || loadingExisting}
+            className="flex items-center gap-1.5 bg-white text-emerald-600 border border-emerald-300 hover:bg-emerald-50 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : (invoiceNumber !== null ? "再採番/更新" : "保存して採番")}
+          </button>
+          <button onClick={() => window.print()}
+            className="flex items-center gap-1.5 bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
+            <Printer size={14} /> 印刷
+          </button>
+        </div>
+      </div>
+
+      {/* 帳票本体 */}
+      <div className="flex-1 overflow-y-auto bg-gray-100">
+        <div className="invoice-sheet max-w-4xl mx-auto my-6 bg-white shadow-lg px-10 py-8"
+          style={{ fontFamily: "'MS Mincho','Yu Mincho','ＭＳ 明朝',serif", fontSize: "10.5pt", lineHeight: "1.5", minHeight: "270mm" }}>
+
+          {/* タイトル帯 */}
+          <div style={{ backgroundColor: "#d1fae5", border: "1px solid #065f46", padding: "8px 16px", textAlign: "center", marginBottom: "14px" }}>
+            <h1 style={{ fontSize: "18pt", fontWeight: "bold", color: "#064e3b", letterSpacing: "0.3em", margin: 0 }}>
+              {title}
+            </h1>
+          </div>
+
+          {/* 宛先 ↔ 会社情報 */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px", gap: "16px" }}>
+            <div style={{ flex: 1, fontSize: "10pt" }}>
+              {postalCode && <p style={{ margin: "1px 0" }}>〒{postalCode}</p>}
+              <p style={{ margin: "1px 0" }}>{client.address ?? ""}</p>
+              <p style={{ fontSize: "13pt", fontWeight: "bold", margin: "6px 0 0", borderBottom: "1px solid #333", paddingBottom: "2px", display: "inline-block", minWidth: "240px" }}>
+                {client.name}&nbsp;様
+              </p>
+            </div>
+            <div style={{ textAlign: "right", fontSize: "9pt", minWidth: "260px" }}>
+              <p style={{ fontWeight: "bold", fontSize: "12pt", margin: "0 0 4px" }}>{companyInfo.companyName}</p>
+              <p style={{ margin: "1px 0" }}>{companyInfo.companyAddress}</p>
+              <p style={{ margin: "1px 0" }}>登録番号：T{companyInfo.businessNumber}</p>
+              <p style={{ margin: "1px 0" }}>TEL {companyInfo.tel}&nbsp;&nbsp;FAX {companyInfo.fax}</p>
+              <p style={{ margin: "4px 0 0", fontSize: "8.5pt", color: "#555" }}>※ 押印は省略させていただきます。</p>
+            </div>
+          </div>
+
+          {/* 情報テーブル + 緑ボックス */}
+          <div style={{ display: "flex", gap: "12px", alignItems: "stretch", marginBottom: "12px" }}>
+            <table style={{ flex: 1, borderCollapse: "collapse", fontSize: "10pt" }}>
+              <tbody>
+                <tr>
+                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "140px", textAlign: "left", fontWeight: "normal" }}>居宅介護支援事業者名</th>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.care_manager_org ?? ""}</td>
+                </tr>
+                <tr>
+                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>支払い者名</th>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.name}</td>
+                </tr>
+                <tr>
+                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>利用者氏名</th>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.name}&nbsp;様</td>
+                </tr>
+                <tr>
+                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>{dateLabel}</th>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{issuedDateJa}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ width: "200px", backgroundColor: "#d1fae5", border: "2px solid #065f46", padding: "10px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+              <div style={{ fontSize: "10pt", color: "#064e3b", marginBottom: "4px", fontWeight: "bold" }}>{amountLabel}</div>
+              <div style={{ fontSize: "18pt", fontWeight: "bold", color: "#064e3b" }}>¥{copayAmount.toLocaleString()}</div>
+            </div>
+          </div>
+
+          {/* 対象月・期間 */}
+          <p style={{ fontSize: "10pt", margin: "6px 0" }}>
+            {eraYM}分
+            {periodInfo.firstDay && periodInfo.lastDay && (
+              <>
+                &nbsp;&nbsp;期間：{m}月{periodInfo.firstDay}日〜{m}月{periodInfo.lastDay}日
+              </>
+            )}
+          </p>
+
+          {/* 利用内訳テーブル */}
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "10pt", marginBottom: "10px" }}>
+            <thead>
+              <tr>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px" }}>利用内訳</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>課税分</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>非課税分</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>合計</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ border: "1px solid #999", padding: "4px 8px" }}>福祉用具貸与</td>
+                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>¥{taxableCopay.toLocaleString()}</td>
+                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>¥{nonTaxableCopay.toLocaleString()}</td>
+                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold" }}>¥{copayAmount.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* 介護サービス費内訳テーブル */}
+          <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "10px 0 4px" }}>【介護サービス費内訳】</p>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "9.5pt", marginBottom: "10px" }}>
+            <thead>
+              <tr>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px" }}>用具名</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "80px" }}>単位数</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "60px" }}>回数</th>
+                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "60px" }}>単位</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detailRows.map((r) => (
+                <tr key={r.item.id}>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{r.eqName}</td>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.units.toLocaleString()}</td>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.quantity}</td>
+                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.totalUnits.toLocaleString()}</td>
+                </tr>
+              ))}
+              {detailRows.length === 0 && (
+                <tr><td colSpan={4} style={{ border: "1px solid #999", padding: "6px 8px", textAlign: "center", color: "#888" }}>対象月の明細はありません</td></tr>
+              )}
+              <tr>
+                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>合計単位</td>
+                <td style={{ border: "1px solid #999", padding: "4px 8px" }} />
+                <td style={{ border: "1px solid #999", padding: "4px 8px" }} />
+                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>{totalUnits.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* 利用日カレンダー + 消費税内訳 */}
+          <div style={{ display: "flex", gap: "14px", alignItems: "flex-start", marginBottom: "10px" }}>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "0 0 4px" }}>【利用日】</p>
+              <table style={{ borderCollapse: "collapse", fontSize: "9pt" }}>
+                <thead>
+                  <tr>
+                    {DOW.map((d, idx) => (
+                      <th key={d} style={{
+                        border: "1px solid #999", background: "#f3f4f6", padding: "3px 0",
+                        width: "30px", textAlign: "center",
+                        color: idx === 0 ? "#dc2626" : idx === 6 ? "#2563eb" : "#333",
+                      }}>{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const cells: React.ReactNode[] = [];
+                    const rows: React.ReactNode[] = [];
+                    for (let i = 0; i < firstDow; i++) {
+                      cells.push(<td key={`e${i}`} style={{ border: "1px solid #ddd", padding: "3px 0", width: "30px", height: "22px" }} />);
+                    }
+                    for (let d = 1; d <= daysInMonth; d++) {
+                      const dow = (firstDow + d - 1) % 7;
+                      const isBill = periodInfo.billingDays.has(d);
+                      const isStart = startDayMark.has(d);
+                      const isEnd = endDayMark.has(d);
+                      const mark = isStart || isEnd ? "□" : isBill ? "○" : "";
+                      const color = dow === 0 ? "#dc2626" : dow === 6 ? "#2563eb" : "#333";
+                      cells.push(
+                        <td key={d} style={{
+                          border: "1px solid #ddd", padding: "1px 0", width: "30px", height: "22px",
+                          textAlign: "center", color,
+                          position: "relative",
+                        }}>
+                          <div style={{ fontSize: "7.5pt", lineHeight: "1" }}>{d}</div>
+                          <div style={{ fontSize: "10pt", lineHeight: "1", fontWeight: "bold" }}>{mark}</div>
+                        </td>
+                      );
+                      if (cells.length === 7) {
+                        rows.push(<tr key={`r${d}`}>{cells.splice(0)}</tr>);
+                      }
+                    }
+                    if (cells.length > 0) {
+                      while (cells.length < 7) {
+                        cells.push(<td key={`t${cells.length}`} style={{ border: "1px solid #ddd", width: "30px", height: "22px" }} />);
+                      }
+                      rows.push(<tr key="rlast">{cells}</tr>);
+                    }
+                    return rows;
+                  })()}
+                </tbody>
+              </table>
+              <p style={{ fontSize: "8.5pt", color: "#555", margin: "4px 0 0" }}>○：算定日　□：開始日・終了日</p>
+            </div>
+
+            <div style={{ width: "260px" }}>
+              <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "0 0 4px" }}>【消費税内訳】</p>
+              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "9.5pt" }}>
+                <tbody>
+                  <tr>
+                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>10%対象</th>
+                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxableCopay.toLocaleString()}</td>
+                  </tr>
+                  <tr>
+                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>課税対象額</th>
+                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxableBase.toLocaleString()}</td>
+                  </tr>
+                  <tr>
+                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>消費税額</th>
+                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxAmount.toLocaleString()}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 番号 */}
+          <div style={{ textAlign: "right", fontSize: "9pt", color: "#555", marginTop: "16px" }}>
+            {displayNumber}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RentalReportModal({
   client,
