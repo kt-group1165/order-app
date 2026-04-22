@@ -9828,13 +9828,101 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     </div>
   );
 
+  // CSV取込：厚労省オープンデータから住所・電話・FAX を補完
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const handleImportOpendata = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) { alert("CSV が空か形式が不正です"); return; }
+      const parseCsvLine = (line: string): string[] => {
+        const out: string[] = []; let cur = ""; let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQ && line[i + 1] === '"') { cur += '"'; i++; } else { inQ = !inQ; }
+          } else if (ch === "," && !inQ) { out.push(cur); cur = ""; } else { cur += ch; }
+        }
+        out.push(cur); return out;
+      };
+      const header = parseCsvLine(lines[0]);
+      const col = (n: string) => header.indexOf(n);
+      const iPref = col("都道府県名"), iName = col("事業所名"),
+            iAddr = col("住所"), iPhone = col("電話番号"), iFax = col("FAX番号");
+      if (iPref < 0 || iName < 0) { alert("必要な列（都道府県名 / 事業所名）が見つかりません"); return; }
+
+      // 千葉県分のみ抽出
+      const chibaRows = lines.slice(1).map(parseCsvLine).filter((r) => r[iPref] === "千葉県");
+      const byName = new Map<string, { addr: string; phone: string; fax: string }>();
+      for (const r of chibaRows) {
+        const name = (r[iName] ?? "").trim();
+        if (!name) continue;
+        byName.set(name, {
+          addr: (r[iAddr] ?? "").trim(),
+          phone: (r[iPhone] ?? "").trim(),
+          fax: (r[iFax] ?? "").trim(),
+        });
+      }
+
+      // 既存マスタと名前一致で補完
+      let filled = 0, skipped = 0;
+      for (const o of offices) {
+        const data = byName.get(o.name);
+        if (!data) { skipped++; continue; }
+        // 既存値がある欄は上書きしない。全て埋まってるならスキップ
+        const patch: { address?: string; phone_number?: string; fax_number?: string } = {};
+        if (!o.address && data.addr) patch.address = data.addr;
+        if (!o.phone_number && data.phone) patch.phone_number = data.phone;
+        if (!o.fax_number && data.fax) patch.fax_number = data.fax;
+        if (Object.keys(patch).length === 0) { skipped++; continue; }
+        await upsertCareOffice(tenantId, {
+          id: o.id,
+          name: o.name,
+          fax_number: patch.fax_number ?? o.fax_number ?? null,
+          phone_number: patch.phone_number ?? o.phone_number ?? null,
+          address: patch.address ?? o.address ?? null,
+          email: o.email ?? null,
+          notes: o.notes ?? null,
+        });
+        filled++;
+      }
+      await load();
+      alert(`取込完了\n補完：${filled}件\nスキップ：${skipped}件\n（CSV にあってマスタに無い事業所は登録しません）`);
+    } catch (e) {
+      const msg = (e as { message?: string })?.message ?? String(e);
+      alert(`取込に失敗しました\n${msg}`);
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = "";
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">居宅事業所マスタ</h3>
-        <button onClick={startNew} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100">
-          ＋ 事業所追加
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportOpendata(f); }}
+          />
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 disabled:opacity-50"
+            title="厚労省オープンデータから住所・電話・FAXを補完"
+          >
+            {importing ? "取込中…" : "📥 CSV取込（厚労省）"}
+          </button>
+          <button onClick={startNew} className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100">
+            ＋ 事業所追加
+          </button>
+        </div>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         {loading ? (
