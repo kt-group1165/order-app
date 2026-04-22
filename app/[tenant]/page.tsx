@@ -10024,13 +10024,47 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                 <div key={office.id} className={`${idx > 0 ? "border-t border-gray-100" : ""}`}>
                   {editingId === office.id ? (
                     <div className="p-4 space-y-2 bg-blue-50">
+                      {/* オープンデータ検索（上書き用） */}
+                      <div className="bg-white rounded-lg border border-blue-200 p-2 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <Search size={14} className="text-blue-500 shrink-0" />
+                          <input
+                            type="text"
+                            value={opendataQuery}
+                            onChange={(e) => searchOpendata(e.target.value)}
+                            placeholder="オープンデータから検索して上書き（2文字以上）"
+                            className="flex-1 text-xs px-2 py-1 border border-blue-200 rounded outline-none focus:ring-1 focus:ring-blue-300"
+                          />
+                        </div>
+                        {opendataSearching && <p className="text-xs text-gray-400 text-center py-1">検索中...</p>}
+                        {opendataResults.length > 0 && (
+                          <ul className="max-h-48 overflow-y-auto bg-gray-50 rounded border border-gray-100 divide-y divide-gray-100">
+                            {opendataResults.map((r) => (
+                              <li key={r.office_number}>
+                                <button
+                                  type="button"
+                                  onClick={() => pickOpendata(r)}
+                                  className="w-full px-2 py-1.5 text-left text-xs hover:bg-blue-50"
+                                >
+                                  <p className="font-medium text-gray-800">{r.name}</p>
+                                  <p className="text-[11px] text-gray-500 truncate">{r.city ?? ""} {r.address ?? ""}</p>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {opendataQuery.trim().length >= 2 && !opendataSearching && opendataResults.length === 0 && (
+                          <p className="text-xs text-gray-400 text-center py-1">該当なし</p>
+                        )}
+                        <p className="text-[10px] text-gray-500 px-1">選ぶと事業所名・住所・電話・FAXが上書きされます（ID はそのまま）</p>
+                      </div>
                       <FormRow label="事業所名 *" field="name" />
                       <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
                       <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
                       <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
                       <FormRow label="メール" field="email" placeholder="example@example.com" />
                       <div className="flex gap-2 pt-1">
-                        <button onClick={() => setEditingId(null)} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
+                        <button onClick={() => { setEditingId(null); setOpendataQuery(""); setOpendataResults([]); }} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
                         <button onClick={handleSave} disabled={saving} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
                           {saving ? "保存中..." : "保存"}
                         </button>
