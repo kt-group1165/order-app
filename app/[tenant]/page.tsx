@@ -13483,136 +13483,222 @@ function InvoiceReceiptModal({
 
       {/* 帳票本体 */}
       <div className="flex-1 overflow-y-auto bg-gray-100">
-        <div className="invoice-sheet max-w-4xl mx-auto my-6 bg-white shadow-lg px-10 py-8"
-          style={{ fontFamily: "'MS Mincho','Yu Mincho','ＭＳ 明朝',serif", fontSize: "10.5pt", lineHeight: "1.5", minHeight: "270mm" }}>
+        <div className="invoice-sheet mx-auto my-6 bg-white shadow-lg"
+          style={{
+            fontFamily: "'Yu Gothic','Meiryo','Hiragino Kaku Gothic ProN',sans-serif",
+            fontSize: "10pt",
+            lineHeight: "1.5",
+            width: "190mm",
+            minHeight: "277mm",
+            padding: "10mm 12mm",
+            color: "#111",
+          }}>
 
-          {/* タイトル帯 */}
-          <div style={{ backgroundColor: "#d1fae5", border: "1px solid #065f46", padding: "8px 16px", textAlign: "center", marginBottom: "14px" }}>
-            <h1 style={{ fontSize: "18pt", fontWeight: "bold", color: "#064e3b", letterSpacing: "0.3em", margin: 0 }}>
-              {title}
+          {/* [1] タイトル帯 */}
+          <div style={{
+            backgroundColor: "#e8f5ec",
+            border: "1px solid #166534",
+            height: "50px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: "14px",
+          }}>
+            <h1 style={{ fontSize: "24pt", fontWeight: "bold", color: "#111", letterSpacing: "0.05em", margin: 0 }}>
+              {mode === "invoice" ? "利 用 料 請 求 書" : "利 用 料 領 収 書"}
             </h1>
           </div>
 
-          {/* 宛先 ↔ 会社情報 */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px", gap: "16px" }}>
-            <div style={{ flex: 1, fontSize: "10pt" }}>
-              {postalCode && <p style={{ margin: "1px 0" }}>〒{postalCode}</p>}
+          {/* [2] 宛先（左） ↔ 自社情報（右） */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", marginBottom: "10px" }}>
+            <div style={{ width: "50%", fontSize: "10pt" }}>
+              <p style={{ margin: "1px 0" }}>〒{postalCode ?? ""}</p>
               <p style={{ margin: "1px 0" }}>{client.address ?? ""}</p>
-              <p style={{ fontSize: "13pt", fontWeight: "bold", margin: "6px 0 0", borderBottom: "1px solid #333", paddingBottom: "2px", display: "inline-block", minWidth: "240px" }}>
+              <div style={{ height: "10px" }} />
+              <p style={{
+                fontSize: "16pt",
+                fontWeight: "bold",
+                margin: "4px 0 0",
+                borderBottom: "1px solid #333",
+                paddingBottom: "2px",
+                display: "inline-block",
+                minWidth: "260px",
+              }}>
                 {client.name}&nbsp;様
               </p>
             </div>
-            <div style={{ textAlign: "right", fontSize: "9pt", minWidth: "260px" }}>
-              <p style={{ fontWeight: "bold", fontSize: "12pt", margin: "0 0 4px" }}>{companyInfo.companyName}</p>
-              <p style={{ margin: "1px 0" }}>{companyInfo.companyAddress}</p>
+            <div style={{ width: "50%", textAlign: "right", fontSize: "9.5pt" }}>
+              <p style={{ margin: "1px 0", fontWeight: "bold", fontSize: "11pt" }}>{companyInfo.companyName}</p>
+              <p style={{ margin: "1px 0", fontWeight: "bold" }}>{companyInfo.companyName}</p>
               <p style={{ margin: "1px 0" }}>登録番号：T{companyInfo.businessNumber}</p>
-              <p style={{ margin: "1px 0" }}>TEL {companyInfo.tel}&nbsp;&nbsp;FAX {companyInfo.fax}</p>
+              <p style={{ margin: "1px 0" }}>{companyInfo.companyAddress}</p>
+              <p style={{ margin: "1px 0" }}>TEL：{companyInfo.tel}　FAX：{companyInfo.fax}</p>
               <p style={{ margin: "4px 0 0", fontSize: "8.5pt", color: "#555" }}>※ 押印は省略させていただきます。</p>
             </div>
           </div>
 
-          {/* 情報テーブル + 緑ボックス */}
-          <div style={{ display: "flex", gap: "12px", alignItems: "stretch", marginBottom: "12px" }}>
-            <table style={{ flex: 1, borderCollapse: "collapse", fontSize: "10pt" }}>
-              <tbody>
-                <tr>
-                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "140px", textAlign: "left", fontWeight: "normal" }}>居宅介護支援事業者名</th>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.care_manager_org ?? ""}</td>
-                </tr>
-                <tr>
-                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>支払い者名</th>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.name}</td>
-                </tr>
-                <tr>
-                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>利用者氏名</th>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{client.name}&nbsp;様</td>
-                </tr>
-                <tr>
-                  <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>{dateLabel}</th>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{issuedDateJa}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div style={{ width: "200px", backgroundColor: "#d1fae5", border: "2px solid #065f46", padding: "10px", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
-              <div style={{ fontSize: "10pt", color: "#064e3b", marginBottom: "4px", fontWeight: "bold" }}>{amountLabel}</div>
-              <div style={{ fontSize: "18pt", fontWeight: "bold", color: "#064e3b" }}>¥{copayAmount.toLocaleString()}</div>
+          {/* [3] 4行の情報テーブル（ラベル/値） */}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt", marginBottom: "10px" }}>
+            <tbody>
+              <tr>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", width: "170px", textAlign: "left", fontWeight: "normal" }}>居宅介護支援事業者名</th>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>{client.care_manager_org ?? ""}</td>
+              </tr>
+              <tr>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>支払い者名</th>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>{client.name}&nbsp;様</td>
+              </tr>
+              <tr>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>利用者氏名</th>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>{client.name}&nbsp;様</td>
+              </tr>
+              <tr>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "left", fontWeight: "normal" }}>{dateLabel}</th>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>{issuedDateJa}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* [4] 下ラベル行 ＋ 緑の請求額ボックス（右寄せ） */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "10px" }}>
+            <div style={{ fontSize: "10.5pt" }}>
+              {mode === "invoice" ? "下記の通り請求いたします。" : "下記の内容について、領収いたしました。"}
+            </div>
+            <div style={{ width: "220px", border: "1px solid #166534" }}>
+              <div style={{
+                backgroundColor: "#166534",
+                color: "#fff",
+                textAlign: "center",
+                fontSize: "10pt",
+                padding: "3px 6px",
+                fontWeight: "bold",
+              }}>
+                {amountLabel}
+              </div>
+              <div style={{
+                backgroundColor: "#fff",
+                textAlign: "right",
+                fontSize: "18pt",
+                fontWeight: "bold",
+                padding: "4px 10px",
+              }}>
+                ¥{copayAmount.toLocaleString()}
+              </div>
             </div>
           </div>
 
-          {/* 対象月・期間 */}
-          <p style={{ fontSize: "10pt", margin: "6px 0" }}>
+          {/* [5] 対象月期間の1行表示 */}
+          <p style={{ fontSize: "10.5pt", margin: "10px 0 6px", fontWeight: "bold" }}>
             {eraYM}分
             {periodInfo.firstDay && periodInfo.lastDay && (
-              <>
-                &nbsp;&nbsp;期間：{m}月{periodInfo.firstDay}日〜{m}月{periodInfo.lastDay}日
-              </>
+              <span style={{ marginLeft: "16px", fontWeight: "normal" }}>
+                期間： {m}月{periodInfo.firstDay}日～{m}月{periodInfo.lastDay}日
+              </span>
             )}
           </p>
 
-          {/* 利用内訳テーブル */}
-          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "10pt", marginBottom: "10px" }}>
+          {/* [6] 利用内訳テーブル（全幅・4列） */}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt", marginBottom: "10px" }}>
             <thead>
               <tr>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px" }}>利用内訳</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>課税分</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>非課税分</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "120px" }}>合計</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "center", fontWeight: "normal" }}>利用内訳</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", width: "110px", textAlign: "center", fontWeight: "normal" }}>単価</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", width: "80px", textAlign: "center", fontWeight: "normal" }}>数量</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", width: "130px", textAlign: "center", fontWeight: "normal" }}>金額</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={{ border: "1px solid #999", padding: "4px 8px" }}>福祉用具貸与</td>
-                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>¥{taxableCopay.toLocaleString()}</td>
-                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>¥{nonTaxableCopay.toLocaleString()}</td>
-                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold" }}>¥{copayAmount.toLocaleString()}</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>
+                  <div>福祉用具貸与</div>
+                  <div style={{ paddingLeft: "16px", fontSize: "9pt", color: "#333" }}>
+                    課税分　{taxableCopay.toLocaleString()}円
+                  </div>
+                  <div style={{ paddingLeft: "16px", fontSize: "9pt", color: "#333" }}>
+                    非課税分　{nonTaxableCopay.toLocaleString()}円
+                  </div>
+                </td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }} />
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }} />
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", verticalAlign: "top" }}>
+                  {copayAmount.toLocaleString()}
+                </td>
+              </tr>
+              <tr>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>合計</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", background: "#f9fafb" }} />
+                <td style={{ border: "1px solid #333", padding: "4px 8px", background: "#f9fafb" }} />
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>
+                  {copayAmount.toLocaleString()}
+                </td>
               </tr>
             </tbody>
           </table>
 
-          {/* 介護サービス費内訳テーブル */}
-          <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "10px 0 4px" }}>【介護サービス費内訳】</p>
-          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "9.5pt", marginBottom: "10px" }}>
-            <thead>
-              <tr>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px" }}>用具名</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "80px" }}>単位数</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "60px" }}>回数</th>
-                <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "4px 8px", width: "60px" }}>単位</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detailRows.map((r) => (
-                <tr key={r.item.id}>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px" }}>{r.eqName}</td>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.units.toLocaleString()}</td>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.quantity}</td>
-                  <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right" }}>{r.totalUnits.toLocaleString()}</td>
-                </tr>
-              ))}
-              {detailRows.length === 0 && (
-                <tr><td colSpan={4} style={{ border: "1px solid #999", padding: "6px 8px", textAlign: "center", color: "#888" }}>対象月の明細はありません</td></tr>
-              )}
-              <tr>
-                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>合計単位</td>
-                <td style={{ border: "1px solid #999", padding: "4px 8px" }} />
-                <td style={{ border: "1px solid #999", padding: "4px 8px" }} />
-                <td style={{ border: "1px solid #999", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>{totalUnits.toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* 利用日カレンダー + 消費税内訳 */}
-          <div style={{ display: "flex", gap: "14px", alignItems: "flex-start", marginBottom: "10px" }}>
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "0 0 4px" }}>【利用日】</p>
-              <table style={{ borderCollapse: "collapse", fontSize: "9pt" }}>
+          {/* [7] 介護サービス費内訳（左 65%） ＋ ご利用日カレンダー（右 35%） */}
+          <div style={{ display: "flex", gap: "10px", alignItems: "flex-start", marginBottom: "10px" }}>
+            <div style={{ width: "65%" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "9.5pt" }}>
                 <thead>
+                  <tr>
+                    <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 6px", textAlign: "center", fontWeight: "normal" }}>介護サービス費内訳</th>
+                    <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 6px", width: "60px", textAlign: "center", fontWeight: "normal" }}>単位数</th>
+                    <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 6px", width: "50px", textAlign: "center", fontWeight: "normal" }}>回数</th>
+                    <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 6px", width: "70px", textAlign: "center", fontWeight: "normal" }}>単位</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailRows.map((r) => (
+                    <tr key={r.item.id}>
+                      <td style={{ border: "1px solid #333", padding: "4px 6px" }}>{r.eqName}</td>
+                      <td style={{ border: "1px solid #333", padding: "4px 6px", textAlign: "right" }}>{r.units.toLocaleString()}</td>
+                      <td style={{ border: "1px solid #333", padding: "4px 6px", textAlign: "right" }}>{r.quantity}</td>
+                      <td style={{ border: "1px solid #333", padding: "4px 6px", textAlign: "right" }}>{r.totalUnits.toLocaleString()}単位</td>
+                    </tr>
+                  ))}
+                  {detailRows.length === 0 && (
+                    <tr>
+                      <td colSpan={4} style={{ border: "1px solid #333", padding: "6px 8px", textAlign: "center", color: "#888" }}>
+                        対象月の明細はありません
+                      </td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={{ border: "1px solid #333", padding: "4px 6px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>合計</td>
+                    <td style={{ border: "1px solid #333", padding: "4px 6px", background: "#f9fafb" }} />
+                    <td style={{ border: "1px solid #333", padding: "4px 6px", background: "#f9fafb" }} />
+                    <td style={{ border: "1px solid #333", padding: "4px 6px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>
+                      {totalUnits.toLocaleString()}単位
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ width: "35%" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "8.5pt" }}>
+                <thead>
+                  <tr>
+                    <th colSpan={7} style={{
+                      border: "1px solid #333",
+                      background: "#f3f4f6",
+                      padding: "4px 6px",
+                      textAlign: "center",
+                      fontWeight: "normal",
+                    }}>
+                      ご利用日
+                    </th>
+                  </tr>
                   <tr>
                     {DOW.map((d, idx) => (
                       <th key={d} style={{
-                        border: "1px solid #999", background: "#f3f4f6", padding: "3px 0",
-                        width: "30px", textAlign: "center",
+                        border: "1px solid #333",
+                        background: "#f3f4f6",
+                        padding: "2px 0",
+                        textAlign: "center",
+                        fontWeight: "normal",
                         color: idx === 0 ? "#dc2626" : idx === 6 ? "#2563eb" : "#333",
+                        width: `${100 / 7}%`,
                       }}>{d}</th>
                     ))}
                   </tr>
@@ -13622,7 +13708,7 @@ function InvoiceReceiptModal({
                     const cells: React.ReactNode[] = [];
                     const rows: React.ReactNode[] = [];
                     for (let i = 0; i < firstDow; i++) {
-                      cells.push(<td key={`e${i}`} style={{ border: "1px solid #ddd", padding: "3px 0", width: "30px", height: "22px" }} />);
+                      cells.push(<td key={`e${i}`} style={{ border: "1px solid #333", height: "25px" }} />);
                     }
                     for (let d = 1; d <= daysInMonth; d++) {
                       const dow = (firstDow + d - 1) % 7;
@@ -13633,12 +13719,16 @@ function InvoiceReceiptModal({
                       const color = dow === 0 ? "#dc2626" : dow === 6 ? "#2563eb" : "#333";
                       cells.push(
                         <td key={d} style={{
-                          border: "1px solid #ddd", padding: "1px 0", width: "30px", height: "22px",
-                          textAlign: "center", color,
-                          position: "relative",
+                          border: "1px solid #333",
+                          padding: "0",
+                          height: "25px",
+                          textAlign: "center",
+                          color,
+                          verticalAlign: "middle",
+                          lineHeight: "1",
                         }}>
-                          <div style={{ fontSize: "7.5pt", lineHeight: "1" }}>{d}</div>
-                          <div style={{ fontSize: "10pt", lineHeight: "1", fontWeight: "bold" }}>{mark}</div>
+                          <div style={{ fontSize: "7pt", lineHeight: "1", marginTop: "1px" }}>{d}</div>
+                          <div style={{ fontSize: "9pt", lineHeight: "1", fontWeight: "bold", height: "10px" }}>{mark}</div>
                         </td>
                       );
                       if (cells.length === 7) {
@@ -13647,7 +13737,7 @@ function InvoiceReceiptModal({
                     }
                     if (cells.length > 0) {
                       while (cells.length < 7) {
-                        cells.push(<td key={`t${cells.length}`} style={{ border: "1px solid #ddd", width: "30px", height: "22px" }} />);
+                        cells.push(<td key={`t${cells.length}`} style={{ border: "1px solid #333", height: "25px" }} />);
                       }
                       rows.push(<tr key="rlast">{cells}</tr>);
                     }
@@ -13655,33 +13745,40 @@ function InvoiceReceiptModal({
                   })()}
                 </tbody>
               </table>
-              <p style={{ fontSize: "8.5pt", color: "#555", margin: "4px 0 0" }}>○：算定日　□：開始日・終了日</p>
-            </div>
-
-            <div style={{ width: "260px" }}>
-              <p style={{ fontSize: "10pt", fontWeight: "bold", margin: "0 0 4px" }}>【消費税内訳】</p>
-              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "9.5pt" }}>
-                <tbody>
-                  <tr>
-                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>10%対象</th>
-                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxableCopay.toLocaleString()}</td>
-                  </tr>
-                  <tr>
-                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>課税対象額</th>
-                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxableBase.toLocaleString()}</td>
-                  </tr>
-                  <tr>
-                    <th style={{ border: "1px solid #999", background: "#f3f4f6", padding: "3px 6px", textAlign: "left", fontWeight: "normal" }}>消費税額</th>
-                    <td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>¥{taxAmount.toLocaleString()}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <p style={{ fontSize: "8pt", color: "#333", margin: "4px 0 0", lineHeight: "1.3" }}>
+                ○：介護サービス算定日<br />
+                □：サービス利用開始・終了日
+              </p>
             </div>
           </div>
 
-          {/* 番号 */}
-          <div style={{ textAlign: "right", fontSize: "9pt", color: "#555", marginTop: "16px" }}>
-            {displayNumber}
+          {/* [8] 消費税内訳テーブル（全幅・3列） */}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt", marginBottom: "10px" }}>
+            <thead>
+              <tr>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "center", fontWeight: "normal", width: "33%" }}>消費税内訳</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "center", fontWeight: "normal", width: "33%" }}>消費税対象額</th>
+                <th style={{ border: "1px solid #333", background: "#f3f4f6", padding: "4px 8px", textAlign: "center", fontWeight: "normal", width: "34%" }}>消費税額</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ border: "1px solid #333", padding: "4px 8px" }}>10％対象</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right" }}>{taxableBase.toLocaleString()}</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right" }}>{taxAmount.toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>合計</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>{taxableBase.toLocaleString()}</td>
+                <td style={{ border: "1px solid #333", padding: "4px 8px", textAlign: "right", fontWeight: "bold", background: "#f9fafb" }}>{taxAmount.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* [9] 右下の番号 */}
+          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "16px", fontSize: "9pt", color: "#333", marginTop: "16px" }}>
+            <span>{displayNumber}</span>
+            <span>［1枚中1枚目］</span>
           </div>
         </div>
       </div>
