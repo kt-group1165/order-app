@@ -57,45 +57,92 @@ function normalize(s: string): string {
     .replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60)); // カタカナ→ひらがな
 }
 
+// カナマッチング用：ひらがな/カタカナ/長音/中黒/スペースを統一
+function kana(s: string): string {
+  if (!s) return "";
+  return s
+    .normalize("NFC")
+    .replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60)) // ひらがな→カタカナ
+    .replace(/[ー－―‐\-・]/g, "")
+    .replace(/[\s　]+/g, "");
+}
+
 // 名前マッチング（姓のみ/名のみ/フリガナ/あいまい一致）
-function matchClients(text: string, clients: Client[]): Client[] {
+// kanaText: STT結果をカタカナに変換したもの。漢字一致が困難な場合の主軸
+function matchClients(text: string, clients: Client[], kanaText?: string): Client[] {
   const t = normalize(text);
-  if (!t) return [];
+  const tk = kana(kanaText ?? text);
+  if (!t && !tk) return [];
   const matched = clients.filter((c) => {
     const name = normalize(c.name);
     const furi = normalize(c.furigana ?? "");
-    if (!name && !furi) return false;
-    // 完全/部分一致
-    if (name.includes(t) || t.includes(name)) return true;
-    if (furi && (furi.includes(t) || t.includes(furi))) return true;
-    // 姓のみ・名のみマッチ（スペース区切り対応）
-    const nameParts = c.name.split(/\s+/).map(normalize).filter(Boolean);
-    const furiParts = (c.furigana ?? "").split(/\s+/).map(normalize).filter(Boolean);
-    for (const p of [...nameParts, ...furiParts]) {
-      if (p.length >= 2 && (t.includes(p) || p.includes(t))) return true;
+    const furiK = kana(c.furigana ?? "");
+    const nameK = kana(c.name); // 漢字混じりだがSTTが漢字を返した場合に備える
+
+    // ① カナ同士で比較（漢字→カナ変換した STT 結果と DB のフリガナ）
+    if (tk && furiK) {
+      if (furiK.includes(tk) || tk.includes(furiK)) return true;
+      // 姓だけのカナマッチ（先頭2文字以上）
+      const furiParts = (c.furigana ?? "").split(/\s+/).map(kana).filter(Boolean);
+      for (const p of furiParts) {
+        if (p.length >= 2 && (tk.includes(p) || p.includes(tk))) return true;
+      }
+      if (furiK.length >= 2 && tk.length >= 2 && furiK.substring(0, 2) === tk.substring(0, 2)) return true;
     }
-    // 先頭2文字が一致（STTが苗字だけ正しく認識したケース）
-    if (name.length >= 2 && t.length >= 2 && name.substring(0, 2) === t.substring(0, 2)) return true;
-    if (furi.length >= 2 && t.length >= 2 && furi.substring(0, 2) === t.substring(0, 2)) return true;
+    // ②（フォールバック）漢字同士の包含・先頭一致
+    if (t && name) {
+      if (name.includes(t) || t.includes(name)) return true;
+      if (name.length >= 2 && t.length >= 2 && name.substring(0, 2) === t.substring(0, 2)) return true;
+    }
+    if (t && furi) {
+      if (furi.includes(t) || t.includes(furi)) return true;
+    }
+    // ③ STTが漢字を返した時に DB の漢字名でも一致確認
+    if (tk && nameK) {
+      if (nameK.includes(tk) || tk.includes(nameK)) return true;
+    }
     return false;
   });
   return matched;
 }
 
-function matchEquipment(text: string, equipment: Equipment[]): Equipment[] {
+function matchEquipment(text: string, equipment: Equipment[], kanaText?: string): Equipment[] {
   const t = normalize(text);
-  if (!t) return [];
+  const tk = kana(kanaText ?? text);
+  if (!t && !tk) return [];
   return equipment.filter((eq) => {
     const name = normalize(eq.name);
     const cat = normalize(eq.category ?? "");
-    if (name.includes(t) || t.includes(name)) return true;
-    if (cat && (cat.includes(t) || t.includes(cat))) return true;
-    // 先頭3文字マッチ
-    if (name.length >= 3 && t.length >= 3 && name.substring(0, 3) === t.substring(0, 3)) return true;
-    // 部分文字列（連続3文字以上）
-    for (let i = 0; i + 3 <= t.length; i++) {
-      if (name.includes(t.substring(i, i + 3))) return true;
+    const furiK = kana(eq.furigana ?? "");
+    const nameK = kana(eq.name);
+    const catK = kana(eq.category ?? "");
+
+    // ① カナ比較（DB のフリガナ優先 → 用具名のカナ化）
+    if (tk) {
+      if (furiK) {
+        if (furiK.includes(tk) || tk.includes(furiK)) return true;
+        // 連続3文字一致
+        for (let i = 0; i + 3 <= tk.length; i++) {
+          if (furiK.includes(tk.substring(i, i + 3))) return true;
+        }
+      }
+      if (nameK) {
+        if (nameK.includes(tk) || tk.includes(nameK)) return true;
+        for (let i = 0; i + 3 <= tk.length; i++) {
+          if (nameK.includes(tk.substring(i, i + 3))) return true;
+        }
+      }
+      if (catK && (catK.includes(tk) || tk.includes(catK))) return true;
     }
+    // ② 漢字同士のフォールバック
+    if (t && name) {
+      if (name.includes(t) || t.includes(name)) return true;
+      if (name.length >= 3 && t.length >= 3 && name.substring(0, 3) === t.substring(0, 3)) return true;
+      for (let i = 0; i + 3 <= t.length; i++) {
+        if (name.includes(t.substring(i, i + 3))) return true;
+      }
+    }
+    if (t && cat && (cat.includes(t) || t.includes(cat))) return true;
     return false;
   });
 }
@@ -136,7 +183,9 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const [voiceInput, setVoiceInput] = useState("");
   const voiceCancelRef = useRef(false);
   const micTapRef = useRef<(() => void) | null>(null);
-  const voiceInputResolveRef = useRef<((text: string) => void) | null>(null);
+  // STT結果は text(認識テキスト) と kana(カタカナ化したもの) の両方を持つ
+  type HeardResult = { text: string; kana: string };
+  const voiceInputResolveRef = useRef<((r: HeardResult) => void) | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -166,17 +215,18 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       await speak(text);
     };
 
-    // MediaRecorder で録音 → Whisper API で文字起こし
-    const hear = (): Promise<string> => {
-      if (voiceCancelRef.current) return Promise.resolve("");
+    // MediaRecorder で録音 → Speech-to-Text API で文字起こし
+    // 結果は "primary textkana1 kana2 ..." の形式で resolve（区切り文字 ）
+    const hear = (): Promise<HeardResult> => {
+      if (voiceCancelRef.current) return Promise.resolve({ text: "", kana: "" });
       setVoiceStatus("listening");
       setVoiceInput("");
       return new Promise((resolve) => {
-        voiceInputResolveRef.current = (text: string) => {
+        voiceInputResolveRef.current = (r: HeardResult) => {
           voiceInputResolveRef.current = null;
           setVoiceInput("");
-          if (text) setVoiceMessage(`「${text}」`);
-          setTimeout(() => resolve(text), text ? 500 : 0);
+          if (r.text) setVoiceMessage(`「${r.text}」`);
+          setTimeout(() => resolve(r), r.text ? 500 : 0);
         };
 
         // マイクボタン押下でMediaRecorder録音開始
@@ -220,7 +270,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
             setVoiceMessage(`認識中... [${chunks.length}ch / ${totalBytes}B / ${ext}]`);
             if (totalBytes === 0) {
               setVoiceMessage(`録音データなし [mime:${effectiveMime}] テキスト入力で入力してください`);
-              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(""); }, 2000);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current({ text: "", kana: "" }); }, 2000);
               return;
             }
             const blob = new Blob(chunks, { type: effectiveMime });
@@ -232,17 +282,22 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               const data = await res.json();
               const primary = (data.text ?? "").trim();
               const alts: string[] = Array.isArray(data.alternatives) ? data.alternatives : [];
+              const kanaPrimary = (data.kana ?? "").trim();
+              const kanaAlts: string[] = Array.isArray(data.kanaAlternatives) ? data.kanaAlternatives : [];
               // 全候補を結合してマッチングに使う(漢字誤変換対策)
               const uniqueAlts = alts.filter((a) => a && a !== primary);
-              const combined = [primary, ...uniqueAlts].join(" ").trim();
-              // デバッグ: プライマリとそれ以外の候補を表示
+              const uniqueKanaAlts = kanaAlts.filter((a) => a && a !== kanaPrimary);
+              const combinedText = [primary, ...uniqueAlts].join(" ").trim();
+              const combinedKana = [kanaPrimary, ...uniqueKanaAlts].join(" ").trim();
+              // デバッグ: プライマリとカナ化結果を表示
               const altDisplay = uniqueAlts.length > 0 ? ` +候補:${uniqueAlts.slice(0, 3).join("/")}` : "";
-              setVoiceMessage(`結果: "${primary}"${altDisplay} / err: ${data.error ?? "なし"} ${data.detail ?? ""}`);
-              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(combined); }, 1500);
+              const kanaDisplay = kanaPrimary ? ` (カナ:${kanaPrimary})` : "";
+              setVoiceMessage(`結果: "${primary}"${altDisplay}${kanaDisplay} / err: ${data.error ?? "なし"} ${data.detail ?? ""}`);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current({ text: combinedText, kana: combinedKana }); }, 1500);
             } catch (e) {
               console.error("transcribe error:", e);
               setVoiceMessage(`通信エラー: ${String(e)}`);
-              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current(""); }, 2000);
+              setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current({ text: "", kana: "" }); }, 2000);
             }
           };
           mr.start(100); // timeslice指定でiOSのondataavailableを確実に発火
@@ -257,22 +312,26 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       });
     };
 
+    // 「はい」「以上」等のキーワード判定用：text と kana の両方をチェック
+    const has = (r: HeardResult, ...kws: string[]) =>
+      kws.some((kw) => (r.text ?? "").includes(kw) || (r.kana ?? "").includes(kw));
+
     try {
       // ── Step1: 利用者 ──
       let client: Client | null = null;
       while (!client) {
         await say("利用者のお名前を教えてください。");
-        const name = await hear();
+        const ans = await hear();
         if (voiceCancelRef.current) break;
-        if (!name) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
+        if (!ans.text && !ans.kana) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
 
-        const matched = matchClients(name, allClients);
+        const matched = matchClients(ans.text, allClients, ans.kana);
         if (matched.length === 0) {
-          await say(`${name}さんが見つかりませんでした。もう一度お願いします。`);
+          await say(`${ans.text || ans.kana}さんが見つかりませんでした。もう一度お願いします。`);
         } else if (matched.length === 1) {
           await say(`${matched[0].name}さんでよろしいですか？`);
-          const ans = await hear();
-          if (ans.includes("はい") || ans.includes("そう") || ans.includes("yes")) {
+          const conf = await hear();
+          if (has(conf, "はい", "そう", "yes")) {
             client = matched[0];
           } else {
             await say("もう一度名前を教えてください。");
@@ -281,8 +340,11 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           // 複数ヒット
           const names = matched.slice(0, 3).map(c => c.name).join("、それとも");
           await say(`${names}、どちらですか？`);
-          const ans = await hear();
-          const selected = matched.find(c => ans.includes(c.name.split(/\s/)[0]) || ans.includes((c.furigana ?? "").split(/\s/)[0]));
+          const conf = await hear();
+          const selected = matched.find(c =>
+            has(conf, c.name.split(/\s/)[0]) ||
+            has(conf, (c.furigana ?? "").split(/\s/)[0])
+          );
           if (selected) {
             client = selected;
           } else {
@@ -300,8 +362,9 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
         await say("介護保険ですか、自費ですか？");
         const ans = await hear();
         if (voiceCancelRef.current) break;
-        if (!ans) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
-        payment = parsePayment(ans);
+        if (!ans.text && !ans.kana) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
+        // text/kana の両方で支払区分判定（「カイゴ」「ジヒ」も拾えるように）
+        payment = parsePayment(`${ans.text} ${ans.kana}`);
         if (!payment) await say("介護、または自費とお答えください。");
       }
       if (!payment || voiceCancelRef.current) { setVoiceActive(false); setVoiceStatus("idle"); return; }
@@ -315,15 +378,15 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
         await say(newCart.length === 0 ? "用具を教えてください。" : "他に用具はありますか？あれば名前を、なければ「以上」と言ってください。");
         const ans = await hear();
         if (voiceCancelRef.current) break;
-        if (!ans) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
-        if (ans.includes("以上") || ans.includes("ない") || ans.includes("終わり") || ans.includes("なし")) {
+        if (!ans.text && !ans.kana) { await say("聞こえませんでした。もう一度お願いします。"); continue; }
+        if (has(ans, "以上", "ない", "終わり", "なし", "イジョウ", "オワリ")) {
           addMore = false;
           break;
         }
 
-        const matched = matchEquipment(ans, allEquipment);
+        const matched = matchEquipment(ans.text, allEquipment, ans.kana);
         if (matched.length === 0) {
-          await say(`${ans}は見つかりませんでした。もう一度お願いします。`);
+          await say(`${ans.text || ans.kana}は見つかりませんでした。もう一度お願いします。`);
           continue;
         }
 
@@ -331,13 +394,16 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
         if (matched.length === 1) {
           await say(`${matched[0].name}でよろしいですか？`);
           const conf = await hear();
-          if (conf.includes("はい") || conf.includes("そう")) chosen = matched[0];
+          if (has(conf, "はい", "そう")) chosen = matched[0];
           else await say("もう一度用具名を教えてください。");
         } else {
           const names = matched.slice(0, 3).map(e => e.name).join("、それとも");
           await say(`${names}、どれですか？`);
           const conf = await hear();
-          chosen = matched.find(e => conf.includes(e.name.substring(0, 3))) ?? null;
+          chosen = matched.find(e =>
+            has(conf, e.name.substring(0, 3)) ||
+            (e.furigana ? has(conf, e.furigana.substring(0, 3)) : false)
+          ) ?? null;
           if (!chosen) await say("もう一度お願いします。");
         }
 
@@ -347,16 +413,16 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           if (chosen.rental_price) {
             await say(`月額${chosen.rental_price.toLocaleString()}円でよろしいですか？`);
             const conf = await hear();
-            if (!conf.includes("はい") && !conf.includes("そう")) {
+            if (!has(conf, "はい", "そう")) {
               await say("金額を教えてください。");
               const priceAns = await hear();
-              const p = parsePrice(priceAns);
+              const p = parsePrice(`${priceAns.text} ${priceAns.kana}`);
               if (p) price = String(p);
             }
           } else {
             await say("月額料金はいくらですか？");
             const priceAns = await hear();
-            const p = parsePrice(priceAns);
+            const p = parsePrice(`${priceAns.text} ${priceAns.kana}`);
             if (p) price = String(p);
           }
           newCart.push({ equipment: chosen, rental_price: price, supplier_id: null, quantity: 1, notes: "" });
@@ -372,7 +438,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       const summary = `${client.name}さん、${payment}、${newCart.map(i => i.equipment.name).join("と")}、合計${newCart.length}件。よろしいですか？`;
       await say(summary);
       const conf = await hear();
-      if (conf.includes("はい") || conf.includes("そう") || conf.includes("お願い")) {
+      if (has(conf, "はい", "そう", "お願い")) {
         setVoiceStatus("speaking");
         setVoiceMessage("発注中...");
         // 発注実行
@@ -523,12 +589,12 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
                     type="text"
                     value={voiceInput}
                     onChange={e => setVoiceInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
+                    onKeyDown={e => { if (e.key === "Enter" && voiceInput.trim()) voiceInputResolveRef.current?.({ text: voiceInput.trim(), kana: voiceInput.trim() }); }}
                     placeholder="またはここに入力"
                     className="flex-1 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white"
                   />
                   <button
-                    onClick={() => { if (voiceInput.trim()) voiceInputResolveRef.current?.(voiceInput.trim()); }}
+                    onClick={() => { if (voiceInput.trim()) voiceInputResolveRef.current?.({ text: voiceInput.trim(), kana: voiceInput.trim() }); }}
                     disabled={!voiceInput.trim()}
                     className="px-4 bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-xl text-sm"
                   >

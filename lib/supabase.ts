@@ -117,6 +117,8 @@ export type Equipment = {
   product_code: string;
   tais_code: string | null;
   name: string;
+  // 用具名のカタカナ読み（音声発注のカナマッチング用）
+  furigana: string | null;
   category: string | null;
   rental_price: number | null;
   national_avg_price: number | null;

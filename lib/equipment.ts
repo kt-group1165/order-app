@@ -26,6 +26,7 @@ export async function updateEquipment(
   id: string,
   updates: {
     name?: string;
+    furigana?: string | null;
     tais_code?: string | null;
     category?: string | null;
     rental_price?: number | null;
@@ -50,6 +51,7 @@ export async function createEquipmentItem(
   tenantId: string,
   input: {
     name: string;
+    furigana?: string | null;
     tais_code?: string | null;
     category?: string | null;
     rental_price?: number | null;
@@ -87,6 +89,7 @@ export async function createEquipmentItem(
       tenant_id: tenantId,
       product_code: productCode,
       name: input.name,
+      furigana: input.furigana ?? null,
       tais_code: input.tais_code ?? null,
       category: input.category ?? null,
       rental_price: input.rental_price ?? null,
@@ -128,6 +131,7 @@ export type EquipmentImportRow = {
   product_code?: string;
   tais_code?: string;
   name: string;
+  furigana?: string;
   category?: string;
   rental_price?: number;
   national_avg_price?: number;
@@ -246,6 +250,7 @@ export async function importEquipment(
           }
         };
         check("名称", found.name, row.name);
+        check("フリガナ", found.furigana, row.furigana);
         check("カテゴリ", found.category, row.category);
         check("レンタル価格", found.rental_price, row.rental_price);
         check("全国平均価格", found.national_avg_price, row.national_avg_price);
@@ -257,6 +262,7 @@ export async function importEquipment(
           result.changes.push(...fieldChanges);
           const updates: Partial<Equipment> = { updated_at: new Date().toISOString() };
           if (row.name) updates.name = row.name;
+          if (row.furigana !== undefined) updates.furigana = row.furigana ?? null;
           if (row.category !== undefined) updates.category = row.category ?? null;
           if (row.rental_price !== undefined)
             updates.rental_price = row.rental_price ?? null;
@@ -296,6 +302,7 @@ export async function importEquipment(
             product_code: productCode,
             tais_code: row.tais_code ?? null,
             name: row.name,
+            furigana: row.furigana ?? null,
             category: row.category ?? null,
             rental_price: row.rental_price ?? null,
             national_avg_price: row.national_avg_price ?? null,
@@ -337,6 +344,7 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
     const lower = h.toLowerCase();
     if (lower.includes("商品コード") || lower.includes("product_code")) colMap.product_code = i;
     else if (lower.includes("tais") || lower.includes("taisコード")) colMap.tais_code = i;
+    else if (lower.includes("フリガナ") || lower.includes("ふりがな") || lower.includes("カナ") || lower.includes("furigana") || lower.includes("kana")) colMap.furigana = i;
     else if (lower.includes("用具名") || lower.includes("name") || lower.includes("商品名")) colMap.name = i;
     else if (lower.includes("カテゴリ") || lower.includes("category") || lower.includes("種目")) colMap.category = i;
     else if (lower.includes("レンタル価格") || lower.includes("貸与価格") || lower.includes("rental_price") || lower.includes("単価") || lower.includes("月額")) colMap.rental_price = i;
@@ -373,6 +381,7 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
       product_code: get("product_code") || undefined,
       tais_code: get("tais_code") || undefined,
       name,
+      furigana: get("furigana") || undefined,
       category: get("category") || undefined,
       rental_price: getNum("rental_price"),
       national_avg_price: getNum("national_avg_price"),
