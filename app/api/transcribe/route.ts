@@ -140,7 +140,10 @@ export async function POST(req: NextRequest) {
     let kanaAlternatives: string[] = [];
     if (toConvert.some((t) => t.length > 0)) {
       try {
-        const converted = await toKatakanaReadings(toConvert);
+        const converted = await toKatakanaReadings(toConvert, {
+          tenantId: tenantId || undefined,
+          purpose: "transcribe_kana",
+        });
         kanaText = converted[0] ?? "";
         kanaAlternatives = converted.slice(1);
       } catch (e) {

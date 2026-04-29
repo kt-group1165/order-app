@@ -51,6 +51,7 @@ import {
 } from "@/lib/billing";
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
+import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -399,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.0</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.1</span>
       </header>
 
       {/* Content */}
@@ -1268,7 +1269,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         const res = await fetch("/api/kana-convert", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ texts: batch.map((e) => e.name) }),
+          body: JSON.stringify({ texts: batch.map((e) => e.name), tenantId, purpose: "bulk_furigana" }),
         });
         const data = await res.json();
         const kanaArr: string[] = Array.isArray(data.kana) ? data.kana : [];
@@ -1749,7 +1750,7 @@ function EquipmentDetail({
       const res = await fetch("/api/kana-convert", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texts: [name.trim()] }),
+        body: JSON.stringify({ texts: [name.trim()], tenantId, purpose: "manual_kana" }),
       });
       const data = await res.json();
       if (Array.isArray(data.kana) && data.kana[0]) {
@@ -9603,7 +9604,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
     { id: "suppliers",    label: "卸会社メールアドレス", desc: "発注メール送信先の管理" },
     { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
-    { id: "speech_usage", label: "音声認識の使用状況",   desc: "今月の使用量・料金を確認" },
+    { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
     { id: "data_reimport", label: "データ再取込（危険）",    desc: "利用者・保険情報・居宅マスタを一括再構築" },
   ];
 
@@ -9800,13 +9801,20 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
     );
   }
 
-  // ── 音声認識の使用状況 ──
+  // ── AI使用状況（音声認識 + OpenAI カナ変換） ──
   if (settingsPage === "speech_usage") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="音声認識の使用状況" />
-        <div className="flex-1 overflow-y-auto p-4">
-          <SpeechUsageSection tenantId={tenantId} />
+        <PageHeader title="AI使用状況・料金" />
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">🎤 音声認識（Google Speech-to-Text）</h2>
+            <SpeechUsageSection tenantId={tenantId} />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">🤖 AIカナ変換（OpenAI gpt-4o-mini）</h2>
+            <OpenAIUsageSection tenantId={tenantId} />
+          </div>
         </div>
       </div>
     );
@@ -9911,6 +9919,94 @@ function SpeechUsageSection({ tenantId }: { tenantId: string }) {
 
       <p className="text-xs text-gray-400 px-1">
         Google Cloud Speech-to-Text v2 (long モデル + カスタム辞書) / 月60分まで無料 / 超過分 ¥2.4/分
+      </p>
+    </div>
+  );
+}
+
+// ─── OpenAI Usage Section ─────────────────────────────────────────────────────
+function OpenAIUsageSection({ tenantId }: { tenantId: string }) {
+  const [summary, setSummary] = useState<OpenAIUsageSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getOpenAIUsageSummary(tenantId).then(setSummary).finally(() => setLoading(false));
+  }, [tenantId]);
+
+  if (loading) return <p className="text-sm text-gray-400">読み込み中...</p>;
+  if (!summary) return <p className="text-sm text-gray-400">データなし</p>;
+
+  const fmtNum = (n: number) => n.toLocaleString();
+  const fmtJpy = (n: number) => `¥${n < 1 ? n.toFixed(3) : n.toFixed(2)}`;
+
+  return (
+    <div className="space-y-4">
+      {/* 今月のサマリ */}
+      <div className="bg-white rounded-xl p-4 border border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">今月の使用状況</h3>
+        <div className="space-y-2">
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">呼び出し回数</span>
+            <span className="text-sm text-gray-700">{summary.monthCallCount}回</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">入力トークン</span>
+            <span className="text-sm text-gray-700">{fmtNum(summary.monthInputTokens)}</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">出力トークン</span>
+            <span className="text-sm text-gray-700">{fmtNum(summary.monthOutputTokens)}</span>
+          </div>
+          <div className="flex justify-between items-baseline pt-2 border-t border-gray-100">
+            <span className="text-xs text-gray-500">今月の概算料金</span>
+            <span className="text-lg font-bold text-emerald-700">{fmtJpy(summary.monthCostJpy)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 用途別内訳（今月） */}
+      {summary.monthBreakdown.length > 0 && (
+        <div className="bg-white rounded-xl p-4 border border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-800 mb-3">用途別内訳（今月）</h3>
+          <div className="space-y-2">
+            {summary.monthBreakdown.map((b) => (
+              <div key={b.purpose} className="flex justify-between items-center py-1 border-b border-gray-50 last:border-b-0">
+                <div>
+                  <p className="text-sm text-gray-700">{b.label}</p>
+                  <p className="text-[11px] text-gray-400">{b.callCount}回 / 入{fmtNum(b.inputTokens)} 出{fmtNum(b.outputTokens)}</p>
+                </div>
+                <span className="text-sm font-semibold text-gray-700">{fmtJpy(b.costJpy)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 累計 */}
+      <div className="bg-white rounded-xl p-4 border border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">累計</h3>
+        <div className="space-y-2">
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">累計呼び出し回数</span>
+            <span className="text-sm text-gray-700">{summary.totalCallCount}回</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">累計入力トークン</span>
+            <span className="text-sm text-gray-700">{fmtNum(summary.totalInputTokens)}</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs text-gray-500">累計出力トークン</span>
+            <span className="text-sm text-gray-700">{fmtNum(summary.totalOutputTokens)}</span>
+          </div>
+          <div className="flex justify-between items-baseline pt-2 border-t border-gray-100">
+            <span className="text-xs text-gray-500">累計料金</span>
+            <span className="text-sm font-semibold text-gray-700">{fmtJpy(summary.totalCostJpy)}</span>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 px-1">
+        OpenAI gpt-4o-mini / 入力 $0.150・出力 $0.600 (1M tokens) / 1USD≒¥150 換算の概算
       </p>
     </div>
   );
