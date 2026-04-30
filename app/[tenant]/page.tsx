@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.2</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.3</span>
       </header>
 
       {/* Content */}
@@ -2253,10 +2253,18 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; merged: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number } | null>(null);
   // 取込前のプレビュー（差分・警告を確認してから実行）
   type ImportFieldDiff = { label: string; oldValue: string; newValue: string };
   type ImportWarningKind = "deleted_revival" | "provisional_promotion" | "referrer_lost" | "care_office_unlinked" | "care_manager_unlinked";
+  type ProvisionalCandidate = {
+    id: string;
+    user_number: string | null;
+    name: string;
+    address: string | null;
+    phone: string | null;
+    matchKind: "exact_name" | "surname" | "address";
+  };
   type ImportPreviewRow = {
     user_number: string;
     name: string;
@@ -2267,6 +2275,9 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     data: Omit<Client, "id" | "created_at">;
     existingId: string | null;
     insurance: Array<Record<string, unknown>>;
+    // 新規行のみ：仮登録の候補と、ユーザーがマージ先として選んだID
+    provisionalCandidates: ProvisionalCandidate[];
+    mergeWithProvisionalId: string | null;
   };
   type ImportPreview = {
     rows: ImportPreviewRow[];
@@ -2934,11 +2945,61 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         return String(v);
       };
 
+      // 仮登録の一覧を抽出（CSV取込み時に名前一致で紐付け候補として表示）
+      // CSVの user_number と既に一致している仮登録は対象外（=普通にUPDATE）
+      const provisionalClients = freshClients.filter(
+        (c) => c.is_provisional === true && !c.deleted_at
+      );
+      const usedProvisionalIds = new Set<string>();
+      // 名前を比較しやすい形に正規化（全角空白→半角、前後トリム、連続空白→1個）
+      const normName = (s: string | null | undefined): string =>
+        (s ?? "").trim().replace(/　/g, " ").replace(/\s+/g, " ");
+
+      const findProvisionalCandidates = (newData: Omit<Client, "id" | "created_at">): ProvisionalCandidate[] => {
+        const targetName = normName(newData.name);
+        const targetAddr = normName(newData.address);
+        if (!targetName) return [];
+        const surname = targetName.split(/[\s ]/)[0];
+
+        const candidates: ProvisionalCandidate[] = [];
+        for (const p of provisionalClients) {
+          if (usedProvisionalIds.has(p.id)) continue; // 同一CSV内で重複マッチを防ぐ
+          const pName = normName(p.name);
+          const pAddr = normName(p.address);
+          let kind: ProvisionalCandidate["matchKind"] | null = null;
+          if (pName && pName === targetName) kind = "exact_name";
+          else if (surname && surname.length >= 1 && pName.startsWith(surname)) kind = "surname";
+          else if (targetAddr && pAddr && (pAddr.includes(targetAddr) || targetAddr.includes(pAddr))) kind = "address";
+          if (kind) {
+            candidates.push({
+              id: p.id,
+              user_number: p.user_number,
+              name: p.name ?? "",
+              address: p.address,
+              phone: p.phone,
+              matchKind: kind,
+            });
+          }
+        }
+        // 完全一致 → 姓 → 住所 の順
+        candidates.sort((a, b) => {
+          const order = { exact_name: 0, surname: 1, address: 2 };
+          return order[a.matchKind] - order[b.matchKind];
+        });
+        return candidates;
+      };
+
       const previewRows: ImportPreviewRow[] = [];
       for (const data of clientByUserNumber.values()) {
         const existing = existingByUserNumber.get(data.user_number ?? "");
         const insurance = insuranceRowsByUserNumber.get(data.user_number ?? "") ?? [];
         if (!existing) {
+          // 新規行 → 仮登録の候補を検索
+          const candidates = findProvisionalCandidates(data);
+          // 完全一致が1件のみならデフォルトでマージ選択、それ以外はOFF
+          const exactMatches = candidates.filter((c) => c.matchKind === "exact_name");
+          const defaultMergeId = exactMatches.length === 1 ? exactMatches[0].id : null;
+          if (defaultMergeId) usedProvisionalIds.add(defaultMergeId);
           previewRows.push({
             user_number: data.user_number ?? "",
             name: data.name,
@@ -2948,6 +3009,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
             data,
             existingId: null,
             insurance: insurance as Array<Record<string, unknown>>,
+            provisionalCandidates: candidates,
+            mergeWithProvisionalId: defaultMergeId,
           });
           continue;
         }
@@ -2978,6 +3041,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           data,
           existingId: existing.id,
           insurance: insurance as Array<Record<string, unknown>>,
+          provisionalCandidates: [],
+          mergeWithProvisionalId: null,
         });
       }
 
@@ -3000,11 +3065,28 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const errors: { name: string; user_number: string; message: string }[] = [];
       const successfullyInserted: { name: string; user_number: string }[] = [];
       const successfullyUpdated: { name: string; user_number: string }[] = [];
+      const successfullyMerged: { name: string; user_number: string }[] = [];
       let insertedIds: string[] = [];
       const updatedIds: string[] = [];
 
-      const toInsert = preview.rows.filter((r) => r.status === "new");
+      // 仮登録マージ対象（INSERTせず、仮登録レコードをUPDATEで本登録化）
+      const toMerge = preview.rows.filter((r) => r.status === "new" && r.mergeWithProvisionalId);
+      // 純粋な新規追加
+      const toInsert = preview.rows.filter((r) => r.status === "new" && !r.mergeWithProvisionalId);
+      // 既存の更新
       const toUpdate = preview.rows.filter((r) => r.status === "updated" || r.status === "unchanged");
+
+      // MERGE: 仮登録のUUIDを維持しつつ、CSVデータで上書き＋is_provisional=falseに
+      for (const r of toMerge) {
+        const provisionalId = r.mergeWithProvisionalId!;
+        const { error: mergeErr } = await supabase.from("clients").update(r.data).eq("id", provisionalId);
+        if (mergeErr) {
+          errors.push({ name: r.name, user_number: r.user_number, message: `仮登録マージ失敗: ${mergeErr.message}` });
+        } else {
+          updatedIds.push(provisionalId);
+          successfullyMerged.push({ name: r.name, user_number: r.user_number });
+        }
+      }
 
       // INSERT: バッチで試し、失敗したら行ごとに再試行
       if (toInsert.length > 0) {
@@ -3137,6 +3219,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       setImportResult({
         inserted: successfullyInserted,
         updated: successfullyUpdated,
+        merged: successfullyMerged,
         errors,
         reunited,
         insuranceAdded,
@@ -3242,6 +3325,24 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         const updatedRows = importPreview.rows.filter((r) => r.status === "updated");
         const unchangedRows = importPreview.rows.filter((r) => r.status === "unchanged");
         const warningRows = importPreview.rows.filter((r) => r.warnings.length > 0);
+        const mergeRows = newRows.filter((r) => r.mergeWithProvisionalId);
+        const newRowsWithCandidates = newRows.filter((r) => r.provisionalCandidates.length > 0);
+        // 候補のチェックボックスを切り替える
+        const setMergeId = (userNumber: string, provisionalId: string | null) => {
+          if (!importPreview) return;
+          // 同じ仮登録IDが他の新規行で既に選択されている場合はそちらを解除（重複マッチ防止）
+          const next = importPreview.rows.map((row) => {
+            if (row.user_number === userNumber && row.status === "new") {
+              return { ...row, mergeWithProvisionalId: provisionalId };
+            }
+            // 別の行で同じ仮登録IDを選んでいたら null に戻す
+            if (provisionalId && row.mergeWithProvisionalId === provisionalId && row.user_number !== userNumber) {
+              return { ...row, mergeWithProvisionalId: null };
+            }
+            return row;
+          });
+          setImportPreview({ ...importPreview, rows: next });
+        };
         // 警告の種類別グルーピング
         const warningByKind: Record<string, ImportPreviewRow[]> = {};
         for (const r of warningRows) {
@@ -3261,14 +3362,18 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
               </div>
               <div className="px-5 py-4 overflow-y-auto space-y-4 flex-1">
                 {/* サマリ */}
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2">
                   <div className="bg-emerald-50 rounded-lg p-2 text-center">
-                    <p className="text-lg font-bold text-emerald-700">{newRows.length}</p>
+                    <p className="text-lg font-bold text-emerald-700">{newRows.length - mergeRows.length}</p>
                     <p className="text-[10px] text-emerald-600">新規追加</p>
+                  </div>
+                  <div className="bg-purple-50 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-purple-700">{mergeRows.length}</p>
+                    <p className="text-[10px] text-purple-600">仮登録→本登録</p>
                   </div>
                   <div className="bg-indigo-50 rounded-lg p-2 text-center">
                     <p className="text-lg font-bold text-indigo-700">{updatedRows.length}</p>
-                    <p className="text-[10px] text-indigo-600">更新（変更あり）</p>
+                    <p className="text-[10px] text-indigo-600">更新</p>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-2 text-center">
                     <p className="text-lg font-bold text-gray-500">{unchangedRows.length}</p>
@@ -3279,6 +3384,66 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                     <p className="text-[10px] text-gray-500">⚠️ 警告</p>
                   </div>
                 </div>
+
+                {/* 仮登録の紐付け候補（移行期間用） */}
+                {newRowsWithCandidates.length > 0 && (
+                  <div className="border border-purple-200 rounded-xl p-3 space-y-3 bg-purple-50/40">
+                    <div>
+                      <p className="text-sm font-bold text-purple-700">🔗 仮登録との紐付け候補（{newRowsWithCandidates.length}件）</p>
+                      <p className="text-[11px] text-purple-600 mt-0.5">
+                        カレンダー側で先に仮登録された利用者と同一人物の場合、紐付けると予定・発注がそのまま引き継がれます。
+                      </p>
+                    </div>
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {newRowsWithCandidates.map((r, i) => {
+                        const exactCount = r.provisionalCandidates.filter((c) => c.matchKind === "exact_name").length;
+                        return (
+                          <div key={i} className="bg-white rounded-lg p-2.5 border border-purple-100">
+                            <p className="text-xs font-semibold text-gray-800 mb-1.5">
+                              <span className="text-gray-400 mr-2">{r.user_number}</span>
+                              {r.name}
+                              {exactCount > 0 && <span className="ml-2 text-[10px] text-purple-600">完全一致{exactCount}件</span>}
+                            </p>
+                            <div className="space-y-1 pl-2">
+                              {r.provisionalCandidates.map((cand) => (
+                                <label key={cand.id} className="flex items-start gap-1.5 text-xs text-gray-700 cursor-pointer hover:bg-purple-50 rounded p-1">
+                                  <input
+                                    type="radio"
+                                    name={`merge-${r.user_number}`}
+                                    checked={r.mergeWithProvisionalId === cand.id}
+                                    onChange={() => setMergeId(r.user_number, cand.id)}
+                                    className="mt-0.5"
+                                  />
+                                  <span className="flex-1">
+                                    <span className="font-medium">{cand.name}</span>
+                                    {cand.matchKind === "exact_name" && <span className="ml-1 text-[10px] text-emerald-600 bg-emerald-50 px-1 rounded">完全一致</span>}
+                                    {cand.matchKind === "surname" && <span className="ml-1 text-[10px] text-amber-600 bg-amber-50 px-1 rounded">姓一致</span>}
+                                    {cand.matchKind === "address" && <span className="ml-1 text-[10px] text-sky-600 bg-sky-50 px-1 rounded">住所一致</span>}
+                                    {(cand.address || cand.phone) && (
+                                      <span className="block text-[10px] text-gray-400 mt-0.5">
+                                        {cand.address ? `🏠 ${cand.address}` : ""}{cand.address && cand.phone ? " / " : ""}{cand.phone ? `📞 ${cand.phone}` : ""}
+                                      </span>
+                                    )}
+                                  </span>
+                                </label>
+                              ))}
+                              <label className="flex items-start gap-1.5 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 rounded p-1">
+                                <input
+                                  type="radio"
+                                  name={`merge-${r.user_number}`}
+                                  checked={r.mergeWithProvisionalId === null}
+                                  onChange={() => setMergeId(r.user_number, null)}
+                                  className="mt-0.5"
+                                />
+                                <span className="text-gray-500">紐付けず、そのまま新規追加する</span>
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* 警告一覧 */}
                 {warningRows.length > 0 && (
@@ -3405,7 +3570,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
               <h3 className="font-semibold text-gray-800 text-sm">
-                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.insuranceAdded > 0 ? ` / 保険情報 ${importResult.insuranceAdded}件` : ""}{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
+                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.merged.length > 0 ? ` / 仮登録→本登録 ${importResult.merged.length}件` : ""}{importResult.insuranceAdded > 0 ? ` / 保険情報 ${importResult.insuranceAdded}件` : ""}{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
               </h3>
               <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
@@ -3452,6 +3617,20 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   </div>
                 </div>
               )}
+              {importResult.merged.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-purple-600 mb-1.5">🔗 仮登録→本登録（{importResult.merged.length}件）</p>
+                  <p className="text-[11px] text-purple-500 mb-1.5">仮登録のUUIDを維持したままCSVデータで本登録化しました。予定・発注の紐付きはそのまま引き継がれています。</p>
+                  <div className="bg-purple-50 rounded-lg p-2.5 space-y-0.5 max-h-48 overflow-y-auto">
+                    {importResult.merged.map((c, i) => (
+                      <p key={i} className="text-xs text-gray-700">
+                        <span className="text-gray-400 mr-2">{c.user_number || "-"}</span>
+                        {c.name}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
               {importResult.insuranceAdded > 0 && (
                 <div className="bg-sky-50 rounded-lg p-2.5 text-xs text-sky-800">
                   🏥 介護保険情報 <strong>{importResult.insuranceAdded}件</strong> を履歴として保存しました（介護保険タブで表示）
@@ -3462,7 +3641,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   🔗 削除→再取込で切れていた予定 <strong>{importResult.reunited}件</strong> を自動で利用者に再紐付けしました
                 </div>
               )}
-              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.errors.length === 0 && importResult.reunited === 0 && importResult.insuranceAdded === 0 && (
+              {importResult.inserted.length === 0 && importResult.updated.length === 0 && importResult.merged.length === 0 && importResult.errors.length === 0 && importResult.reunited === 0 && importResult.insuranceAdded === 0 && (
                 <p className="text-xs text-gray-400 text-center py-6">変更はありませんでした</p>
               )}
             </div>
