@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.3</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.4</span>
       </header>
 
       {/* Content */}
@@ -6784,6 +6784,14 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   const [showContracts, setShowContracts] = useState(false);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
   const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
+  // 元発注が削除された supplier_email 書類用：保存済み内容を表示
+  const [savedEmailView, setSavedEmailView] = useState<{
+    subject: string;
+    body: string;
+    supplierName?: string;
+    sentAt?: string;
+    title?: string;
+  } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -6995,8 +7003,25 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                                     setShowContracts(true);
                                   } else if (doc.type === "supplier_email") {
                                     const orderId = doc.params?.orderId as string | undefined;
+                                    // フォールバック表示用に保存済み情報を取り出す
+                                    const showSavedFromParams = (reason: string) => {
+                                      const subject = (doc.params?.subject as string) ?? "";
+                                      const body = (doc.params?.body as string) ?? "";
+                                      const supplierName = doc.params?.supplierName as string | undefined;
+                                      if (!subject && !body) {
+                                        alert(`${reason}\nまた、保存済みのメール内容も書類に残っていないため表示できません。`);
+                                        return;
+                                      }
+                                      setSavedEmailView({
+                                        subject,
+                                        body,
+                                        supplierName,
+                                        sentAt: doc.created_at,
+                                        title: doc.title,
+                                      });
+                                    };
                                     if (!orderId) {
-                                      alert("この発注メール書類には発注ID(orderId)が記録されていないため、再生成できません。\n古い書類の可能性があります。");
+                                      showSavedFromParams("この発注メール書類には発注ID(orderId)が記録されていません（古い書類）。");
                                       return;
                                     }
                                     const [orderRes, items, suppliers, members] = await Promise.all([
@@ -7011,9 +7036,7 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                                       return;
                                     }
                                     if (!orderRes.data) {
-                                      alert("元の発注が見つかりません（削除された可能性があります）。\n保存済みメール内容を表示します。");
-                                      // フォールバック：保存済み doc.params から直接モーダル表示は未実装のためログのみ
-                                      console.info("supplier_email doc.params:", doc.params);
+                                      showSavedFromParams("元の発注が見つかりません（削除された可能性があります）。");
                                       return;
                                     }
                                     setEmailPreview({ order: orderRes.data as Order, items, suppliers, members, sentAt: doc.created_at });
@@ -7092,6 +7115,57 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
           onBack={() => setEmailPreview(null)}
           onDone={() => setEmailPreview(null)}
         />
+      )}
+      {/* 元発注が削除された supplier_email 書類のフォールバック表示 */}
+      {savedEmailView && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="font-semibold text-gray-800 text-sm">📧 保存済み発注メール（送信済み）</h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {savedEmailView.supplierName && `卸: ${savedEmailView.supplierName} / `}
+                  {savedEmailView.sentAt && `送信日: ${new Date(savedEmailView.sentAt).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}`}
+                </p>
+              </div>
+              <button onClick={() => setSavedEmailView(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0">×</button>
+            </div>
+            <div className="px-5 py-4 overflow-y-auto space-y-3 flex-1">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-800">
+                ⚠️ 元の発注データは削除されているため再送信はできません。書類保存時に記録されたメール内容のみ表示しています。
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 mb-1">件名</p>
+                <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-800 break-all">{savedEmailView.subject || <span className="text-gray-400">（記録なし）</span>}</div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-500 mb-1">本文</p>
+                <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-800 whitespace-pre-wrap break-words font-mono">{savedEmailView.body || <span className="text-gray-400 font-sans">（記録なし）</span>}</div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 shrink-0 flex gap-2">
+              <button
+                onClick={() => {
+                  if (!savedEmailView.body) return;
+                  navigator.clipboard?.writeText(savedEmailView.body).then(
+                    () => { /* noop: コピー成功 */ },
+                    () => { /* noop: 失敗時は無視 */ }
+                  );
+                }}
+                disabled={!savedEmailView.body}
+                className="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-sm disabled:opacity-40"
+              >
+                本文をコピー
+              </button>
+              <button
+                onClick={() => setSavedEmailView(null)}
+                className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl text-sm"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
