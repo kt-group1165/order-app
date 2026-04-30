@@ -401,7 +401,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.9</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.10</span>
       </header>
 
       {/* Content */}
@@ -14601,132 +14601,147 @@ function ChangeContractModal({
                   fontFamily: PRINT_FONT,
                   fontSize: "10pt",
                   color: "#000",
-                  lineHeight: 1.45,
+                  lineHeight: 1.5,
+                  // ── A4 縦の印刷領域（297mm − 余白34mm = 263mm） ──
+                  // flex で「上ブロック → 余白 → 下ブロック」と縦に並べ、
+                  // 余白を flex-grow で伸ばすことで下ブロック（事業者）が用紙下端に張り付く
+                  minHeight: "263mm",
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
-                {/* 契約書別紙（タイトル） */}
-                <p style={{ fontSize: "14pt", textAlign: "center", margin: "0 0 8px" }}>
-                  契約書別紙
-                </p>
+                {/* ── 上ブロック ── */}
+                <div>
+                  {/* 契約書別紙（タイトル） */}
+                  <p style={{ fontSize: "14pt", textAlign: "center", margin: "0 0 12px" }}>
+                    契約書別紙
+                  </p>
 
-                {/* 利用者氏名 + 様 */}
-                <p style={{ margin: "0 0 6px" }}>
-                  <span style={{ fontSize: "12pt" }}>{client.name}</span>
-                  <span style={{ fontSize: "11pt", marginLeft: "8px" }}>様</span>
-                </p>
+                  {/* 利用者氏名 + 様 */}
+                  <p style={{ margin: "0 0 8px" }}>
+                    <span style={{ fontSize: "12pt" }}>{client.name}</span>
+                    <span style={{ fontSize: "11pt", marginLeft: "8px" }}>様</span>
+                  </p>
 
-                {/* 説明文（A6） */}
-                <p style={{ fontSize: "10pt", margin: "0 0 8px" }}>
-                  利用料金の変更がありましたので、新たに契約書別紙を取り交わさせて頂きます。
-                </p>
+                  {/* 説明文（A6） */}
+                  <p style={{ fontSize: "10pt", margin: "0 0 12px" }}>
+                    利用料金の変更がありましたので、新たに契約書別紙を取り交わさせて頂きます。
+                  </p>
 
-                {/* タイトル "令和8年 3・4 月利用料金"（A8: bold） */}
-                <p style={{ fontSize: "11pt", fontWeight: "bold", margin: "0 0 3px" }}>
-                  {(() => {
-                    const [y] = currentMonth.split("-").map(Number);
-                    const era = y >= 2019 ? `令和${y - 2018}年` : `${y}年`;
-                    return `${era} ${monthN(currentMonth)}・${monthN(nextMonth)}月利用料金`;
-                  })()}
-                </p>
+                  {/* タイトル "令和8年 3・4 月利用料金"（A8: bold） */}
+                  <p style={{ fontSize: "11pt", fontWeight: "bold", margin: "0 0 4px" }}>
+                    {(() => {
+                      const [y] = currentMonth.split("-").map(Number);
+                      const era = y >= 2019 ? `令和${y - 2018}年` : `${y}年`;
+                      return `${era} ${monthN(currentMonth)}・${monthN(nextMonth)}月利用料金`;
+                    })()}
+                  </p>
 
-                {/* テーブル */}
-                <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "8px" }}>
-                  <colgroup>
-                    <col style={{ width: "16.6%" }} />
-                    <col style={{ width: "43.3%" }} />
-                    <col style={{ width: "8.4%" }} />
-                    <col style={{ width: "4.8%" }} />
-                    <col style={{ width: "13.4%" }} />
-                    <col style={{ width: "13.4%" }} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th style={{ ...thBase, fontSize: "9pt" }}>種目</th>
-                      <th style={{ ...thBase, fontSize: "9pt" }}>商品名</th>
-                      <th style={{ ...thBase, fontSize: "6pt" }}>利用者負担額</th>
-                      <th style={{ ...thBase, fontSize: "8pt" }}>数量</th>
-                      <th style={{ ...thBase, fontSize: "8pt" }}>
-                        <span style={{ fontWeight: "bold" }}>{monthN(currentMonth)}</span>月利用者負担
-                      </th>
-                      <th style={{ ...thBase, fontSize: "8pt" }}>
-                        <span style={{ fontWeight: "bold" }}>{monthN(nextMonth)}</span>月利用者負担
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={i}>
-                        <td style={{ ...cellLeft, fontSize: "10pt", padding: "1px 5px" }}>{r.category}</td>
-                        <td style={{ ...cellLeft, fontSize: "8pt", padding: "1px 5px" }}>{r.name}</td>
-                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{r.unitPrice}</td>
-                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{r.quantity}</td>
-                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{r.inCurrent ? r.unitPrice * r.quantity : ""}</td>
-                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{r.inNext ? r.unitPrice * r.quantity : ""}</td>
+                  {/* テーブル */}
+                  <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "12px" }}>
+                    <colgroup>
+                      <col style={{ width: "16.6%" }} />
+                      <col style={{ width: "43.3%" }} />
+                      <col style={{ width: "8.4%" }} />
+                      <col style={{ width: "4.8%" }} />
+                      <col style={{ width: "13.4%" }} />
+                      <col style={{ width: "13.4%" }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thBase, fontSize: "9pt" }}>種目</th>
+                        <th style={{ ...thBase, fontSize: "9pt" }}>商品名</th>
+                        <th style={{ ...thBase, fontSize: "6pt" }}>利用者負担額</th>
+                        <th style={{ ...thBase, fontSize: "8pt" }}>数量</th>
+                        <th style={{ ...thBase, fontSize: "8pt" }}>
+                          <span style={{ fontWeight: "bold" }}>{monthN(currentMonth)}</span>月利用者負担
+                        </th>
+                        <th style={{ ...thBase, fontSize: "8pt" }}>
+                          <span style={{ fontWeight: "bold" }}>{monthN(nextMonth)}</span>月利用者負担
+                        </th>
                       </tr>
-                    ))}
-                    {/* 空行：1ページに収めるため最大8行に圧縮 */}
-                    {Array.from({ length: Math.max(0, 8 - rows.length) }).map((_, i) => (
-                      <tr key={`empty-${i}`}>
-                        <td style={{ ...cellBase, height: "14pt", padding: "1px 5px" }}></td>
-                        <td style={{ ...cellBase, padding: "1px 5px" }}></td>
-                        <td style={{ ...cellBase, padding: "1px 5px" }}></td>
-                        <td style={{ ...cellBase, padding: "1px 5px" }}></td>
-                        <td style={{ ...cellBase, padding: "1px 5px" }}></td>
-                        <td style={{ ...cellBase, padding: "1px 5px" }}></td>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => (
+                        <tr key={i}>
+                          <td style={{ ...cellLeft, fontSize: "10pt", padding: "2px 5px" }}>{r.category}</td>
+                          <td style={{ ...cellLeft, fontSize: "8pt", padding: "2px 5px" }}>{r.name}</td>
+                          <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{r.unitPrice}</td>
+                          <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{r.quantity}</td>
+                          <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{r.inCurrent ? r.unitPrice * r.quantity : ""}</td>
+                          <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{r.inNext ? r.unitPrice * r.quantity : ""}</td>
+                        </tr>
+                      ))}
+                      {/* 空行（見本通り 16 行枠を維持） */}
+                      {Array.from({ length: Math.max(0, 16 - rows.length) }).map((_, i) => (
+                        <tr key={`empty-${i}`}>
+                          <td style={{ ...cellBase, height: "16pt", padding: "2px 5px" }}></td>
+                          <td style={{ ...cellBase, padding: "2px 5px" }}></td>
+                          <td style={{ ...cellBase, padding: "2px 5px" }}></td>
+                          <td style={{ ...cellBase, padding: "2px 5px" }}></td>
+                          <td style={{ ...cellBase, padding: "2px 5px" }}></td>
+                          <td style={{ ...cellBase, padding: "2px 5px" }}></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={4} style={{ ...cellCenter, fontSize: "10pt", padding: "2px 5px" }}>合計</td>
+                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{currentTotal}</td>
+                        <td style={{ ...cellRight, fontSize: "10.5pt", padding: "2px 5px" }}>{nextTotal}</td>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={4} style={{ ...cellCenter, fontSize: "10pt", padding: "1px 5px" }}>合計</td>
-                      <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{currentTotal}</td>
-                      <td style={{ ...cellRight, fontSize: "10.5pt", padding: "1px 5px" }}>{nextTotal}</td>
-                    </tr>
-                  </tfoot>
-                </table>
+                    </tfoot>
+                  </table>
 
-                {/* 注意事項 */}
-                <div style={{ fontSize: "9pt", lineHeight: 1.4, marginBottom: "6px" }}>
-                  <p>　（１）介護保険の適用がある場合は、料金表のサービス費の1割もしくは２割又は3割が利用者負担金となります。</p>
-                  <p>　（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさ</p>
-                  <p>　　　 せていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
-                  <p>  （３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求</p>
-                  <p>        させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約について</p>
-                  <p>        は１ヶ月分の料金を請求させていただきます。</p>
+                  {/* 注意事項 */}
+                  <div style={{ fontSize: "9pt", lineHeight: 1.5, marginBottom: "10px" }}>
+                    <p>　（１）介護保険の適用がある場合は、料金表のサービス費の1割もしくは２割又は3割が利用者負担金となります。</p>
+                    <p>　（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさ</p>
+                    <p>　　　 せていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
+                    <p>  （３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求</p>
+                    <p>        させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約について</p>
+                    <p>        は１ヶ月分の料金を請求させていただきます。</p>
+                  </div>
+
+                  <div style={{ fontSize: "9pt", lineHeight: 1.5, marginBottom: "12px" }}>
+                    <p>　　別紙（介護予防）福祉用具貸与サービス契約約款及び本書の契約内容を証するため、本書２通を作成し、利用者、事業者</p>
+                    <p>が署名押印の上、各自１通保有するものとします。</p>
+                    <p>　　同様に、介護保険制度にて義務づけられているサービス担当者会議の開催と必要と認められる場合において、利用者様</p>
+                    <p>の個人情報を用いることについての説明を受け、同意するものといたします。</p>
+                  </div>
                 </div>
 
-                <div style={{ fontSize: "9pt", lineHeight: 1.4, marginBottom: "10px" }}>
-                  <p>　　別紙（介護予防）福祉用具貸与サービス契約約款及び本書の契約内容を証するため、本書２通を作成し、利用者、事業者</p>
-                  <p>が署名押印の上、各自１通保有するものとします。</p>
-                  <p>　　同様に、介護保険制度にて義務づけられているサービス担当者会議の開催と必要と認められる場合において、利用者様</p>
-                  <p>の個人情報を用いることについての説明を受け、同意するものといたします。</p>
+                {/* ── 余白（伸縮） ── 上下ブロックの間を flex で埋める */}
+                <div style={{ flexGrow: 1, minHeight: "8mm" }} />
+
+                {/* ── 下ブロック（用紙下端に張り付く） ── */}
+                <div>
+                  {/* 契約日 */}
+                  <p style={{ fontSize: "10pt", margin: "0 0 8px" }}>{contractDateJa}</p>
+
+                  {/* 署名欄 */}
+                  <p style={{ fontSize: "10pt", margin: "0 0 10px", borderBottom: "1px solid #000", paddingBottom: "6px" }}>
+                    契約者住所　{client.address ?? ""}
+                  </p>
+                  <p style={{ fontSize: "10pt", margin: "0 0 10px", borderBottom: "1px solid #000", paddingBottom: "6px" }}>
+                    氏　　　名　{client.name}　<span style={{ float: "right" }}>印</span>
+                  </p>
+                  <p style={{ fontSize: "10pt", margin: "0 0 10px", borderBottom: "1px solid #000", paddingBottom: "6px" }}>
+                    代理人署名　<span style={{ float: "right" }}>印</span>
+                  </p>
+
+                  {/* 事業者 */}
+                  <p style={{ fontSize: "10pt", margin: "8px 0 2px" }}>事　業　者</p>
+                  <p style={{ fontSize: "10pt", margin: "0 0 2px" }}>
+                    　　　　＜事業所名＞　{companyInfo.companyName}
+                  </p>
+                  <p style={{ fontSize: "10pt", margin: "0 0 2px" }}>
+                    　　　　＜住    所＞　{companyInfo.companyAddress}
+                  </p>
+                  <p style={{ fontSize: "10pt", margin: "0 0 2px" }}>
+                    　　　　＜管理者名＞　　　　{companyInfo.staffName}　　　㊞
+                  </p>
                 </div>
-
-                {/* 契約日 */}
-                <p style={{ fontSize: "10pt", margin: "0 0 6px" }}>{contractDateJa}</p>
-
-                {/* 署名欄 */}
-                <p style={{ fontSize: "10pt", margin: "0 0 8px", borderBottom: "1px solid #000", paddingBottom: "5px" }}>
-                  契約者住所　{client.address ?? ""}
-                </p>
-                <p style={{ fontSize: "10pt", margin: "0 0 8px", borderBottom: "1px solid #000", paddingBottom: "5px" }}>
-                  氏　　　名　{client.name}　<span style={{ float: "right" }}>印</span>
-                </p>
-                <p style={{ fontSize: "10pt", margin: "0 0 8px", borderBottom: "1px solid #000", paddingBottom: "5px" }}>
-                  代理人署名　<span style={{ float: "right" }}>印</span>
-                </p>
-
-                {/* 事業者 */}
-                <p style={{ fontSize: "10pt", margin: "6px 0 2px" }}>事　業　者</p>
-                <p style={{ fontSize: "10pt", margin: "0 0 1px" }}>
-                  　　　　＜事業所名＞　{companyInfo.companyName}
-                </p>
-                <p style={{ fontSize: "10pt", margin: "0 0 1px" }}>
-                  　　　　＜住    所＞　{companyInfo.companyAddress}
-                </p>
-                <p style={{ fontSize: "10pt", margin: "0 0 1px" }}>
-                  　　　　＜管理者名＞　　　　{companyInfo.staffName}　　　㊞
-                </p>
               </div>
             </div>
           </div>
