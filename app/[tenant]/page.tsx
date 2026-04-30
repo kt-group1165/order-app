@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.4</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.0</span>
       </header>
 
       {/* Content */}
@@ -553,20 +553,29 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [ordersData, clientsData, equipData, suppliersData, membersData] = await Promise.all([
+      // 全 order_items を一括取得して order_id でグループ化（N+1 を排除）
+      const [ordersData, allItems, clientsData, equipData, suppliersData, membersData] = await Promise.all([
         getOrders(tenantId),
+        getAllOrderItemsByTenant(tenantId),
         getClients(tenantId),
         getEquipment(tenantId),
         getSuppliers(),
         getMembers(tenantId),
       ]);
-      // Load items for each order
-      const withItems: OrderWithItems[] = await Promise.all(
-        ordersData.map(async (o) => ({
-          ...o,
-          items: await getOrderItems(o.id),
-        }))
-      );
+      const itemsByOrder = new Map<string, OrderItem[]>();
+      for (const item of allItems) {
+        const arr = itemsByOrder.get(item.order_id) ?? [];
+        arr.push(item);
+        itemsByOrder.set(item.order_id, arr);
+      }
+      // 元の getOrderItems() は created_at 昇順だったので、グループ化後にもソートを揃える
+      for (const arr of itemsByOrder.values()) {
+        arr.sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+      }
+      const withItems: OrderWithItems[] = ordersData.map((o) => ({
+        ...o,
+        items: itemsByOrder.get(o.id) ?? [],
+      }));
       setOrders(withItems);
       setExpandedIds(new Set(withItems.map((o) => o.id)));
       setClients(clientsData);

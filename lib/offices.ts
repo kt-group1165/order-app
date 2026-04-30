@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 export type Office = {
   id: string;
@@ -23,16 +24,18 @@ export type EquipmentOfficePrice = {
 };
 
 export async function getOffices(tenantId: string): Promise<Office[]> {
-  // 福祉用具の事業所 + service_type未設定（旧データ）を返す
-  const { data, error } = await supabase
-    .from("offices")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .or(`service_type.eq.${APP_SERVICE_TYPE},service_type.is.null`)
-    .order("sort_order", { ascending: true })
-    .order("created_at", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return cached(`offices:${tenantId}`, async () => {
+    // 福祉用具の事業所 + service_type未設定（旧データ）を返す
+    const { data, error } = await supabase
+      .from("offices")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .or(`service_type.eq.${APP_SERVICE_TYPE},service_type.is.null`)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function createOffice(tenantId: string, name: string): Promise<Office> {
@@ -43,6 +46,7 @@ export async function createOffice(tenantId: string, name: string): Promise<Offi
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("offices:");
   return data;
 }
 
@@ -51,20 +55,24 @@ export async function updateOffice(id: string, name: string, businessNumber?: st
   if (businessNumber !== undefined) patch.business_number = businessNumber;
   const { error } = await supabase.from("offices").update(patch).eq("id", id);
   if (error) throw error;
+  invalidateCache("offices:");
 }
 
 export async function deleteOffice(id: string): Promise<void> {
   const { error } = await supabase.from("offices").delete().eq("id", id);
   if (error) throw error;
+  invalidateCache("offices:");
 }
 
 export async function getOfficePrices(tenantId: string): Promise<EquipmentOfficePrice[]> {
-  const { data, error } = await supabase
-    .from("equipment_office_prices")
-    .select("*")
-    .eq("tenant_id", tenantId);
-  if (error) throw error;
-  return data ?? [];
+  return cached(`office_prices:${tenantId}`, async () => {
+    const { data, error } = await supabase
+      .from("equipment_office_prices")
+      .select("*")
+      .eq("tenant_id", tenantId);
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function upsertOfficePrice(
@@ -86,6 +94,7 @@ export async function upsertOfficePrice(
       { onConflict: "tenant_id,product_code,office_id" }
     );
   if (error) throw error;
+  invalidateCache("office_prices:");
 }
 
 export async function deleteOfficePrice(
@@ -100,6 +109,7 @@ export async function deleteOfficePrice(
     .eq("product_code", productCode)
     .eq("office_id", officeId);
   if (error) throw error;
+  invalidateCache("office_prices:");
 }
 
 export async function bulkUpsertOfficePrices(
@@ -111,6 +121,7 @@ export async function bulkUpsertOfficePrices(
     .from("equipment_office_prices")
     .upsert(rows, { onConflict: "tenant_id,product_code,office_id" });
   if (error) throw error;
+  invalidateCache("office_prices:");
 }
 
 // ─── 利用者×事業所 適用紐付け ─────────────────────────────────────────────────
@@ -123,12 +134,14 @@ export type ClientOfficeAssignment = {
 };
 
 export async function getClientOfficeAssignments(tenantId: string): Promise<ClientOfficeAssignment[]> {
-  const { data, error } = await supabase
-    .from("client_office_assignments")
-    .select("*")
-    .eq("tenant_id", tenantId);
-  if (error) throw error;
-  return data ?? [];
+  return cached(`client_office_assignments:${tenantId}`, async () => {
+    const { data, error } = await supabase
+      .from("client_office_assignments")
+      .select("*")
+      .eq("tenant_id", tenantId);
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function assignClientToOffice(
@@ -143,6 +156,7 @@ export async function assignClientToOffice(
       { onConflict: "tenant_id,client_id,office_id" }
     );
   if (error) throw error;
+  invalidateCache("client_office_assignments:");
 }
 
 export async function removeClientFromOffice(
@@ -157,6 +171,7 @@ export async function removeClientFromOffice(
     .eq("client_id", clientId)
     .eq("office_id", officeId);
   if (error) throw error;
+  invalidateCache("client_office_assignments:");
 }
 
 export async function getClientsByOffice(

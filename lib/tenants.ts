@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 export type Tenant = {
   id: string;
@@ -23,21 +24,25 @@ export type Tenant = {
 };
 
 export async function getTenants(): Promise<Tenant[]> {
-  const { data, error } = await supabase
-    .from("tenants")
-    .select("*")
-    .order("created_at", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return cached(`tenants:all`, async () => {
+    const { data, error } = await supabase
+      .from("tenants")
+      .select("*")
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function getTenantById(id: string): Promise<Tenant | null> {
-  const { data } = await supabase
-    .from("tenants")
-    .select("*")
-    .eq("id", id)
-    .single();
-  return data ?? null;
+  return cached(`tenant:${id}`, async () => {
+    const { data } = await supabase
+      .from("tenants")
+      .select("*")
+      .eq("id", id)
+      .single();
+    return data ?? null;
+  });
 }
 
 export async function updateTenantInfo(
@@ -66,4 +71,6 @@ export async function updateTenantInfo(
     .update(info)
     .eq("id", id);
   if (error) throw error;
+  invalidateCache("tenant:");
+  invalidateCache("tenants:");
 }

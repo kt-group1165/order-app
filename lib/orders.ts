@@ -1,59 +1,67 @@
 import { supabase, Order, OrderItem, Member } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 export async function getMembers(tenantId: string): Promise<Member[]> {
-  const { data, error } = await supabase
-    .from("members")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("sort_order", { nullsFirst: false })
-    .order("name");
-  if (error) throw error;
-  return data ?? [];
+  return cached(`members:${tenantId}`, async () => {
+    const { data, error } = await supabase
+      .from("members")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("sort_order", { nullsFirst: false })
+      .order("name");
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
 export async function getOrders(tenantId: string): Promise<Order[]> {
-  const PAGE = 1000;
-  const all: Order[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .neq("status", "cancelled")
-      .order("ordered_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+  return cached(`orders:${tenantId}:active`, async () => {
+    const PAGE = 1000;
+    const all: Order[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .neq("status", "cancelled")
+        .order("ordered_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  });
 }
 
 export async function getAllOrders(tenantId: string): Promise<Order[]> {
-  const PAGE = 1000;
-  const all: Order[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .order("ordered_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+  return cached(`orders:${tenantId}:all`, async () => {
+    const PAGE = 1000;
+    const all: Order[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("ordered_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  });
 }
 
 export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
+  // 単一発注の明細はキャッシュしない（呼出頻度が低く、即時性が必要なため）
   const { data, error } = await supabase
     .from("order_items")
     .select("*")
@@ -64,23 +72,25 @@ export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
 }
 
 export async function getAllOrderItemsByTenant(tenantId: string): Promise<OrderItem[]> {
-  const PAGE = 1000;
-  const all: OrderItem[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("order_items")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+  return cached(`order_items:${tenantId}`, async () => {
+    const PAGE = 1000;
+    const all: OrderItem[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("order_items")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  });
 }
 
 export async function updateOrderItemStatus(
@@ -109,6 +119,8 @@ export async function updateOrderItemStatus(
     .update(updates)
     .eq("id", id);
   if (error) throw error;
+  invalidateCache("order_items:");
+  invalidateCache("orders:");
 }
 
 export async function createOrder(params: {
@@ -150,6 +162,7 @@ export async function createOrder(params: {
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("orders:");
   return data;
 }
 
@@ -185,6 +198,7 @@ export async function createOrderItem(params: {
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("order_items:");
   return data;
 }
 
@@ -204,6 +218,7 @@ export async function recordEmailSent(orderId: string): Promise<void> {
     })
     .eq("id", orderId);
   if (error) throw error;
+  invalidateCache("orders:");
 }
 
 export async function updateSupplierEmail(supplierId: string, email: string): Promise<void> {
@@ -212,6 +227,7 @@ export async function updateSupplierEmail(supplierId: string, email: string): Pr
     .update({ email })
     .eq("id", supplierId);
   if (error) throw error;
+  invalidateCache("suppliers:");
 }
 
 export async function updateOrderStatus(
@@ -223,4 +239,5 @@ export async function updateOrderStatus(
     .update({ status, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) throw error;
+  invalidateCache("orders:");
 }

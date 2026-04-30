@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 export type CareOffice = {
   id: string;
@@ -15,13 +16,15 @@ export type CareOffice = {
 };
 
 export async function getCareOffices(tenantId: string): Promise<CareOffice[]> {
-  const { data, error } = await supabase
-    .from("care_offices")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("name", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return cached(`care_offices:${tenantId}`, async () => {
+    const { data, error } = await supabase
+      .from("care_offices")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function upsertCareOffice(
@@ -34,12 +37,15 @@ export async function upsertCareOffice(
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("care_offices:");
   return data;
 }
 
 export async function deleteCareOffice(id: string): Promise<void> {
   const { error } = await supabase.from("care_offices").delete().eq("id", id);
   if (error) throw error;
+  invalidateCache("care_offices:");
+  invalidateCache("care_managers:");
 }
 
 // ─── ケアマネ ────────────────────────────────────────────────────────────────
@@ -54,13 +60,15 @@ export type CareManager = {
 };
 
 export async function getCareManagers(tenantId: string): Promise<CareManager[]> {
-  const { data, error } = await supabase
-    .from("care_managers")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("name", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return cached(`care_managers:${tenantId}`, async () => {
+    const { data, error } = await supabase
+      .from("care_managers")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function addCareManager(
@@ -74,6 +82,7 @@ export async function addCareManager(
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("care_managers:");
   return data;
 }
 
@@ -83,11 +92,13 @@ export async function updateCareManager(
 ): Promise<void> {
   const { error } = await supabase.from("care_managers").update(params).eq("id", id);
   if (error) throw error;
+  invalidateCache("care_managers:");
 }
 
 export async function deleteCareManager(id: string): Promise<void> {
   const { error } = await supabase.from("care_managers").delete().eq("id", id);
   if (error) throw error;
+  invalidateCache("care_managers:");
 }
 
 // eFax送信（API Route経由）

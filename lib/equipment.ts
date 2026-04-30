@@ -1,24 +1,27 @@
 import { supabase, Equipment, Supplier, EquipmentPrice, EquipmentPriceHistory } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 export async function getEquipment(tenantId: string): Promise<Equipment[]> {
-  const all: Equipment[] = [];
-  const pageSize = 1000;
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("equipment_master")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .order("sort_order", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < pageSize) break;
-    from += pageSize;
-  }
-  return all;
+  return cached(`equipment:${tenantId}`, async () => {
+    const all: Equipment[] = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("equipment_master")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("sort_order", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  });
 }
 
 /** 既存用具を更新 */
@@ -43,6 +46,7 @@ export async function updateEquipment(
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("equipment:");
   return data;
 }
 
@@ -102,16 +106,19 @@ export async function createEquipmentItem(
     .select()
     .single();
   if (error) throw error;
+  invalidateCache("equipment:");
   return data;
 }
 
 export async function getSuppliers(): Promise<Supplier[]> {
-  const { data, error } = await supabase
-    .from("suppliers")
-    .select("*")
-    .order("name", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return cached(`suppliers:all`, async () => {
+    const { data, error } = await supabase
+      .from("suppliers")
+      .select("*")
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  });
 }
 
 export async function getEquipmentPrices(
@@ -330,6 +337,7 @@ export async function importEquipment(
     }
   }
 
+  invalidateCache("equipment:");
   return result;
 }
 
@@ -452,6 +460,7 @@ export async function updateEquipmentSortOrders(
       .eq("id", u.id);
     if (error) throw error;
   }
+  invalidateCache("equipment:");
 }
 
 function parseCsvLine(line: string): string[] {

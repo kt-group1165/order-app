@@ -1,31 +1,41 @@
 import { supabase, Client } from "./supabase";
+import { cached, invalidateCache } from "./cache";
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
 // 既定では削除済み（deleted_at IS NOT NULL）を除外する
-export async function getClients(tenantId: string, opts: { includeDeleted?: boolean; onlyDeleted?: boolean } = {}): Promise<Client[]> {
-  const PAGE = 1000;
-  const all: Client[] = [];
-  let from = 0;
-  while (true) {
-    let q = supabase
-      .from("clients")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .order("furigana", { ascending: true, nullsFirst: false })
-      .range(from, from + PAGE - 1);
-    if (opts.onlyDeleted) {
-      q = q.not("deleted_at", "is", null);
-    } else if (!opts.includeDeleted) {
-      q = q.is("deleted_at", null);
+export async function getClients(
+  tenantId: string,
+  opts: { includeDeleted?: boolean; onlyDeleted?: boolean; bypassCache?: boolean } = {}
+): Promise<Client[]> {
+  const filterKey = opts.onlyDeleted ? "deleted" : opts.includeDeleted ? "all" : "active";
+  const key = `clients:${tenantId}:${filterKey}`;
+  const fetcher = async (): Promise<Client[]> => {
+    const PAGE = 1000;
+    const all: Client[] = [];
+    let from = 0;
+    while (true) {
+      let q = supabase
+        .from("clients")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("furigana", { ascending: true, nullsFirst: false })
+        .range(from, from + PAGE - 1);
+      if (opts.onlyDeleted) {
+        q = q.not("deleted_at", "is", null);
+      } else if (!opts.includeDeleted) {
+        q = q.is("deleted_at", null);
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
     }
-    const { data, error } = await q;
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+    return all;
+  };
+  if (opts.bypassCache) return fetcher();
+  return cached(key, fetcher);
 }
 
 // ソフト削除
@@ -35,6 +45,7 @@ export async function softDeleteClient(clientId: string): Promise<void> {
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", clientId);
   if (error) throw error;
+  invalidateCache("clients:");
 }
 
 // 復元
@@ -44,6 +55,7 @@ export async function restoreClient(clientId: string): Promise<void> {
     .update({ deleted_at: null })
     .eq("id", clientId);
   if (error) throw error;
+  invalidateCache("clients:");
 }
 
 // 仮登録の本登録化（編集フローで使用）
@@ -56,6 +68,7 @@ export async function promoteProvisionalClient(
   const payload = { ...updates, is_provisional: false };
   const { error } = await supabase.from("clients").update(payload).eq("id", clientId);
   if (error) throw error;
+  invalidateCache("clients:");
 }
 
 // 新規利用者を正式登録し、指定した仮登録を「同一人物」として置き換える。
@@ -105,6 +118,7 @@ export async function mergeProvisionalIntoNewClient(
   const { error: delErr } = await supabase.from("clients").delete().eq("id", provisionalClientId);
   if (delErr) throw delErr;
 
+  invalidateCache("clients:");
   return newClient;
 }
 
