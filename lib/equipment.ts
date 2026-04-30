@@ -1,8 +1,8 @@
 import { supabase, Equipment, Supplier, EquipmentPrice, EquipmentPriceHistory } from "./supabase";
 import { cached, invalidateCache } from "./cache";
 
-export async function getEquipment(tenantId: string): Promise<Equipment[]> {
-  return cached(`equipment:${tenantId}`, async () => {
+export async function getEquipment(tenantId: string, bypassCache = false): Promise<Equipment[]> {
+  const fetcher = async (): Promise<Equipment[]> => {
     const all: Equipment[] = [];
     const pageSize = 1000;
     let from = 0;
@@ -21,7 +21,12 @@ export async function getEquipment(tenantId: string): Promise<Equipment[]> {
       from += pageSize;
     }
     return all;
-  });
+  };
+  if (bypassCache) {
+    invalidateCache(`equipment:${tenantId}`);
+    return fetcher();
+  }
+  return cached(`equipment:${tenantId}`, fetcher);
 }
 
 /** 既存用具を更新 */
@@ -110,15 +115,20 @@ export async function createEquipmentItem(
   return data;
 }
 
-export async function getSuppliers(): Promise<Supplier[]> {
-  return cached(`suppliers:all`, async () => {
+export async function getSuppliers(bypassCache = false): Promise<Supplier[]> {
+  const fetcher = async (): Promise<Supplier[]> => {
     const { data, error } = await supabase
       .from("suppliers")
       .select("*")
       .order("name", { ascending: true });
     if (error) throw error;
     return data ?? [];
-  });
+  };
+  if (bypassCache) {
+    invalidateCache(`suppliers:`);
+    return fetcher();
+  }
+  return cached(`suppliers:all`, fetcher);
 }
 
 export async function getEquipmentPrices(

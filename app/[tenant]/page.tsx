@@ -52,6 +52,7 @@ import {
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
+import { invalidateCache } from "@/lib/cache";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -400,7 +401,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.4</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.5</span>
       </header>
 
       {/* Content */}
@@ -1307,6 +1308,8 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         }
         setBulkFuriganaProgress({ done: Math.min(i + BATCH, targets.length), total: targets.length });
       }
+      // ブラウザ内のメモリキャッシュを無効化（音声発注のマッチング側が古い equipment を見ないように）
+      invalidateCache("equipment:");
       setBulkFuriganaState("done");
       await load();
       setTimeout(() => setBulkFuriganaState("idle"), 2500);

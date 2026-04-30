@@ -188,10 +188,11 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const voiceInputResolveRef = useRef<((r: HeardResult) => void) | null>(null);
 
   useEffect(() => {
+    // 音声発注ではフリガナが命なので、キャッシュを無視して必ず最新を取得する
     Promise.all([
-      getClients(tenantId),
-      getEquipment(tenantId),
-      getSuppliers(),
+      getClients(tenantId, { bypassCache: true }),
+      getEquipment(tenantId, true),
+      getSuppliers(true),
     ]).then(([c, eq, sup]) => {
       setClients(c);
       setEquipment(eq);
