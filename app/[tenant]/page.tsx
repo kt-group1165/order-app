@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.1</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.2</span>
       </header>
 
       {/* Content */}
@@ -2414,21 +2414,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     })();
   }, [tenantId, trashFilter]);
 
-  if (selectedClient) {
-    return (
-      <ClientDetail
-        client={selectedClient}
-        allOrderItems={orderItems}
-        equipment={equipment}
-        tenantId={tenantId}
-        initialViewMode={selectedClientInitialViewMode}
-        hospitalizations={hospitalizations}
-        onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
-      />
-    );
-  }
-
   // ⚡ パフォーマンス最適化：Map ルックアップ（O(N) → O(1)）
+  // 注意: フックの順序を保つため、必ず早期 return より前に置くこと
   const orderById = useMemo(() => {
     const m = new Map<string, Order>();
     for (const o of orders) m.set(o.id, o);
@@ -2487,21 +2474,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     }),
     [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, hospFilter, hospFilteredIds, kanaFilter, search]);
 
-  // Count active rentals per client
-  const activeCount = (clientId: string) =>
-    orderItems.filter(
-      (i) => i.status === "rental_started"
-    ).length; // simplified — real app would join through orders
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 size={28} className="animate-spin text-emerald-400" />
-      </div>
-    );
-  }
-
   // 変更履歴を生成（Mapルックアップで O(N²) → O(N) に、useMemoで再描画時再実行しない）
+  // 注意: 早期 return より前に置くこと（フックの順序を保つ）
   const changeHistory = useMemo(() => {
     type ChangeEvent = { date: string; clientId: string; equipName: string; label: string; color: string };
     const events: ChangeEvent[] = [];
@@ -2527,6 +2501,35 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       .filter((g) => g.client)
       .sort((a, b) => (b.events[0]?.date ?? "").localeCompare(a.events[0]?.date ?? ""));
   }, [orderItems, orderById, equipmentByCode, clientById]);
+
+  // 全フック呼び出し済み。ここから早期 return が安全に使える ─────────────
+  if (selectedClient) {
+    return (
+      <ClientDetail
+        client={selectedClient}
+        allOrderItems={orderItems}
+        equipment={equipment}
+        tenantId={tenantId}
+        initialViewMode={selectedClientInitialViewMode}
+        hospitalizations={hospitalizations}
+        onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
+      />
+    );
+  }
+
+  // Count active rentals per client
+  const activeCount = (clientId: string) =>
+    orderItems.filter(
+      (i) => i.status === "rental_started"
+    ).length; // simplified — real app would join through orders
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 size={28} className="animate-spin text-emerald-400" />
+      </div>
+    );
+  }
 
   const CSV_HEADERS = ["利用者番号", "氏名", "ふりがな", "電話番号", "携帯番号", "住所", "介護度", "給付率", "ケアマネ名", "ケアマネ事業所", "認定終了日", "メモ", "居宅・施設等"];
 
