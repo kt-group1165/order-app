@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v2 } from "@google-cloud/speech";
 import { createClient } from "@supabase/supabase-js";
-import { toKatakanaReadings } from "@/lib/openaiKana";
+import { toKatakanaReadingsDetailed } from "@/lib/openaiKana";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -138,20 +138,15 @@ export async function POST(req: NextRequest) {
     const toConvert = [text, ...alternatives];
     let kanaText = "";
     let kanaAlternatives: string[] = [];
+    let kanaError: string | undefined;
     if (toConvert.some((t) => t.length > 0)) {
-      try {
-        const converted = await toKatakanaReadings(toConvert, {
-          tenantId: tenantId || undefined,
-          purpose: "transcribe_kana",
-        });
-        kanaText = converted[0] ?? "";
-        kanaAlternatives = converted.slice(1);
-      } catch (e) {
-        console.error("kana conversion failed:", e);
-        // フォールバック：元の文字列をそのまま返す
-        kanaText = text;
-        kanaAlternatives = alternatives;
-      }
+      const converted = await toKatakanaReadingsDetailed(toConvert, {
+        tenantId: tenantId || undefined,
+        purpose: "transcribe_kana",
+      });
+      kanaText = converted.readings[0] ?? "";
+      kanaAlternatives = converted.readings.slice(1);
+      if (converted.error) kanaError = converted.error;
     }
 
     // 使用量を記録（totalBilledDurationから課金対象秒数を取得）
@@ -180,7 +175,7 @@ export async function POST(req: NextRequest) {
       console.error("usage log error:", logErr);
     }
 
-    return NextResponse.json({ text, alternatives, kana: kanaText, kanaAlternatives });
+    return NextResponse.json({ text, alternatives, kana: kanaText, kanaAlternatives, kanaError });
   } catch (e) {
     console.error(e);
     const detail = e instanceof Error ? e.message : String(e);

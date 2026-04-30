@@ -285,6 +285,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               const alts: string[] = Array.isArray(data.alternatives) ? data.alternatives : [];
               const kanaPrimary = (data.kana ?? "").trim();
               const kanaAlts: string[] = Array.isArray(data.kanaAlternatives) ? data.kanaAlternatives : [];
+              const kanaErr = (data.kanaError ?? "") as string;
               // 全候補を結合してマッチングに使う(漢字誤変換対策)
               const uniqueAlts = alts.filter((a) => a && a !== primary);
               const uniqueKanaAlts = kanaAlts.filter((a) => a && a !== kanaPrimary);
@@ -293,7 +294,8 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
               // デバッグ: プライマリとカナ化結果を表示
               const altDisplay = uniqueAlts.length > 0 ? ` +候補:${uniqueAlts.slice(0, 3).join("/")}` : "";
               const kanaDisplay = kanaPrimary ? ` (カナ:${kanaPrimary})` : "";
-              setVoiceMessage(`結果: "${primary}"${altDisplay}${kanaDisplay} / err: ${data.error ?? "なし"} ${data.detail ?? ""}`);
+              const kanaErrDisplay = kanaErr ? ` 🔴カナ変換失敗:${kanaErr}` : "";
+              setVoiceMessage(`結果: "${primary}"${altDisplay}${kanaDisplay}${kanaErrDisplay} / err: ${data.error ?? "なし"} ${data.detail ?? ""}`);
               setTimeout(() => { if (voiceInputResolveRef.current) voiceInputResolveRef.current({ text: combinedText, kana: combinedKana }); }, 1500);
             } catch (e) {
               console.error("transcribe error:", e);

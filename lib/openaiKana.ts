@@ -56,22 +56,23 @@ async function logUsage(opts: {
 }
 
 /**
- * 入力テキスト群をすべてカタカナの読みに変換する。
- * 入力配列の順序を保ったまま、同じ長さの配列を返す。失敗した要素は元の文字列。
- *
- * 第2引数で使用量記録のメタ情報を渡せる（tenantId と purpose）。
+ * 入力テキスト群をすべてカタカナの読みに変換する（エラー情報付き）。
+ * 失敗した場合は readings に元のテキストを返しつつ、error にエラー内容を入れて返す。
  */
-export async function toKatakanaReadings(
+export async function toKatakanaReadingsDetailed(
   texts: string[],
   meta?: { tenantId?: string; purpose?: string }
-): Promise<string[]> {
+): Promise<{ readings: string[]; error?: string }> {
   const filtered = texts.map((t) => (t ?? "").trim()).filter((t) => t.length > 0);
-  if (filtered.length === 0) return texts.map(() => "");
+  if (filtered.length === 0) return { readings: texts.map(() => "") };
 
   const client = getClient();
   if (!client) {
     // OPENAI_API_KEY 未設定の場合は元のテキストをそのまま返す（呼出側が辞書比較にフォールバック）
-    return texts.map((t) => (t ?? "").trim());
+    return {
+      readings: texts.map((t) => (t ?? "").trim()),
+      error: "OPENAI_API_KEY が未設定です（環境変数を確認してください）",
+    };
   }
 
   // 入力をJSON配列で渡し、同じ長さのカタカナ配列を返してもらう
@@ -131,7 +132,10 @@ export async function toKatakanaReadings(
 
     if (arr.length !== filtered.length) {
       // 長さが合わなければ全件元テキストにフォールバック
-      return texts.map((t) => (t ?? "").trim());
+      return {
+        readings: texts.map((t) => (t ?? "").trim()),
+        error: `OpenAI 応答の配列長が一致しません（期待:${filtered.length} 実際:${arr.length}）`,
+      };
     }
 
     // texts 内の空要素は空のまま戻す
@@ -143,9 +147,24 @@ export async function toKatakanaReadings(
       result.push(String(arr[j] ?? trimmed));
       j++;
     }
-    return result;
+    return { readings: result };
   } catch (e) {
     console.error("OpenAI kana conversion error:", e);
-    return texts.map((t) => (t ?? "").trim());
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      readings: texts.map((t) => (t ?? "").trim()),
+      error: `OpenAI 呼出失敗: ${msg}`,
+    };
   }
+}
+
+/**
+ * 後方互換用：配列だけ返すラッパー
+ */
+export async function toKatakanaReadings(
+  texts: string[],
+  meta?: { tenantId?: string; purpose?: string }
+): Promise<string[]> {
+  const r = await toKatakanaReadingsDetailed(texts, meta);
+  return r.readings;
 }

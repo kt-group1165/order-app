@@ -401,7 +401,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.5</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.6</span>
       </header>
 
       {/* Content */}
@@ -6785,6 +6785,8 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   const [showProposal, setShowProposal] = useState(false);
   const [proposalInitialParams, setProposalInitialParams] = useState<Record<string, unknown> | null>(null);
   const [showContracts, setShowContracts] = useState(false);
+  const [showChangeContract, setShowChangeContract] = useState(false);
+  const [changeContractInitialParams, setChangeContractInitialParams] = useState<Record<string, unknown> | null>(null);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
   const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
   // 元発注が削除された supplier_email 書類用：保存済み内容を表示
@@ -6948,6 +6950,10 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                       className="flex items-center gap-2 px-3 py-2.5 bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium rounded-xl hover:bg-orange-100 transition-colors">
                       <FileText size={15} /> 重要事項・契約書
                     </button>
+                    <button onClick={() => { setChangeContractInitialParams(null); setShowChangeContract(true); }}
+                      className="flex items-center gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium rounded-xl hover:bg-amber-100 transition-colors">
+                      <FileText size={15} /> 変更契約書
+                    </button>
                   </div>
                 </div>
 
@@ -6984,7 +6990,8 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                           doc.type === "proposal" ||
                           doc.type === "supplier_email" ||
                           doc.type === "rental_contract" ||
-                          doc.type === "important_matters";
+                          doc.type === "important_matters" ||
+                          doc.type === "change_contract";
                         return (
                         <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
                           <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
@@ -7004,6 +7011,9 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                                     setProposalInitialParams(doc.params); setShowProposal(true);
                                   } else if (doc.type === "rental_contract" || doc.type === "important_matters") {
                                     setShowContracts(true);
+                                  } else if (doc.type === "change_contract") {
+                                    setChangeContractInitialParams(doc.params);
+                                    setShowChangeContract(true);
                                   } else if (doc.type === "supplier_email") {
                                     const orderId = doc.params?.orderId as string | undefined;
                                     // フォールバック表示用に保存済み情報を取り出す
@@ -7117,6 +7127,22 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
           onClose={() => setEmailPreview(null)}
           onBack={() => setEmailPreview(null)}
           onDone={() => setEmailPreview(null)}
+        />
+      )}
+      {showChangeContract && selectedClient && (
+        <ChangeContractModal
+          client={selectedClient}
+          clientItems={clientItems}
+          equipment={equipment}
+          companyInfo={companyInfo}
+          tenantId={tenantId}
+          initialParams={changeContractInitialParams ?? undefined}
+          onClose={() => { setShowChangeContract(false); setChangeContractInitialParams(null); }}
+          onSaved={async () => {
+            await refreshDocs();
+            setShowChangeContract(false);
+            setChangeContractInitialParams(null);
+          }}
         />
       )}
       {/* 元発注が削除された supplier_email 書類のフォールバック表示 */}
@@ -14280,6 +14306,364 @@ function RentalContractModal({
                 <p style={{ margin: 0, lineHeight: "1.6" }}>当事業所はご利用者様の身体的状況やご家族の状況をケアプラン上必要な情報に限り、ご利用者様担当ケアマネージャーに報告致します。当事業所内においてのお客様に関するサービス内容の検討や、向上の為のケース会議、ケアマネージャー様等関係従事者様とのサービス担当者会議以外に個人情報を用いない事を厳守いたします。</p>
               </div>
 
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Change Contract Modal (変更契約書 / 契約書別紙) ─────────────────────────
+// 用具が追加・解約・数量変更された際に作成する書類。
+// 変更前の月（当月）と変更後の月（翌月）の利用料金を併記する形式。
+function ChangeContractModal({
+  client,
+  clientItems,
+  equipment,
+  companyInfo,
+  tenantId,
+  onClose,
+  onSaved,
+  initialParams,
+}: {
+  client: Client;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  companyInfo: CompanyInfo;
+  tenantId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+  initialParams?: Record<string, unknown>;
+}) {
+  const todayStr = new Date().toISOString().split("T")[0];
+  const today = new Date();
+  const todayYM = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const nextDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  const nextYM = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`;
+
+  const [step, setStep] = useState<1 | 2>(1);
+  const [contractDate, setContractDate] = useState((initialParams?.contractDate as string) ?? todayStr);
+  const [currentMonth, setCurrentMonth] = useState((initialParams?.currentMonth as string) ?? todayYM);
+  const [nextMonth, setNextMonth] = useState((initialParams?.nextMonth as string) ?? nextYM);
+  const initialBenefitRate: "1" | "2" | "3" =
+    (initialParams?.benefitRate as "1" | "2" | "3" | undefined) ??
+    (client.copay_rate === "20" ? "2" : client.copay_rate === "30" ? "3" : "1");
+  const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">(initialBenefitRate);
+  const [saving, setSaving] = useState(false);
+
+  type Row = {
+    itemId: string;
+    productCode: string;
+    name: string;
+    category: string;
+    unitPrice: number;
+    quantity: number;
+    inCurrent: boolean;
+    inNext: boolean;
+  };
+
+  const burdenRate = parseInt(benefitRate, 10);
+
+  const inMonth = useCallback((item: OrderItem, yyyymm: string): boolean => {
+    if (item.status === "cancelled") return false;
+    if (item.status === "ordered" || item.status === "delivered" || item.status === "trial") return false;
+    const [y, m] = yyyymm.split("-").map(Number);
+    if (!y || !m) return false;
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
+    const start = item.rental_start_date ? new Date(item.rental_start_date) : null;
+    const end = item.rental_end_date ? new Date(item.rental_end_date) : null;
+    if (!start) return false;
+    if (start > monthEnd) return false;
+    if (end && end < monthStart) return false;
+    return true;
+  }, []);
+
+  const buildRows = useCallback((): Row[] => {
+    const result: Row[] = [];
+    for (const item of clientItems) {
+      const eq = equipment.find((e) => e.product_code === item.product_code);
+      const inCurrent = inMonth(item, currentMonth);
+      const inNext = inMonth(item, nextMonth);
+      if (!inCurrent && !inNext) continue;
+      const fullPrice = item.rental_price ?? eq?.rental_price ?? 0;
+      const userBurden = Math.round((fullPrice * burdenRate) / 10);
+      result.push({
+        itemId: item.id,
+        productCode: item.product_code,
+        name: eq?.name ?? item.product_code,
+        category: eq?.category ?? "",
+        unitPrice: userBurden,
+        quantity: item.quantity ?? 1,
+        inCurrent,
+        inNext,
+      });
+    }
+    return result;
+  }, [clientItems, equipment, currentMonth, nextMonth, burdenRate, inMonth]);
+
+  const [rows, setRows] = useState<Row[]>(() => buildRows());
+
+  useEffect(() => {
+    setRows(buildRows());
+  }, [buildRows]);
+
+  const currentTotal = rows.filter((r) => r.inCurrent).reduce((s, r) => s + r.unitPrice * r.quantity, 0);
+  const nextTotal = rows.filter((r) => r.inNext).reduce((s, r) => s + r.unitPrice * r.quantity, 0);
+
+  const contractDateJa = contractDate ? toJapaneseEra(new Date(contractDate + "T00:00:00")) : "　　年　月　日";
+
+  const monthLabel = (yyyymm: string) => {
+    const [y, m] = yyyymm.split("-").map(Number);
+    return `${y}年${m}月`;
+  };
+  const monthN = (yyyymm: string) => parseInt(yyyymm.split("-")[1] ?? "0", 10);
+
+  const handlePrint = () => {
+    const el = document.getElementById("change-contract-print");
+    if (!el) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>変更契約書</title><style>
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0}
+      @page{size:A4 portrait;margin:18mm 18mm}
+      table{border-collapse:collapse;width:100%}
+      td,th{border:1px solid #555;padding:3px 6px;vertical-align:middle;font-size:9pt}
+      th{background:#eee;font-weight:bold;text-align:center}
+      h1{font-size:14pt;text-align:center;margin:0 0 14px;font-weight:bold}
+      p{margin:3px 0;line-height:1.5}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveClientDocument({
+        tenant_id: tenantId,
+        client_id: client.id,
+        type: "change_contract",
+        title: `変更契約書 ${contractDate}`,
+        params: { contractDate, currentMonth, nextMonth, benefitRate },
+      });
+      onSaved?.();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cellStyle: React.CSSProperties = { border: "1px solid #555", padding: "3px 6px" };
+  const cellRight: React.CSSProperties = { ...cellStyle, textAlign: "right" };
+  const thStyle: React.CSSProperties = { ...cellStyle, background: "#eee", fontWeight: "bold", textAlign: "center" };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
+      <div className="bg-white flex-1 overflow-hidden flex flex-col">
+        {/* ヘッダー */}
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
+          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+            <ChevronLeft size={20} className="text-gray-500" />
+          </button>
+          <h2 className="font-semibold text-gray-800 flex-1">変更契約書</h2>
+          {step === 2 && (
+            <div className="flex gap-2">
+              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+                <Printer size={14} /> 印刷
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          )}
+          {step === 1 && (
+            <button disabled={rows.length === 0} onClick={() => setStep(2)}
+              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              次へ（プレビュー）
+            </button>
+          )}
+        </div>
+
+        {/* Step 1: 設定 */}
+        {step === 1 && (
+          <div className="flex-1 overflow-auto p-5 space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+              💡 変更前後の月を選択すると、レンタル中の用具を自動抽出します。チェックボックスで月ごとの含有を調整できます。
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">変更前の月（当月）</label>
+                <input type="month" value={currentMonth} onChange={(e) => setCurrentMonth(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">変更後の月（翌月）</label>
+                <input type="month" value={nextMonth} onChange={(e) => setNextMonth(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">契約日</label>
+                <input type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)}
+                  className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">利用者負担割合</label>
+                <div className="flex gap-2">
+                  {(["1", "2", "3"] as const).map((rate) => (
+                    <button key={rate} onClick={() => setBenefitRate(rate)}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium border ${benefitRate === rate ? "bg-emerald-500 text-white border-emerald-500" : "bg-white text-gray-600 border-gray-300"}`}>
+                      {rate}割
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-xl overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-2 py-2 border-b text-left">種目</th>
+                    <th className="px-2 py-2 border-b text-left">商品名</th>
+                    <th className="px-2 py-2 border-b text-right">単価</th>
+                    <th className="px-2 py-2 border-b text-right">数量</th>
+                    <th className="px-2 py-2 border-b text-center">{monthN(currentMonth)}月</th>
+                    <th className="px-2 py-2 border-b text-center">{monthN(nextMonth)}月</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 ? (
+                    <tr><td colSpan={6} className="text-center text-gray-400 py-6">指定月にレンタル中の用具がありません</td></tr>
+                  ) : rows.map((r, i) => (
+                    <tr key={r.itemId} className="border-b last:border-b-0">
+                      <td className="px-2 py-1.5">{r.category}</td>
+                      <td className="px-2 py-1.5">{r.name}</td>
+                      <td className="px-2 py-1.5 text-right">¥{r.unitPrice.toLocaleString()}</td>
+                      <td className="px-2 py-1.5 text-right">{r.quantity}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        <input type="checkbox" checked={r.inCurrent}
+                          onChange={(e) => setRows((prev) => prev.map((row, idx) => idx === i ? { ...row, inCurrent: e.target.checked } : row))} />
+                      </td>
+                      <td className="px-2 py-1.5 text-center">
+                        <input type="checkbox" checked={r.inNext}
+                          onChange={(e) => setRows((prev) => prev.map((row, idx) => idx === i ? { ...row, inNext: e.target.checked } : row))} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-50">
+                  <tr>
+                    <td colSpan={4} className="px-2 py-2 text-right font-semibold">合計</td>
+                    <td className="px-2 py-2 text-center font-bold">¥{currentTotal.toLocaleString()}</td>
+                    <td className="px-2 py-2 text-center font-bold">¥{nextTotal.toLocaleString()}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: 印刷プレビュー */}
+        {step === 2 && (
+          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+            <div id="change-contract-print" style={{ width: "180mm", margin: "0 auto", background: "white", padding: "10mm 15mm", fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "9pt", lineHeight: 1.5 }}>
+              <h1 style={{ fontSize: "14pt", textAlign: "center", fontWeight: "bold", margin: "0 0 16px" }}>契約書別紙</h1>
+
+              <p style={{ fontSize: "11pt", margin: "0 0 12px" }}>
+                {client.name}　様
+              </p>
+
+              <p style={{ margin: "0 0 12px" }}>
+                利用料金の変更がありましたので、新たに契約書別紙を取り交わさせて頂きます。
+              </p>
+
+              <p style={{ fontWeight: "bold", margin: "10px 0 4px" }}>
+                {monthLabel(currentMonth)}・{monthLabel(nextMonth)} 利用料金
+              </p>
+
+              <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "8px" }}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>種目</th>
+                    <th style={thStyle}>商品名</th>
+                    <th style={thStyle}>利用者負担額</th>
+                    <th style={thStyle}>数量</th>
+                    <th style={thStyle}>{monthN(currentMonth)}月利用者負担</th>
+                    <th style={thStyle}>{monthN(nextMonth)}月利用者負担</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={cellStyle}>{r.category}</td>
+                      <td style={cellStyle}>{r.name}</td>
+                      <td style={cellRight}>{r.unitPrice}</td>
+                      <td style={cellRight}>{r.quantity}</td>
+                      <td style={cellRight}>{r.inCurrent ? r.unitPrice * r.quantity : ""}</td>
+                      <td style={cellRight}>{r.inNext ? r.unitPrice * r.quantity : ""}</td>
+                    </tr>
+                  ))}
+                  {/* 空行で行数を一定に保つ */}
+                  {Array.from({ length: Math.max(0, 8 - rows.length) }).map((_, i) => (
+                    <tr key={`empty-${i}`}>
+                      <td style={{ ...cellStyle, height: "20px" }}></td>
+                      <td style={cellStyle}></td>
+                      <td style={cellStyle}></td>
+                      <td style={cellStyle}></td>
+                      <td style={cellStyle}></td>
+                      <td style={cellStyle}></td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} style={{ ...cellStyle, fontWeight: "bold", textAlign: "center" }}>合計</td>
+                    <td style={{ ...cellRight, fontWeight: "bold" }}>{currentTotal}</td>
+                    <td style={{ ...cellRight, fontWeight: "bold" }}>{nextTotal}</td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              <div style={{ fontSize: "8pt", lineHeight: 1.6, marginBottom: "16px" }}>
+                <p style={{ margin: 0 }}>　（１）介護保険の適用がある場合は、料金表のサービス費の1割もしくは２割又は3割が利用者負担金となります。</p>
+                <p style={{ margin: 0 }}>　（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさ</p>
+                <p style={{ margin: 0 }}>　　　 せていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
+                <p style={{ margin: 0 }}>　（３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求</p>
+                <p style={{ margin: 0 }}>　　　　させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約について</p>
+                <p style={{ margin: 0 }}>　　　　は１ヶ月分の料金を請求させていただきます。</p>
+              </div>
+
+              <div style={{ fontSize: "8pt", lineHeight: 1.6, marginBottom: "20px" }}>
+                <p style={{ margin: 0 }}>　　別紙（介護予防）福祉用具貸与サービス契約約款及び本書の契約内容を証するため、本書２通を作成し、利用者、事業者</p>
+                <p style={{ margin: 0 }}>が署名押印の上、各自１通保有するものとします。</p>
+                <p style={{ margin: 0 }}>　　同様に、介護保険制度にて義務づけられているサービス担当者会議の開催と必要と認められる場合において、利用者様</p>
+                <p style={{ margin: 0 }}>の個人情報を用いることについての説明を受け、同意するものといたします。</p>
+              </div>
+
+              <p style={{ margin: "0 0 16px" }}>{contractDateJa}</p>
+
+              <p style={{ margin: "0 0 6px", borderBottom: "1px solid #555", paddingBottom: "12px" }}>
+                契約者住所　　{client.address ?? ""}
+              </p>
+              <p style={{ margin: "12px 0 6px", borderBottom: "1px solid #555", paddingBottom: "12px" }}>
+                氏　　　名　　{client.name}　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　印
+              </p>
+              <p style={{ margin: "12px 0 6px", borderBottom: "1px solid #555", paddingBottom: "12px" }}>
+                代理人署名　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　印
+              </p>
+
+              <div style={{ marginTop: "16px" }}>
+                <p style={{ fontWeight: "bold", margin: "0 0 4px" }}>事　業　者</p>
+                <p style={{ margin: "0 0 2px" }}>　　　＜事業所名＞　{companyInfo.companyName}</p>
+                <p style={{ margin: "0 0 2px" }}>　　　＜住    所＞　{companyInfo.companyAddress}</p>
+                <p style={{ margin: "0 0 2px" }}>　　　＜管理者名＞　　　　{companyInfo.staffName}　　　㊞</p>
+              </div>
             </div>
           </div>
         )}
