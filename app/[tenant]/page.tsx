@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.2</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.3</span>
       </header>
 
       {/* Content */}
@@ -5839,20 +5839,37 @@ function ClientDetail({
                 </div>
                 <button
                   onClick={async () => {
-                    if (doc.type === "rental_report") setRegenDoc(doc);
-                    else if (doc.type === "care_plan") { setCarePlanInitialParams(doc.params); setShowCarePlan(true); }
-                    else if (doc.type === "proposal") { setProposalInitialParams(doc.params); setShowProposal(true); }
-                    else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
-                    else if (doc.type === "supplier_email") {
-                      const orderId = doc.params.orderId as string | undefined;
-                      if (!orderId) return;
-                      const [{ data: orderData }, items, suppliers, members] = await Promise.all([
-                        supabase.from("orders").select("*").eq("id", orderId).single(),
-                        getOrderItems(orderId),
-                        getSuppliers(),
-                        getMembers(tenantId),
-                      ]);
-                      if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members, sentAt: doc.created_at });
+                    try {
+                      if (doc.type === "rental_report") setRegenDoc(doc);
+                      else if (doc.type === "care_plan") { setCarePlanInitialParams(doc.params); setShowCarePlan(true); }
+                      else if (doc.type === "proposal") { setProposalInitialParams(doc.params); setShowProposal(true); }
+                      else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
+                      else if (doc.type === "supplier_email") {
+                        const orderId = doc.params?.orderId as string | undefined;
+                        if (!orderId) {
+                          alert("この発注メール書類には発注ID(orderId)が記録されていないため、再生成できません。\n古い書類の可能性があります。");
+                          return;
+                        }
+                        const [orderRes, items, suppliers, members] = await Promise.all([
+                          supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
+                          getOrderItems(orderId),
+                          getSuppliers(),
+                          getMembers(tenantId),
+                        ]);
+                        if (orderRes.error) {
+                          console.error("発注取得エラー:", orderRes.error);
+                          alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
+                          return;
+                        }
+                        if (!orderRes.data) {
+                          alert("元の発注が見つかりません（削除された可能性があります）。");
+                          return;
+                        }
+                        setEmailPreview({ order: orderRes.data as Order, items, suppliers, members, sentAt: doc.created_at });
+                      }
+                    } catch (e) {
+                      console.error("再生成エラー:", e);
+                      alert(`再生成に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
                     }
                   }}
                   className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50"
@@ -6967,24 +6984,43 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
                           {canRegenerate && (
                             <button
                               onClick={async () => {
-                                if (doc.type === "rental_report") {
-                                  setRegenDoc(doc); setShowReport(false);
-                                } else if (doc.type === "care_plan") {
-                                  setCarePlanInitialParams(doc.params); setShowCarePlan(true);
-                                } else if (doc.type === "proposal") {
-                                  setProposalInitialParams(doc.params); setShowProposal(true);
-                                } else if (doc.type === "rental_contract" || doc.type === "important_matters") {
-                                  setShowContracts(true);
-                                } else if (doc.type === "supplier_email") {
-                                  const orderId = doc.params?.orderId as string | undefined;
-                                  if (!orderId) return;
-                                  const [{ data: orderData }, items, suppliers, members] = await Promise.all([
-                                    supabase.from("orders").select("*").eq("id", orderId).single(),
-                                    getOrderItems(orderId),
-                                    getSuppliers(),
-                                    getMembers(tenantId),
-                                  ]);
-                                  if (orderData) setEmailPreview({ order: orderData as Order, items, suppliers, members, sentAt: doc.created_at });
+                                try {
+                                  if (doc.type === "rental_report") {
+                                    setRegenDoc(doc); setShowReport(false);
+                                  } else if (doc.type === "care_plan") {
+                                    setCarePlanInitialParams(doc.params); setShowCarePlan(true);
+                                  } else if (doc.type === "proposal") {
+                                    setProposalInitialParams(doc.params); setShowProposal(true);
+                                  } else if (doc.type === "rental_contract" || doc.type === "important_matters") {
+                                    setShowContracts(true);
+                                  } else if (doc.type === "supplier_email") {
+                                    const orderId = doc.params?.orderId as string | undefined;
+                                    if (!orderId) {
+                                      alert("この発注メール書類には発注ID(orderId)が記録されていないため、再生成できません。\n古い書類の可能性があります。");
+                                      return;
+                                    }
+                                    const [orderRes, items, suppliers, members] = await Promise.all([
+                                      supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
+                                      getOrderItems(orderId),
+                                      getSuppliers(),
+                                      getMembers(tenantId),
+                                    ]);
+                                    if (orderRes.error) {
+                                      console.error("発注取得エラー:", orderRes.error);
+                                      alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
+                                      return;
+                                    }
+                                    if (!orderRes.data) {
+                                      alert("元の発注が見つかりません（削除された可能性があります）。\n保存済みメール内容を表示します。");
+                                      // フォールバック：保存済み doc.params から直接モーダル表示は未実装のためログのみ
+                                      console.info("supplier_email doc.params:", doc.params);
+                                      return;
+                                    }
+                                    setEmailPreview({ order: orderRes.data as Order, items, suppliers, members, sentAt: doc.created_at });
+                                  }
+                                } catch (e) {
+                                  console.error("再生成エラー:", e);
+                                  alert(`再生成に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
                                 }
                               }}
                               className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
