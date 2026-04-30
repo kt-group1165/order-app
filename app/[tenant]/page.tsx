@@ -401,7 +401,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.6</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.7</span>
       </header>
 
       {/* Content */}
@@ -7266,8 +7266,8 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId]);
   const [billingMonth, setBillingMonth] = useState(() => {
+    // デフォルトは今月
     const d = new Date();
-    d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
 
