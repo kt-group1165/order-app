@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.1</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.2</span>
       </header>
 
       {/* Content */}
@@ -2254,6 +2254,26 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number } | null>(null);
+  // 取込前のプレビュー（差分・警告を確認してから実行）
+  type ImportFieldDiff = { label: string; oldValue: string; newValue: string };
+  type ImportWarningKind = "deleted_revival" | "provisional_promotion" | "referrer_lost" | "care_office_unlinked" | "care_manager_unlinked";
+  type ImportPreviewRow = {
+    user_number: string;
+    name: string;
+    status: "new" | "unchanged" | "updated";
+    diffs: ImportFieldDiff[];
+    warnings: ImportWarningKind[];
+    // 実行時に使う元データ
+    data: Omit<Client, "id" | "created_at">;
+    existingId: string | null;
+    insurance: Array<Record<string, unknown>>;
+  };
+  type ImportPreview = {
+    rows: ImportPreviewRow[];
+    skippedLines: { reason: string; line: string }[];
+    insuranceCount: number;
+  };
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [hospLoading, setHospLoading] = useState<string | null>(null); // client.id being toggled
@@ -2683,23 +2703,52 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       };
 
       // DB から最新の利用者を直接取得（in-memory state が 1000件制限でstaleな可能性があるため）
-      const freshClients: { id: string; user_number: string | null }[] = [];
+      // 差分検出に必要なフィールドも一緒に取得（プレビュー用）
+      type FreshClient = {
+        id: string;
+        user_number: string | null;
+        name: string | null;
+        furigana: string | null;
+        phone: string | null;
+        mobile: string | null;
+        address: string | null;
+        gender: string | null;
+        care_level: string | null;
+        benefit_rate: string | null;
+        care_manager: string | null;
+        care_manager_org: string | null;
+        certification_end_date: string | null;
+        memo: string | null;
+        insured_number: string | null;
+        birth_date: string | null;
+        certification_start_date: string | null;
+        insurer_number: string | null;
+        copay_rate: string | null;
+        public_expense: string | null;
+        is_facility: boolean | null;
+        is_provisional: boolean | null;
+        deleted_at: string | null;
+        referrer_org: string | null;
+        care_office_id: string | null;
+        care_manager_id: string | null;
+      };
+      const freshClients: FreshClient[] = [];
       {
         const PAGE = 1000;
         let from = 0;
         while (true) {
           const { data } = await supabase
             .from("clients")
-            .select("id,user_number")
+            .select("id,user_number,name,furigana,phone,mobile,address,gender,care_level,benefit_rate,care_manager,care_manager_org,certification_end_date,memo,insured_number,birth_date,certification_start_date,insurer_number,copay_rate,public_expense,is_facility,is_provisional,deleted_at,referrer_org,care_office_id,care_manager_id")
             .eq("tenant_id", tenantId)
             .range(from, from + PAGE - 1);
           if (!data || data.length === 0) break;
-          freshClients.push(...data);
+          freshClients.push(...(data as FreshClient[]));
           if (data.length < PAGE) break;
           from += PAGE;
         }
       }
-      const existingByUserNumber = new Map(freshClients.filter(c => c.user_number).map(c => [c.user_number as string, c.id]));
+      const existingByUserNumber = new Map(freshClients.filter(c => c.user_number).map(c => [c.user_number as string, c]));
 
       const maxNum = freshClients.reduce((mx, c) => {
         const n = parseInt(c.user_number ?? "0");
@@ -2856,57 +2905,144 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         }
       }
 
-      // 集約済みの clients データを toInsert / toUpdate に振り分け
-      const toInsert: ClientData[] = [];
-      const toUpdate: { id: string; data: Partial<Client> }[] = [];
+      // 集約済みの clients データから ImportPreviewRow を作成
+      // 差分検出のフィールド対応表
+      const FIELD_LABELS: Record<string, string> = {
+        name: "氏名",
+        furigana: "フリガナ",
+        phone: "電話番号",
+        mobile: "携帯番号",
+        address: "住所",
+        gender: "性別",
+        care_level: "介護度",
+        benefit_rate: "給付率",
+        care_manager: "ケアマネ名",
+        care_manager_org: "ケアマネ事業所",
+        certification_end_date: "認定終了日",
+        memo: "メモ",
+        insured_number: "被保険者番号",
+        birth_date: "生年月日",
+        certification_start_date: "認定開始日",
+        insurer_number: "保険者番号",
+        copay_rate: "利用者負担割合",
+        public_expense: "公費負担情報",
+        is_facility: "居宅・施設フラグ",
+      };
+      const fmtVal = (v: unknown): string => {
+        if (v == null || v === "") return "";
+        if (typeof v === "boolean") return v ? "✓" : "";
+        return String(v);
+      };
+
+      const previewRows: ImportPreviewRow[] = [];
       for (const data of clientByUserNumber.values()) {
-        const existingId = existingByUserNumber.get(data.user_number ?? "");
-        if (existingId) toUpdate.push({ id: existingId, data });
-        else toInsert.push(data);
+        const existing = existingByUserNumber.get(data.user_number ?? "");
+        const insurance = insuranceRowsByUserNumber.get(data.user_number ?? "") ?? [];
+        if (!existing) {
+          previewRows.push({
+            user_number: data.user_number ?? "",
+            name: data.name,
+            status: "new",
+            diffs: [],
+            warnings: [],
+            data,
+            existingId: null,
+            insurance: insurance as Array<Record<string, unknown>>,
+          });
+          continue;
+        }
+        // 差分計算（fields の旧値と新値を比較）
+        const diffs: ImportFieldDiff[] = [];
+        for (const k of Object.keys(FIELD_LABELS)) {
+          const oldV = (existing as Record<string, unknown>)[k];
+          const newV = (data as unknown as Record<string, unknown>)[k];
+          const oldS = fmtVal(oldV);
+          const newS = fmtVal(newV);
+          if (oldS !== newS) {
+            diffs.push({ label: FIELD_LABELS[k], oldValue: oldS, newValue: newS });
+          }
+        }
+        // 警告判定
+        const warnings: ImportWarningKind[] = [];
+        if (existing.deleted_at) warnings.push("deleted_revival");
+        if (existing.is_provisional === true) warnings.push("provisional_promotion");
+        if (existing.referrer_org) warnings.push("referrer_lost");
+        if (existing.care_office_id) warnings.push("care_office_unlinked");
+        if (existing.care_manager_id) warnings.push("care_manager_unlinked");
+        previewRows.push({
+          user_number: data.user_number ?? "",
+          name: data.name,
+          status: diffs.length === 0 && warnings.length === 0 ? "unchanged" : "updated",
+          diffs,
+          warnings,
+          data,
+          existingId: existing.id,
+          insurance: insurance as Array<Record<string, unknown>>,
+        });
       }
 
-      // エラー収集
+      const insuranceCount = Array.from(insuranceRowsByUserNumber.values()).reduce((s, arr) => s + arr.length, 0);
+      setImportPreview({
+        rows: previewRows,
+        skippedLines: skipped,
+        insuranceCount,
+      });
+    } finally {
+      setImporting(false);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
+  };
+
+  // プレビューを基に実際の取込みを実行
+  const executeImport = async (preview: ImportPreview) => {
+    setImporting(true);
+    try {
       const errors: { name: string; user_number: string; message: string }[] = [];
       const successfullyInserted: { name: string; user_number: string }[] = [];
       const successfullyUpdated: { name: string; user_number: string }[] = [];
       let insertedIds: string[] = [];
+      const updatedIds: string[] = [];
 
-      // INSERT: バッチで試し、失敗したら行ごとに再試行してエラー特定
+      const toInsert = preview.rows.filter((r) => r.status === "new");
+      const toUpdate = preview.rows.filter((r) => r.status === "updated" || r.status === "unchanged");
+
+      // INSERT: バッチで試し、失敗したら行ごとに再試行
       if (toInsert.length > 0) {
-        const { data: inserted, error: batchErr } = await supabase.from("clients").insert(toInsert).select("id");
+        const { data: inserted, error: batchErr } = await supabase
+          .from("clients")
+          .insert(toInsert.map((r) => r.data))
+          .select("id");
         if (!batchErr && inserted) {
           insertedIds = inserted.map((r: { id: string }) => r.id);
-          toInsert.forEach(d => successfullyInserted.push({ name: d.name, user_number: d.user_number ?? "" }));
+          toInsert.forEach((r) => successfullyInserted.push({ name: r.name, user_number: r.user_number }));
         } else {
-          // バッチ失敗時: 1件ずつ再試行してエラー特定
-          for (const d of toInsert) {
-            const { data: one, error: oneErr } = await supabase.from("clients").insert(d).select("id").single();
+          for (const r of toInsert) {
+            const { data: one, error: oneErr } = await supabase.from("clients").insert(r.data).select("id").single();
             if (oneErr) {
-              errors.push({ name: d.name, user_number: d.user_number ?? "", message: oneErr.message });
+              errors.push({ name: r.name, user_number: r.user_number, message: oneErr.message });
             } else if (one) {
               insertedIds.push(one.id);
-              successfullyInserted.push({ name: d.name, user_number: d.user_number ?? "" });
+              successfullyInserted.push({ name: r.name, user_number: r.user_number });
             }
           }
         }
       }
 
-      // UPDATE: 行ごとにエラー収集
-      for (const { id, data } of toUpdate) {
-        const { error: updErr } = await supabase.from("clients").update(data).eq("id", id);
+      // UPDATE
+      for (const r of toUpdate) {
+        if (!r.existingId) continue;
+        const { error: updErr } = await supabase.from("clients").update(r.data).eq("id", r.existingId);
         if (updErr) {
-          errors.push({ name: data.name ?? "", user_number: data.user_number ?? "", message: updErr.message });
+          errors.push({ name: r.name, user_number: r.user_number, message: updErr.message });
         } else {
-          successfullyUpdated.push({ name: data.name ?? "", user_number: data.user_number ?? "" });
+          updatedIds.push(r.existingId);
+          successfullyUpdated.push({ name: r.name, user_number: r.user_number });
         }
       }
 
       // 自事業所が選択されていれば、取込/更新した全利用者を自動紐付け
       if (currentOfficeId) {
-        const allIds = [
-          ...insertedIds,
-          ...toUpdate.map((u) => u.id),
-        ];
+        const allIds = [...insertedIds, ...updatedIds];
         if (allIds.length > 0) {
           const assignmentRows = allIds.map((cid) => ({
             tenant_id: tenantId,
@@ -2922,87 +3058,49 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const newClients = await getClients(tenantId);
       setClients(newClients);
 
-      // client_insurance_records への書き込み（認定期間ごとに1行＝複数行履歴として保存）
-      //   effective_date = 認定開始日をキーにして重複チェック
-      //   同じ effective_date の履歴があれば UPDATE、無ければ INSERT
+      // 保険情報の書き込み
       let insuranceAdded = 0;
       try {
         const clientIdByUserNumber = new Map<string, string>();
         for (const c of newClients) {
           if (c.user_number) clientIdByUserNumber.set(c.user_number, c.id);
         }
-        for (const [userNumber, insArray] of insuranceRowsByUserNumber.entries()) {
-          const clientId = clientIdByUserNumber.get(userNumber);
+        for (const r of preview.rows) {
+          if (r.insurance.length === 0) continue;
+          const clientId = clientIdByUserNumber.get(r.user_number);
           if (!clientId) continue;
-          // この利用者の既存保険履歴を取得（effective_dateで突合）
           const { data: existingRecords } = await supabase
             .from("client_insurance_records")
             .select("id, effective_date")
             .eq("tenant_id", tenantId)
             .eq("client_id", clientId);
           const existingByDate = new Map<string, string>();
-          for (const r of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
-            existingByDate.set(r.effective_date ?? "", r.id);
+          for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
+            existingByDate.set(rec.effective_date ?? "", rec.id);
           }
-          for (const ins of insArray) {
-            const effectiveDate = ins.certification_start_date || null;
-            const payload = {
-              tenant_id: tenantId,
-              client_id: clientId,
-              effective_date: effectiveDate,
-              insured_number: ins.insured_number,
-              birth_date: ins.birth_date,
-              insurer_number: ins.insurer_number,
-              insurer_name: ins.insurer_name,
-              issued_date: ins.issued_date,
-              insurance_confirmed_date: ins.insurance_confirmed_date,
-              qualification_date: ins.qualification_date,
-              insurance_valid_start: ins.insurance_valid_start,
-              insurance_valid_end: ins.insurance_valid_end,
-              benefit_rate: ins.benefit_rate,
-              care_level: ins.care_level,
-              certification_status: ins.certification_status,
-              certification_date: ins.certification_date,
-              certification_start_date: ins.certification_start_date,
-              certification_end_date: ins.certification_end_date,
-              service_limit_period_start: ins.service_limit_period_start,
-              service_limit_period_end: ins.service_limit_period_end,
-              service_limit_amount: ins.service_limit_amount,
-              service_memo: ins.service_memo,
-              service_restriction: ins.service_restriction,
-              care_manager: ins.care_manager,
-              care_manager_org: ins.care_manager_org,
-              copay_rate: ins.copay_rate,
-              public_expense: ins.public_expense,
-            };
-            const existingId = existingByDate.get(effectiveDate ?? "");
-            if (existingId) {
-              const { error: upErr } = await supabase
-                .from("client_insurance_records")
-                .update(payload)
-                .eq("id", existingId);
+          for (const ins of r.insurance) {
+            const effectiveDate = (ins.certification_start_date as string | null) || null;
+            const payload = { tenant_id: tenantId, client_id: clientId, effective_date: effectiveDate, ...ins };
+            const exId = existingByDate.get(effectiveDate ?? "");
+            if (exId) {
+              const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
               if (!upErr) insuranceAdded++;
             } else {
-              const { error: insErr } = await supabase
-                .from("client_insurance_records")
-                .insert(payload);
+              const { error: insErr } = await supabase.from("client_insurance_records").insert(payload);
               if (!insErr) {
                 insuranceAdded++;
-                // 同じバッチ内で同一 effective_date が重複しないよう記録
                 existingByDate.set(effectiveDate ?? "", "newly-inserted");
               }
             }
           }
         }
       } catch {
-        // 保険情報書き込みは致命的でないので握りつぶす
+        // 致命的ではないので握りつぶす
       }
 
-      // 予定と利用者の再紐付け（events.client_id が NULL で、タイトルの「〇〇 様」が
-      //   新しく取り込まれた利用者名と一致するものを自動で張り替え）
+      // 予定の自動再紐付け
       let reunited = 0;
       try {
-        // client_id が NULL の予定を取得
         const { data: orphanEvents } = await supabase
           .from("events")
           .select("id,title")
@@ -3010,12 +3108,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           .is("client_id", null)
           .is("deleted_at", null);
         if (orphanEvents && orphanEvents.length > 0) {
-          // 名前→id マップ
           const nameToId = new Map<string, string>();
           for (const c of newClients) {
             if (!nameToId.has(c.name)) nameToId.set(c.name, c.id);
           }
-          // タイトルから「〇〇 様」パターンを抽出して client_id 解決
           const updates: { id: string; client_id: string }[] = [];
           for (const ev of orphanEvents as Array<{ id: string; title: string }>) {
             const m = ev.title.match(/^(.+?) 様(?:[ 　].*)?$/);
@@ -3029,14 +3125,15 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           }
         }
       } catch {
-        // 再紐付け失敗は致命的でないので握りつぶす
+        // 致命的ではない
       }
 
-      // スキップ行もエラーとして表示
-      for (const s of skipped) {
+      // スキップ行をエラーに追加
+      for (const s of preview.skippedLines) {
         errors.push({ name: "(スキップ)", user_number: "", message: `${s.reason}: ${s.line}` });
       }
 
+      setImportPreview(null);
       setImportResult({
         inserted: successfullyInserted,
         updated: successfullyUpdated,
@@ -3046,7 +3143,6 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       });
     } finally {
       setImporting(false);
-      if (csvInputRef.current) csvInputRef.current.value = "";
     }
   };
 
@@ -3129,8 +3225,180 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     "自動排せつ処理装置": "17 1016",
   };
 
+  // 警告ラベル
+  const WARNING_LABELS: Record<string, { color: string; bg: string; icon: string; label: string }> = {
+    deleted_revival:        { color: "text-red-700",    bg: "bg-red-50",    icon: "🔴", label: "削除済みから復活" },
+    provisional_promotion:  { color: "text-amber-700",  bg: "bg-amber-50",  icon: "🟡", label: "仮登録から本登録に昇格" },
+    referrer_lost:          { color: "text-orange-700", bg: "bg-orange-50", icon: "🟠", label: "紹介機関が消える" },
+    care_office_unlinked:   { color: "text-orange-700", bg: "bg-orange-50", icon: "🟠", label: "居宅マスタ紐付けが消える" },
+    care_manager_unlinked:  { color: "text-orange-700", bg: "bg-orange-50", icon: "🟠", label: "ケアマネ紐付けが消える" },
+  };
+
   return (
     <div className="flex flex-col h-full">
+      {/* 取込プレビューモーダル */}
+      {importPreview && (() => {
+        const newRows = importPreview.rows.filter((r) => r.status === "new");
+        const updatedRows = importPreview.rows.filter((r) => r.status === "updated");
+        const unchangedRows = importPreview.rows.filter((r) => r.status === "unchanged");
+        const warningRows = importPreview.rows.filter((r) => r.warnings.length > 0);
+        // 警告の種類別グルーピング
+        const warningByKind: Record<string, ImportPreviewRow[]> = {};
+        for (const r of warningRows) {
+          for (const w of r.warnings) {
+            if (!warningByKind[w]) warningByKind[w] = [];
+            warningByKind[w].push(r);
+          }
+        }
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+              <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
+                <h3 className="font-semibold text-gray-800 text-sm">
+                  📋 取込内容の確認（実行前プレビュー）
+                </h3>
+                <button onClick={() => setImportPreview(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+              </div>
+              <div className="px-5 py-4 overflow-y-auto space-y-4 flex-1">
+                {/* サマリ */}
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-emerald-700">{newRows.length}</p>
+                    <p className="text-[10px] text-emerald-600">新規追加</p>
+                  </div>
+                  <div className="bg-indigo-50 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-indigo-700">{updatedRows.length}</p>
+                    <p className="text-[10px] text-indigo-600">更新（変更あり）</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-gray-500">{unchangedRows.length}</p>
+                    <p className="text-[10px] text-gray-500">変更なし</p>
+                  </div>
+                  <div className={`rounded-lg p-2 text-center ${warningRows.length > 0 ? "bg-red-50" : "bg-gray-50"}`}>
+                    <p className={`text-lg font-bold ${warningRows.length > 0 ? "text-red-600" : "text-gray-500"}`}>{warningRows.length}</p>
+                    <p className="text-[10px] text-gray-500">⚠️ 警告</p>
+                  </div>
+                </div>
+
+                {/* 警告一覧 */}
+                {warningRows.length > 0 && (
+                  <div className="border border-red-200 rounded-xl p-3 space-y-3 bg-red-50/30">
+                    <p className="text-sm font-bold text-red-700">⚠️ 警告（実行前に確認してください）</p>
+                    {Object.entries(warningByKind).map(([kind, rows]) => {
+                      const meta = WARNING_LABELS[kind];
+                      if (!meta) return null;
+                      return (
+                        <div key={kind} className={`rounded-lg p-2.5 ${meta.bg}`}>
+                          <p className={`text-xs font-semibold ${meta.color} mb-1.5`}>
+                            {meta.icon} {meta.label}（{rows.length}件）
+                          </p>
+                          <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                            {rows.slice(0, 50).map((r, i) => (
+                              <p key={i} className="text-xs text-gray-700">
+                                <span className="text-gray-400 mr-2">{r.user_number}</span>
+                                {r.name}
+                              </p>
+                            ))}
+                            {rows.length > 50 && <p className="text-[10px] text-gray-400">…他 {rows.length - 50}件</p>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* 更新内容詳細 */}
+                {updatedRows.length > 0 && (
+                  <details className="border border-indigo-200 rounded-xl bg-indigo-50/30">
+                    <summary className="px-3 py-2 text-sm font-semibold text-indigo-700 cursor-pointer">
+                      ✏️ 更新内容の詳細（{updatedRows.length}件）
+                    </summary>
+                    <div className="px-3 pb-3 space-y-2 max-h-72 overflow-y-auto">
+                      {updatedRows.map((r, i) => (
+                        <div key={i} className="bg-white rounded-lg p-2 border border-indigo-100">
+                          <p className="text-xs font-semibold text-gray-800">
+                            <span className="text-gray-400 mr-2">{r.user_number}</span>
+                            {r.name}
+                          </p>
+                          {r.diffs.length > 0 ? (
+                            <div className="mt-1 space-y-0.5">
+                              {r.diffs.map((d, j) => (
+                                <div key={j} className="text-[11px] text-gray-600">
+                                  <span className="text-gray-400">{d.label}: </span>
+                                  <span className="line-through text-gray-400">{d.oldValue || "（空）"}</span>
+                                  <span className="mx-1 text-amber-600">→</span>
+                                  <span className="text-emerald-700 font-medium">{d.newValue || "（空）"}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-gray-400 mt-0.5">フィールド値の変更なし（警告のみ）</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {/* 新規追加リスト */}
+                {newRows.length > 0 && (
+                  <details className="border border-emerald-200 rounded-xl bg-emerald-50/30">
+                    <summary className="px-3 py-2 text-sm font-semibold text-emerald-700 cursor-pointer">
+                      🆕 新規追加（{newRows.length}件）
+                    </summary>
+                    <div className="px-3 pb-3 space-y-0.5 max-h-60 overflow-y-auto">
+                      {newRows.map((r, i) => (
+                        <p key={i} className="text-xs text-gray-700">
+                          <span className="text-gray-400 mr-2">{r.user_number}</span>
+                          {r.name}
+                        </p>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {/* スキップ行 */}
+                {importPreview.skippedLines.length > 0 && (
+                  <details className="border border-gray-200 rounded-xl bg-gray-50">
+                    <summary className="px-3 py-2 text-sm font-semibold text-gray-600 cursor-pointer">
+                      ⏭️ スキップ行（{importPreview.skippedLines.length}件）
+                    </summary>
+                    <div className="px-3 pb-3 space-y-0.5 max-h-40 overflow-y-auto">
+                      {importPreview.skippedLines.map((s, i) => (
+                        <p key={i} className="text-[11px] text-gray-500">{s.reason}: <span className="font-mono">{s.line.substring(0, 80)}</span></p>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {/* 補足情報 */}
+                <div className="bg-sky-50 rounded-lg p-2.5 text-[11px] text-sky-700 space-y-0.5">
+                  <p>📌 保険情報履歴も同時に更新されます（{importPreview.insuranceCount}件の認定期間）</p>
+                  {currentOfficeId && <p>📌 自事業所が選択中のため、取込/更新した利用者を自動紐付けします</p>}
+                  <p>📌 タイトルに「〇〇 様」が含まれる未紐付け予定は、新規取込の利用者へ自動再紐付けします</p>
+                </div>
+              </div>
+              <div className="px-5 py-3 border-t border-gray-100 shrink-0 flex gap-2">
+                <button
+                  onClick={() => setImportPreview(null)}
+                  disabled={importing}
+                  className="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-sm disabled:opacity-50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={() => executeImport(importPreview)}
+                  disabled={importing}
+                  className={`flex-1 py-2 font-semibold rounded-xl text-sm disabled:opacity-50 ${warningRows.length > 0 ? "bg-amber-500 hover:bg-amber-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}
+                >
+                  {importing ? "実行中..." : warningRows.length > 0 ? "⚠️ 警告を承知の上で実行" : "実行する"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 取込結果モーダル */}
       {importResult && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
