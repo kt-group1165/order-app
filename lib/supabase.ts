@@ -60,6 +60,9 @@ export type ClientInsuranceRecord = {
   public_expense: string | null;
   care_manager: string | null;
   care_manager_org: string | null;
+  // 認定期間ごとに記録される居宅マスタ／ケアマネマスタの参照（NULL = テキストのみで未紐付け）
+  care_office_id: string | null;
+  care_manager_id: string | null;
   notes: string | null;
   // 追加フィールド
   issued_date: string | null;

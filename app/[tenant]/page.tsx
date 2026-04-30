@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.3</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.6.4</span>
       </header>
 
       {/* Content */}
@@ -2253,7 +2253,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; merged: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; merged: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number; addedOffices: number; addedManagers: number } | null>(null);
   // 取込前のプレビュー（差分・警告を確認してから実行）
   type ImportFieldDiff = { label: string; oldValue: string; newValue: string };
   type ImportWarningKind = "deleted_revival" | "provisional_promotion" | "referrer_lost" | "care_office_unlinked" | "care_manager_unlinked";
@@ -2279,10 +2279,30 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     provisionalCandidates: ProvisionalCandidate[];
     mergeWithProvisionalId: string | null;
   };
+  // CSV内に登場するがマスタ未登録の事業所・ケアマネ
+  type UnregisteredOffice = {
+    name: string;            // CSVテキスト
+    addToMaster: boolean;    // マスタに追加するか
+    occurrences: number;     // 何件の利用者・履歴で使われているか
+  };
+  type UnregisteredManager = {
+    name: string;            // CSVテキスト
+    officeName: string;      // 所属事業所名（テキスト）
+    addToMaster: boolean;
+    occurrences: number;
+  };
+  // CSVテキスト → 既存マスタID のマップ（プレビュー時点で確定する分）
+  type MasterMatchMaps = {
+    officeNameToId: Record<string, string>;        // care_offices.name → id
+    managerKeyToId: Record<string, string>;        // `${officeId}|${manager.name}` → id
+  };
   type ImportPreview = {
     rows: ImportPreviewRow[];
     skippedLines: { reason: string; line: string }[];
     insuranceCount: number;
+    unregisteredOffices: UnregisteredOffice[];
+    unregisteredManagers: UnregisteredManager[];
+    matchMaps: MasterMatchMaps;
   };
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -2945,6 +2965,81 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         return String(v);
       };
 
+      // ── マスタ自動マッチ準備 ──
+      // 既存の居宅マスタ・ケアマネマスタを取得して、テキスト名 → ID のマップを構築
+      const [careOfficesRes, careManagersRes] = await Promise.all([
+        supabase.from("care_offices").select("id,name").eq("tenant_id", tenantId),
+        supabase.from("care_managers").select("id,name,care_office_id,active").eq("tenant_id", tenantId),
+      ]);
+      const careOfficeRows = (careOfficesRes.data ?? []) as Array<{ id: string; name: string }>;
+      const careManagerRows = (careManagersRes.data ?? []) as Array<{ id: string; name: string; care_office_id: string; active: boolean }>;
+      // テキスト名 → ID。同名複数ある場合は最初のヒット
+      const officeNameToId: Record<string, string> = {};
+      for (const o of careOfficeRows) {
+        if (o.name && !(o.name in officeNameToId)) officeNameToId[o.name] = o.id;
+      }
+      const managerKeyToId: Record<string, string> = {};
+      for (const m of careManagerRows) {
+        if (m.name && m.care_office_id) {
+          const k = `${m.care_office_id}|${m.name}`;
+          if (!(k in managerKeyToId)) managerKeyToId[k] = m.id;
+        }
+      }
+
+      // CSV内に登場する office/manager のテキストを集計し、既存マスタとの突合結果を判定
+      const officeOccurrences = new Map<string, number>();         // office_text → count
+      const managerOccurrences = new Map<string, number>();        // `${officeText}${managerText}` → count
+      const managerOfficeText = new Map<string, string>();         // managerKey → officeText（表示用）
+      for (const data of clientByUserNumber.values()) {
+        const ot = (data.care_manager_org ?? "").trim();
+        if (ot) officeOccurrences.set(ot, (officeOccurrences.get(ot) ?? 0) + 1);
+        const mt = (data.care_manager ?? "").trim();
+        if (mt && ot) {
+          const key = `${ot}${mt}`;
+          managerOccurrences.set(key, (managerOccurrences.get(key) ?? 0) + 1);
+          managerOfficeText.set(key, ot);
+        }
+      }
+      // 履歴側でも集計（同じ利用者でも認定期間ごとに違う事業所/ケアマネがあるため）
+      for (const insArr of insuranceRowsByUserNumber.values()) {
+        for (const ins of insArr) {
+          const ot = (ins.care_manager_org ?? "").trim();
+          if (ot) officeOccurrences.set(ot, (officeOccurrences.get(ot) ?? 0) + 1);
+          const mt = (ins.care_manager ?? "").trim();
+          if (mt && ot) {
+            const key = `${ot}${mt}`;
+            managerOccurrences.set(key, (managerOccurrences.get(key) ?? 0) + 1);
+            managerOfficeText.set(key, ot);
+          }
+        }
+      }
+      // マスタ未登録のものをリストアップ
+      const unregisteredOffices: UnregisteredOffice[] = [];
+      for (const [name, count] of officeOccurrences.entries()) {
+        if (!(name in officeNameToId)) {
+          unregisteredOffices.push({ name, addToMaster: true, occurrences: count });
+        }
+      }
+      unregisteredOffices.sort((a, b) => b.occurrences - a.occurrences);
+      const unregisteredManagers: UnregisteredManager[] = [];
+      for (const [key, count] of managerOccurrences.entries()) {
+        const officeText = managerOfficeText.get(key) ?? "";
+        const managerText = key.split("")[1] ?? "";
+        // 既存マスタにある事業所配下なら、ケアマネ名で照合
+        const officeId = officeNameToId[officeText];
+        if (officeId) {
+          const mk = `${officeId}|${managerText}`;
+          if (mk in managerKeyToId) continue; // 既存マッチ
+        }
+        unregisteredManagers.push({
+          name: managerText,
+          officeName: officeText,
+          addToMaster: true,
+          occurrences: count,
+        });
+      }
+      unregisteredManagers.sort((a, b) => b.occurrences - a.occurrences || a.officeName.localeCompare(b.officeName, "ja"));
+
       // 仮登録の一覧を抽出（CSV取込み時に名前一致で紐付け候補として表示）
       // CSVの user_number と既に一致している仮登録は対象外（=普通にUPDATE）
       const provisionalClients = freshClients.filter(
@@ -3025,13 +3120,12 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
             diffs.push({ label: FIELD_LABELS[k], oldValue: oldS, newValue: newS });
           }
         }
-        // 警告判定
+        // 警告判定（マスタ紐付けは UPDATE 時に保護するので警告にしない）
         const warnings: ImportWarningKind[] = [];
         if (existing.deleted_at) warnings.push("deleted_revival");
         if (existing.is_provisional === true) warnings.push("provisional_promotion");
-        if (existing.referrer_org) warnings.push("referrer_lost");
-        if (existing.care_office_id) warnings.push("care_office_unlinked");
-        if (existing.care_manager_id) warnings.push("care_manager_unlinked");
+        // referrer_org / care_office_id / care_manager_id は UPDATE で保護するので警告対象外
+        // （CSVに値が無くても既存値を維持する）
         previewRows.push({
           user_number: data.user_number ?? "",
           name: data.name,
@@ -3051,6 +3145,9 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         rows: previewRows,
         skippedLines: skipped,
         insuranceCount,
+        unregisteredOffices,
+        unregisteredManagers,
+        matchMaps: { officeNameToId, managerKeyToId },
       });
     } finally {
       setImporting(false);
@@ -3069,6 +3166,62 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       let insertedIds: string[] = [];
       const updatedIds: string[] = [];
 
+      // ── マスタ新規追加（チェック済みのもの） ──
+      const officeNameToId = { ...preview.matchMaps.officeNameToId };
+      const managerKeyToId = { ...preview.matchMaps.managerKeyToId };
+      let addedOfficeCount = 0;
+      let addedManagerCount = 0;
+
+      // 1. 居宅事業所をマスタに新規追加
+      for (const o of preview.unregisteredOffices) {
+        if (!o.addToMaster) continue;
+        const { data, error } = await supabase
+          .from("care_offices")
+          .insert({ tenant_id: tenantId, name: o.name })
+          .select("id")
+          .single();
+        if (!error && data) {
+          officeNameToId[o.name] = data.id;
+          addedOfficeCount++;
+        } else if (error) {
+          errors.push({ name: o.name, user_number: "", message: `居宅マスタ追加失敗: ${error.message}` });
+        }
+      }
+      // 2. ケアマネをマスタに新規追加（事業所IDが解決できたものだけ）
+      for (const m of preview.unregisteredManagers) {
+        if (!m.addToMaster) continue;
+        const officeId = officeNameToId[m.officeName];
+        if (!officeId) {
+          // 親事業所がマスタに無い → 追加できないのでスキップ
+          continue;
+        }
+        const k = `${officeId}|${m.name}`;
+        if (k in managerKeyToId) continue; // 既に追加済み
+        const { data, error } = await supabase
+          .from("care_managers")
+          .insert({ tenant_id: tenantId, care_office_id: officeId, name: m.name, active: true })
+          .select("id")
+          .single();
+        if (!error && data) {
+          managerKeyToId[k] = data.id;
+          addedManagerCount++;
+        } else if (error) {
+          errors.push({ name: m.name, user_number: "", message: `ケアマネマスタ追加失敗: ${error.message}` });
+        }
+      }
+
+      // テキストからマスタIDを解決（追加分も反映済み）
+      const resolveOfficeId = (officeText: string | null | undefined): string | null => {
+        if (!officeText) return null;
+        return officeNameToId[officeText.trim()] ?? null;
+      };
+      const resolveManagerId = (managerText: string | null | undefined, officeText: string | null | undefined): string | null => {
+        if (!managerText || !officeText) return null;
+        const officeId = resolveOfficeId(officeText);
+        if (!officeId) return null;
+        return managerKeyToId[`${officeId}|${managerText.trim()}`] ?? null;
+      };
+
       // 仮登録マージ対象（INSERTせず、仮登録レコードをUPDATEで本登録化）
       const toMerge = preview.rows.filter((r) => r.status === "new" && r.mergeWithProvisionalId);
       // 純粋な新規追加
@@ -3077,9 +3230,13 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const toUpdate = preview.rows.filter((r) => r.status === "updated" || r.status === "unchanged");
 
       // MERGE: 仮登録のUUIDを維持しつつ、CSVデータで上書き＋is_provisional=falseに
+      // 自動マッチで解決したマスタIDも一緒にセット
       for (const r of toMerge) {
         const provisionalId = r.mergeWithProvisionalId!;
-        const { error: mergeErr } = await supabase.from("clients").update(r.data).eq("id", provisionalId);
+        const officeId = resolveOfficeId(r.data.care_manager_org);
+        const managerId = resolveManagerId(r.data.care_manager, r.data.care_manager_org);
+        const payload = { ...r.data, care_office_id: officeId, care_manager_id: managerId };
+        const { error: mergeErr } = await supabase.from("clients").update(payload).eq("id", provisionalId);
         if (mergeErr) {
           errors.push({ name: r.name, user_number: r.user_number, message: `仮登録マージ失敗: ${mergeErr.message}` });
         } else {
@@ -3088,18 +3245,25 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         }
       }
 
-      // INSERT: バッチで試し、失敗したら行ごとに再試行
+      // INSERT: 自動マッチでマスタIDを補完
       if (toInsert.length > 0) {
+        const insertPayloads = toInsert.map((r) => ({
+          ...r.data,
+          care_office_id: resolveOfficeId(r.data.care_manager_org),
+          care_manager_id: resolveManagerId(r.data.care_manager, r.data.care_manager_org),
+        }));
         const { data: inserted, error: batchErr } = await supabase
           .from("clients")
-          .insert(toInsert.map((r) => r.data))
+          .insert(insertPayloads)
           .select("id");
         if (!batchErr && inserted) {
           insertedIds = inserted.map((r: { id: string }) => r.id);
           toInsert.forEach((r) => successfullyInserted.push({ name: r.name, user_number: r.user_number }));
         } else {
-          for (const r of toInsert) {
-            const { data: one, error: oneErr } = await supabase.from("clients").insert(r.data).select("id").single();
+          for (let i = 0; i < toInsert.length; i++) {
+            const r = toInsert[i];
+            const payload = insertPayloads[i];
+            const { data: one, error: oneErr } = await supabase.from("clients").insert(payload).select("id").single();
             if (oneErr) {
               errors.push({ name: r.name, user_number: r.user_number, message: oneErr.message });
             } else if (one) {
@@ -3110,10 +3274,27 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         }
       }
 
-      // UPDATE
+      // UPDATE: 既存マスタID・referrer_org は保護。CSV側で解決したIDは未紐付けの場合のみセット
       for (const r of toUpdate) {
         if (!r.existingId) continue;
-        const { error: updErr } = await supabase.from("clients").update(r.data).eq("id", r.existingId);
+        // care_office_id / care_manager_id / referrer_org を payload から除外
+        const { care_office_id: _coid, care_manager_id: _cmid, referrer_org: _ref, ...rest } = r.data as unknown as Record<string, unknown>;
+        void _coid; void _cmid; void _ref; // 未使用警告抑制
+        const payload: Record<string, unknown> = { ...rest };
+        // 自動マッチで新規にIDが解決でき、かつ既存値が無ければセット（既に紐付いていれば触らない）
+        const newOfficeId = resolveOfficeId((r.data as { care_manager_org: string | null }).care_manager_org);
+        const newManagerId = resolveManagerId((r.data as { care_manager: string | null }).care_manager, (r.data as { care_manager_org: string | null }).care_manager_org);
+        // 既存IDを取得し、null なら自動マッチを反映、紐付け済みなら維持
+        const existing = await supabase
+          .from("clients")
+          .select("care_office_id, care_manager_id, referrer_org")
+          .eq("id", r.existingId)
+          .maybeSingle();
+        const existingOfficeId = (existing.data?.care_office_id as string | null) ?? null;
+        const existingManagerId = (existing.data?.care_manager_id as string | null) ?? null;
+        if (!existingOfficeId && newOfficeId) payload.care_office_id = newOfficeId;
+        if (!existingManagerId && newManagerId) payload.care_manager_id = newManagerId;
+        const { error: updErr } = await supabase.from("clients").update(payload).eq("id", r.existingId);
         if (updErr) {
           errors.push({ name: r.name, user_number: r.user_number, message: updErr.message });
         } else {
@@ -3162,7 +3343,17 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           }
           for (const ins of r.insurance) {
             const effectiveDate = (ins.certification_start_date as string | null) || null;
-            const payload = { tenant_id: tenantId, client_id: clientId, effective_date: effectiveDate, ...ins };
+            // 履歴行にもマスタIDを自動マッチで紐付け
+            const insOfficeId = resolveOfficeId((ins.care_manager_org as string | null) ?? null);
+            const insManagerId = resolveManagerId((ins.care_manager as string | null) ?? null, (ins.care_manager_org as string | null) ?? null);
+            const payload = {
+              tenant_id: tenantId,
+              client_id: clientId,
+              effective_date: effectiveDate,
+              ...ins,
+              care_office_id: insOfficeId,
+              care_manager_id: insManagerId,
+            };
             const exId = existingByDate.get(effectiveDate ?? "");
             if (exId) {
               const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
@@ -3223,6 +3414,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         errors,
         reunited,
         insuranceAdded,
+        addedOffices: addedOfficeCount,
+        addedManagers: addedManagerCount,
       });
     } finally {
       setImporting(false);
@@ -3536,11 +3729,152 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                   </details>
                 )}
 
+                {/* マスタ未登録セクション */}
+                {(importPreview.unregisteredOffices.length > 0 || importPreview.unregisteredManagers.length > 0) && (
+                  <div className="border border-emerald-200 rounded-xl p-3 space-y-3 bg-emerald-50/30">
+                    <div>
+                      <p className="text-sm font-bold text-emerald-700">🗂 マスタ未登録の事業所・ケアマネ</p>
+                      <p className="text-[11px] text-emerald-700 mt-0.5">
+                        チェックを入れたものは取込み時にマスタへ自動追加され、利用者・履歴と紐付けられます。チェックを外すとテキストのみで取り込まれます（後で手動紐付け可能）。
+                      </p>
+                    </div>
+
+                    {/* 居宅事業所 */}
+                    {importPreview.unregisteredOffices.length > 0 && (
+                      <div className="bg-white rounded-lg p-3 border border-emerald-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold text-emerald-700">🏢 居宅事業所（{importPreview.unregisteredOffices.length}件）</p>
+                          <div className="flex gap-2 text-[10px]">
+                            <button
+                              onClick={() => {
+                                if (!importPreview) return;
+                                setImportPreview({
+                                  ...importPreview,
+                                  unregisteredOffices: importPreview.unregisteredOffices.map((o) => ({ ...o, addToMaster: true })),
+                                });
+                              }}
+                              className="text-emerald-600 hover:underline"
+                            >全選択</button>
+                            <button
+                              onClick={() => {
+                                if (!importPreview) return;
+                                setImportPreview({
+                                  ...importPreview,
+                                  unregisteredOffices: importPreview.unregisteredOffices.map((o) => ({ ...o, addToMaster: false })),
+                                  // 親が外れたらケアマネも自動的にOFFになるよう連動
+                                  unregisteredManagers: importPreview.unregisteredManagers.map((m) => ({ ...m, addToMaster: false })),
+                                });
+                              }}
+                              className="text-gray-500 hover:underline"
+                            >全解除</button>
+                          </div>
+                        </div>
+                        <div className="space-y-1 max-h-44 overflow-y-auto">
+                          {importPreview.unregisteredOffices.map((o, i) => (
+                            <label key={i} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-emerald-50 rounded p-1">
+                              <input
+                                type="checkbox"
+                                checked={o.addToMaster}
+                                onChange={(e) => {
+                                  if (!importPreview) return;
+                                  const newOffices = importPreview.unregisteredOffices.map((it) =>
+                                    it.name === o.name ? { ...it, addToMaster: e.target.checked } : it
+                                  );
+                                  // 事業所をOFFにしたら、その配下のケアマネも自動的にOFFに
+                                  let newManagers = importPreview.unregisteredManagers;
+                                  if (!e.target.checked) {
+                                    newManagers = newManagers.map((m) =>
+                                      m.officeName === o.name ? { ...m, addToMaster: false } : m
+                                    );
+                                  }
+                                  setImportPreview({ ...importPreview, unregisteredOffices: newOffices, unregisteredManagers: newManagers });
+                                }}
+                                className="w-4 h-4 shrink-0"
+                              />
+                              <span className="flex-1 text-gray-800">{o.name}</span>
+                              <span className="text-[10px] text-gray-400">{o.occurrences}件</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ケアマネ */}
+                    {importPreview.unregisteredManagers.length > 0 && (
+                      <div className="bg-white rounded-lg p-3 border border-emerald-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold text-emerald-700">👤 ケアマネ（{importPreview.unregisteredManagers.length}件）</p>
+                          <div className="flex gap-2 text-[10px]">
+                            <button
+                              onClick={() => {
+                                if (!importPreview) return;
+                                setImportPreview({
+                                  ...importPreview,
+                                  unregisteredManagers: importPreview.unregisteredManagers.map((m) => ({ ...m, addToMaster: true })),
+                                });
+                              }}
+                              className="text-emerald-600 hover:underline"
+                            >全選択</button>
+                            <button
+                              onClick={() => {
+                                if (!importPreview) return;
+                                setImportPreview({
+                                  ...importPreview,
+                                  unregisteredManagers: importPreview.unregisteredManagers.map((m) => ({ ...m, addToMaster: false })),
+                                });
+                              }}
+                              className="text-gray-500 hover:underline"
+                            >全解除</button>
+                          </div>
+                        </div>
+                        <div className="space-y-1 max-h-44 overflow-y-auto">
+                          {importPreview.unregisteredManagers.map((m, i) => {
+                            // 親事業所がマスタに有るか or マスタ追加チェックされているかを判定
+                            const officeExists = m.officeName in importPreview.matchMaps.officeNameToId;
+                            const officeWillBeAdded = importPreview.unregisteredOffices.find((o) => o.name === m.officeName)?.addToMaster ?? false;
+                            const canAdd = officeExists || officeWillBeAdded;
+                            return (
+                              <label
+                                key={i}
+                                className={`flex items-center gap-2 text-xs rounded p-1 ${canAdd ? "cursor-pointer hover:bg-emerald-50" : "opacity-50"}`}
+                                title={!canAdd ? "親事業所がマスタに無い／追加対象外なので追加できません" : ""}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={m.addToMaster && canAdd}
+                                  disabled={!canAdd}
+                                  onChange={(e) => {
+                                    if (!importPreview) return;
+                                    const newManagers = importPreview.unregisteredManagers.map((it) =>
+                                      it.name === m.name && it.officeName === m.officeName
+                                        ? { ...it, addToMaster: e.target.checked }
+                                        : it
+                                    );
+                                    setImportPreview({ ...importPreview, unregisteredManagers: newManagers });
+                                  }}
+                                  className="w-4 h-4 shrink-0"
+                                />
+                                <span className="flex-1 text-gray-800">
+                                  {m.name}
+                                  <span className="text-[10px] text-gray-400 ml-1.5">@ {m.officeName}</span>
+                                </span>
+                                <span className="text-[10px] text-gray-400">{m.occurrences}件</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* 補足情報 */}
                 <div className="bg-sky-50 rounded-lg p-2.5 text-[11px] text-sky-700 space-y-0.5">
                   <p>📌 保険情報履歴も同時に更新されます（{importPreview.insuranceCount}件の認定期間）</p>
                   {currentOfficeId && <p>📌 自事業所が選択中のため、取込/更新した利用者を自動紐付けします</p>}
                   <p>📌 タイトルに「〇〇 様」が含まれる未紐付け予定は、新規取込の利用者へ自動再紐付けします</p>
+                  <p>📌 既存利用者のマスタ紐付け（居宅事業所・ケアマネ）は保護され、CSV取込みで上書きされません</p>
+                  <p>📌 認定期間ごとの担当ケアマネは履歴として記録されます（マスタ紐付き）</p>
                 </div>
               </div>
               <div className="px-5 py-3 border-t border-gray-100 shrink-0 flex gap-2">
@@ -3570,7 +3904,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
               <h3 className="font-semibold text-gray-800 text-sm">
-                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.merged.length > 0 ? ` / 仮登録→本登録 ${importResult.merged.length}件` : ""}{importResult.insuranceAdded > 0 ? ` / 保険情報 ${importResult.insuranceAdded}件` : ""}{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
+                {importResult.errors.length > 0 ? "⚠️" : "✅"} 取り込み完了（新規 {importResult.inserted.length}件 / 更新 {importResult.updated.length}件{importResult.merged.length > 0 ? ` / 仮登録→本登録 ${importResult.merged.length}件` : ""}{importResult.addedOffices > 0 ? ` / 居宅マスタ追加 ${importResult.addedOffices}件` : ""}{importResult.addedManagers > 0 ? ` / ケアマネマスタ追加 ${importResult.addedManagers}件` : ""}{importResult.insuranceAdded > 0 ? ` / 保険情報 ${importResult.insuranceAdded}件` : ""}{importResult.reunited > 0 ? ` / 予定再紐付け ${importResult.reunited}件` : ""}{importResult.errors.length > 0 ? ` / エラー ${importResult.errors.length}件` : ""}）
               </h3>
               <button onClick={() => setImportResult(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
@@ -4564,6 +4898,7 @@ function ClientDetail({
     benefit_type: null, benefit_content: null, benefit_rate: null,
     benefit_period_start: null, benefit_period_end: null,
     support_office_date: null, record_status: "認定済み",
+    care_office_id: null, care_manager_id: null,
   });
   // レンタル履歴（手動登録）
   const [rentalHistoryRecords, setRentalHistoryRecords] = useState<ClientRentalHistory[]>([]);
