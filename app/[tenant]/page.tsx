@@ -400,7 +400,7 @@ export default function TenantPage({
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
         <span className="text-xs text-emerald-200">用具・発注管理</span>
-        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.0</span>
+        <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.1</span>
       </header>
 
       {/* Content */}
@@ -608,14 +608,26 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     onDirtyChange(pendingChanges.size > 0);
   }, [pendingChanges, onDirtyChange]);
 
+  // ── パフォーマンス最適化：Map ルックアップ ──
+  const clientByIdOrders = useMemo(() => {
+    const m = new Map<string, Client>();
+    for (const c of clients) m.set(c.id, c);
+    return m;
+  }, [clients]);
+  const equipmentByCodeOrders = useMemo(() => {
+    const m = new Map<string, Equipment>();
+    for (const e of equipment) m.set(e.product_code, e);
+    return m;
+  }, [equipment]);
+
   const clientName = (id: string | null) =>
-    id ? (clients.find((c) => c.id === id)?.name ?? id) : "（利用者未設定）";
+    id ? (clientByIdOrders.get(id)?.name ?? id) : "（利用者未設定）";
 
   const equipName = (code: string) =>
-    equipment.find((e) => e.product_code === code)?.name ?? code;
+    equipmentByCodeOrders.get(code)?.name ?? code;
 
   // 利用者ごとにグループ化して直近活動順に並べる
-  const clientGroups = (() => {
+  const clientGroups = useMemo(() => {
     const filtered = filter === "all"
       ? orders
       : orders.filter((o) => o.items.some((i) => i.status === filter));
@@ -634,10 +646,11 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
 
     const groups = Array.from(groupMap.entries()).map(([key, groupOrders]) => {
       const sorted = [...groupOrders].sort(cmpOrder);
+      const cli = key === "__none__" ? null : clientByIdOrders.get(key);
       return {
         clientId: key === "__none__" ? null : key,
-        name: key === "__none__" ? "利用者未設定" : (clients.find((c) => c.id === key)?.name ?? key),
-        furigana: key === "__none__" ? "" : (clients.find((c) => c.id === key)?.furigana ?? ""),
+        name: key === "__none__" ? "利用者未設定" : (cli?.name ?? key),
+        furigana: key === "__none__" ? "" : (cli?.furigana ?? ""),
         latestAt: sorted[0].ordered_at,
         latestCreatedAt: sorted[0].created_at,
         orders: sorted,
@@ -650,7 +663,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       return diff !== 0 ? diff : new Date(b.latestCreatedAt).getTime() - new Date(a.latestCreatedAt).getTime();
     });
     return groups;
-  })();
+  }, [orders, filter, clientByIdOrders]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -2415,8 +2428,25 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     );
   }
 
+  // ⚡ パフォーマンス最適化：Map ルックアップ（O(N) → O(1)）
+  const orderById = useMemo(() => {
+    const m = new Map<string, Order>();
+    for (const o of orders) m.set(o.id, o);
+    return m;
+  }, [orders]);
+  const equipmentByCode = useMemo(() => {
+    const m = new Map<string, Equipment>();
+    for (const e of equipment) m.set(e.product_code, e);
+    return m;
+  }, [equipment]);
+  const clientById = useMemo(() => {
+    const m = new Map<string, Client>();
+    for (const c of clients) m.set(c.id, c);
+    return m;
+  }, [clients]);
+
   // 入院フィルター用
-  const hospFilteredIds = (() => {
+  const hospFilteredIds = useMemo(() => {
     if (!hospFilter) return null;
     const [year, month] = hospModalMonth.split("-").map(Number);
     const firstDay = `${hospModalMonth}-01`;
@@ -2426,9 +2456,9 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         .filter(h => h.admission_date <= lastDay && (h.discharge_date === null || h.discharge_date >= firstDay))
         .map(h => h.client_id)
     );
-  })();
+  }, [hospFilter, hospModalMonth, hospitalizations]);
 
-  const filtered = clients
+  const filtered = useMemo(() => clients
     .filter((c) => {
       // 事業所フィルタ（自事業所のみモードの場合）
       if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && !clientOfficeMap.has(c.id)) return false;
@@ -2454,7 +2484,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const fb = b.is_facility ? 1 : 0;
       if (fa !== fb) return fa - fb;
       return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
-    });
+    }),
+    [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, hospFilter, hospFilteredIds, kanaFilter, search]);
 
   // Count active rentals per client
   const activeCount = (clientId: string) =>
@@ -2470,14 +2501,14 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     );
   }
 
-  // 変更履歴を生成
-  const changeHistory = (() => {
+  // 変更履歴を生成（Mapルックアップで O(N²) → O(N) に、useMemoで再描画時再実行しない）
+  const changeHistory = useMemo(() => {
     type ChangeEvent = { date: string; clientId: string; equipName: string; label: string; color: string };
     const events: ChangeEvent[] = [];
     for (const item of orderItems) {
-      const order = orders.find((o) => o.id === item.order_id);
+      const order = orderById.get(item.order_id);
       if (!order?.client_id) continue;
-      const eq = equipment.find((e) => e.product_code === item.product_code);
+      const eq = equipmentByCode.get(item.product_code);
       const name = eq?.name ?? item.product_code;
       if (item.delivered_at) events.push({ date: item.delivered_at.slice(0, 10), clientId: order.client_id, equipName: name, label: "納品", color: "text-blue-600 bg-blue-50" });
       if (item.rental_start_date) events.push({ date: item.rental_start_date, clientId: order.client_id, equipName: name, label: "レンタル開始", color: "text-emerald-600 bg-emerald-50" });
@@ -2492,10 +2523,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       map.get(e.clientId)!.push(e);
     }
     return Array.from(map.entries())
-      .map(([clientId, evts]) => ({ client: clients.find((c) => c.id === clientId), events: evts }))
+      .map(([clientId, evts]) => ({ client: clientById.get(clientId), events: evts }))
       .filter((g) => g.client)
       .sort((a, b) => (b.events[0]?.date ?? "").localeCompare(a.events[0]?.date ?? ""));
-  })();
+  }, [orderItems, orderById, equipmentByCode, clientById]);
 
   const CSV_HEADERS = ["利用者番号", "氏名", "ふりがな", "電話番号", "携帯番号", "住所", "介護度", "給付率", "ケアマネ名", "ケアマネ事業所", "認定終了日", "メモ", "居宅・施設等"];
 
