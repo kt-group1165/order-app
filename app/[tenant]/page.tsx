@@ -2816,7 +2816,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         while (true) {
           const { data } = await supabase
             .from("clients")
-            .select("id,user_number,name,furigana,phone,mobile,address,gender,care_level,benefit_rate,care_manager,care_manager_org,certification_end_date,memo,insured_number,birth_date,certification_start_date,insurer_number,copay_rate,public_expense,is_facility,is_provisional,deleted_at,referrer_org,care_office_id,care_manager_id")
+            // memo は DROP 済（client_memos に移行）。型互換のため後で undefined を許容。
+            .select("id,user_number,name,furigana,phone,mobile,address,gender,care_level,benefit_rate,care_manager,care_manager_org,certification_end_date,insured_number,birth_date,certification_start_date,insurer_number,copay_rate,public_expense,is_facility,is_provisional,deleted_at,referrer_org,care_office_id,care_manager_id")
             .eq("tenant_id", tenantId)
             .range(from, from + PAGE - 1);
           if (!data || data.length === 0) break;
@@ -2901,7 +2902,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           care_manager: cols[col("ケアマネ名")]?.trim() || null,
           care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
           certification_end_date: cols[col("認定終了日")]?.trim() || null,
-          memo: cols[col("メモ")]?.trim() || null,
+          // memo は clients から DROP 済。CSV から読んでも保存先がないため省略
           insured_number: cols[col("被保険者番号")]?.trim() || null,
           birth_date: cols[col("生年月日")]?.trim() || null,
           certification_start_date: cols[col("認定開始日")]?.trim() || null,
@@ -5578,9 +5579,13 @@ function ClientDetail({
                   <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
                   <button onClick={async () => {
                     setBasicSaving(true);
-                    // 空文字のIDは NULL に変換して保存
+                    // 空文字のIDは NULL に変換して保存。
+                    // memo は clients から DROP 済のため payload から除外
+                    // （TODO §5-3: client_memos への upsert を後日実装）
+                    const { memo: _memoIgnored, ...basicWithoutMemo } = basicForm;
+                    void _memoIgnored;
                     const payload = {
-                      ...basicForm,
+                      ...basicWithoutMemo,
                       care_office_id: basicForm.care_office_id || null,
                       care_manager_id: basicForm.care_manager_id || null,
                     };
@@ -6701,6 +6706,8 @@ function ClientDetail({
                   try {
                     // 数値/日付は空文字なら null に
                     const n = (v: string) => v.trim() || null;
+                    // memo は clients から DROP 済のため payload から除外
+                    // （TODO §5-3: client_memos への upsert を後日実装）
                     await promoteProvisionalClient(client.id, {
                       name: promoteForm.name.trim(),
                       furigana: n(promoteForm.furigana),
@@ -6719,7 +6726,6 @@ function ClientDetail({
                       insurer_number: n(promoteForm.insurer_number),
                       certification_start_date: n(promoteForm.certification_start_date),
                       certification_end_date: n(promoteForm.certification_end_date),
-                      memo: n(promoteForm.memo),
                     });
                     // client オブジェクトを直接更新（local state 反映）
                     Object.assign(client, {
@@ -11815,7 +11821,8 @@ function parseReimportCsv(buf: ArrayBuffer): { clients: Map<string, ReimportClie
         address: iAddr >= 0 ? n(r[iAddr]) : null,
         phone: iPhone >= 0 ? n(r[iPhone]) : null,
         mobile: iMobile >= 0 ? n(r[iMobile]) : null,
-        memo: iMemo >= 0 ? n(r[iMemo]) : null,
+        // memo は clients から DROP 済のため省略（後日 client_memos へ）
+        memo: null,
       });
     }
 
@@ -11964,7 +11971,7 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
         address: c.address,
         phone: c.phone,
         mobile: c.mobile,
-        memo: c.memo,
+        // memo は clients から DROP 済のため省略（後日 client_memos へ）
         deleted_at: null,
       }));
       const BATCH = 200;
