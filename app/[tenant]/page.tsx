@@ -53,6 +53,7 @@ import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareMan
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
+import { getMaxUserNumber } from "@kt/shared/user-number";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -2578,10 +2579,10 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
   // 実際に新規利用者を作成する処理（紐付けなし or 紐付け確認後）
   const insertFreshClient = async () => {
-    const maxNum = clients.reduce((mx, c) => {
-      const n = parseInt(c.user_number ?? "0");
-      return isNaN(n) ? mx : Math.max(mx, n);
-    }, 0);
+    // user_number 採番（tenant 単位 max+1）。@kt/shared 共通 util。
+    // 旧実装は in-memory clients から reduce していたが、別 app（kaigo-app/calendar-app）
+    // で同 tenant に追加された行を反映できなかった。DB クエリにすることで堅牢化。
+    const maxNum = await getMaxUserNumber(supabase, tenantId);
     const { data: inserted, error } = await supabase.from("clients").insert({
       tenant_id: tenantId,
       user_number: String(maxNum + 1),
@@ -2605,10 +2606,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
   // 仮登録を本登録化する（その場で編集扱い、UUIDは維持）
   const promoteProvisional = async (provisionalId: string) => {
-    const maxNum = clients.reduce((mx, c) => {
-      const n = parseInt(c.user_number ?? "0");
-      return isNaN(n) ? mx : Math.max(mx, n);
-    }, 0);
+    // user_number 採番（tenant 単位 max+1）。@kt/shared 共通 util。
+    const maxNum = await getMaxUserNumber(supabase, tenantId);
     await promoteProvisionalClient(provisionalId, {
       user_number: String(maxNum + 1),
       name: newClientForm.name.trim(),
