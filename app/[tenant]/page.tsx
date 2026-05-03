@@ -2297,8 +2297,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     status: "new" | "unchanged" | "updated";
     diffs: ImportFieldDiff[];
     warnings: ImportWarningKind[];
-    // 実行時に使う元データ
-    data: Omit<Client, "id" | "created_at">;
+    // 実行時に使う元データ。memo は CSV インポート経路では扱わない（client_memos へ移行済）
+    data: Omit<Client, "id" | "created_at" | "memo">;
     existingId: string | null;
     insurance: Array<Record<string, unknown>>;
     // 新規行のみ：仮登録の候補と、ユーザーがマージ先として選んだID
@@ -2835,7 +2835,8 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
       const skipped: { reason: string; line: string }[] = [];
       // clients テーブル用: user_number で集約（認定終了日が最新のものを採用）
-      type ClientData = Omit<Client, "id" | "created_at">;
+      // memo は clients から DROP 済（client_memos へ移行）。CSV インポート経路では扱わない
+      type ClientData = Omit<Client, "id" | "created_at" | "memo">;
       const clientByUserNumber = new Map<string, ClientData>();
       // 保険情報履歴: 1利用者に複数行（認定期間ごと）を蓄積
       // 画面（介護保険タブ）で表示する項目のみ
@@ -3096,7 +3097,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       const normName = (s: string | null | undefined): string =>
         (s ?? "").trim().replace(/　/g, " ").replace(/\s+/g, " ");
 
-      const findProvisionalCandidates = (newData: Omit<Client, "id" | "created_at">): ProvisionalCandidate[] => {
+      const findProvisionalCandidates = (newData: Omit<Client, "id" | "created_at" | "memo">): ProvisionalCandidate[] => {
         const targetName = normName(newData.name);
         const targetAddr = normName(newData.address);
         if (!targetName) return [];
