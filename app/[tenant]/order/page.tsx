@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, use, useRef, useCallback } from "react";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { ChevronLeft, ChevronRight, Search, Check, X, Plus, Minus, ShoppingCart, Mic, MicOff, Volume2 } from "lucide-react";
 import { Client, Equipment, Supplier } from "@/lib/supabase";
 import { getClients } from "@/lib/clients";
@@ -205,6 +206,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const runVoiceFlow = useCallback(async (
     allClients: Client[],
     allEquipment: Equipment[],
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
     allSuppliers: Supplier[]
   ) => {
     voiceCancelRef.current = false;

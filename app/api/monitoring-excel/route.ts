@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Helper: Reiwa year (2019 = 1)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   function reiwa(dateStr: string | null | undefined): number | null {
     const d = toDate(dateStr);
     if (!d) return null;

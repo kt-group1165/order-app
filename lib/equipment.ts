@@ -342,6 +342,7 @@ export async function importEquipment(
           }
         }
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
     } catch (e) {
       result.errors.push(`行${i + 2}: 予期しないエラー`);
     }

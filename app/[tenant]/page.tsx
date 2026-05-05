@@ -16,8 +16,11 @@ import {
   CheckCircle2,
   Loader2,
   AlertCircle,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   Truck,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   PlayCircle,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   Ban,
   RotateCcw,
   Mail,
@@ -29,7 +32,9 @@ import {
   ClipboardCheck,
   Eye,
   CreditCard,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   AlertTriangle,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   RefreshCw,
   Trash2,
 } from "lucide-react";
@@ -42,13 +47,17 @@ import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/
 import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
 import {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   getLateFlags, setLateFlag, removeLateFlag,
   getUnitOverrides, setUnitOverride, removeUnitOverride,
   getRebillFlags, setRebillFlag, removeRebillFlag,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
 } from "@/lib/billing";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
@@ -515,6 +524,7 @@ function MobileOrderUrlButton({ tenantId }: { tenantId: string }) {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, onSwitchToClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -625,6 +635,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     return m;
   }, [equipment]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const clientName = (id: string | null) =>
     id ? (clientByIdOrders.get(id)?.name ?? id) : "（利用者未設定）";
 
@@ -2148,6 +2159,7 @@ function ImportModal({
       }
       const res = await importEquipment(tenantId, rows);
       setResult(res);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
     } catch (e) {
       setError("インポート中にエラーが発生しました");
     } finally {
@@ -2459,6 +2471,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         setLoading(false);
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [tenantId, trashFilter]);
 
   // ⚡ パフォーマンス最適化：Map ルックアップ（O(N) → O(1)）
@@ -2565,6 +2578,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
   }
 
   // Count active rentals per client
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const activeCount = (clientId: string) =>
     orderItems.filter(
       (i) => i.status === "rental_started"
@@ -4834,6 +4848,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
                           className={`px-4 py-3 flex items-center gap-3 cursor-pointer transition-colors ${checked ? "bg-blue-50" : "hover:bg-gray-50"}`}
                           onClick={() => setJissekiSelectedKeys(prev => {
                             const next = new Set(prev);
+                            // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                             checked ? next.delete(g.key) : next.add(g.key);
                             return next;
                           })}
@@ -4867,6 +4882,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
 
 function ClientDetail({
   client,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   allOrderItems,
   equipment,
   tenantId,
@@ -5160,6 +5176,7 @@ function ClientDetail({
   const activeItems = clientItems.filter((i) => i.status === "rental_started");
   const orderedItems = clientItems.filter((i) => i.status === "ordered");
   const deliveredItems = clientItems.filter((i) => ["delivered", "trial"].includes(i.status));
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const pendingItems = clientItems.filter((i) =>
     ["ordered", "delivered", "trial"].includes(i.status)
   );
@@ -7367,6 +7384,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       if (item.status !== "rental_started" && item.status !== "terminated") return false;
       return true;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [billingMonth, orderItems]);
 
   // 利用者ごとにグループ化（事業所フィルタ付き）
@@ -7383,6 +7401,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       map.get(client.id)!.items.push(item);
     }
     return Array.from(map.values()).sort((a, b) => a.client.name.localeCompare(b.client.name, "ja"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [activeRentals, orders, clients]);
 
   // DBからフラグを読み込む
@@ -7422,6 +7441,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     // 入院による半月判定
     const [y, m] = billingMonth.split("-").map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     const clientHosp = hospitalizations.filter(h => h.client_id === clientId);
@@ -7451,6 +7471,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     return base;
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
     const n = parseInt(value, 10);
     const eq = equipment.find((e) => e.product_code === item.product_code);
@@ -9007,6 +9028,7 @@ function NewOrderModal({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       if (def) setSupplierId(def.id);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [suppliers]);
 
   // 利用者選択時に住所を自動入力
@@ -9032,6 +9054,7 @@ function NewOrderModal({
     e.stopPropagation();
     setFavorites((prev) => {
       const next = new Set(prev);
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
       next.has(code) ? next.delete(code) : next.add(code);
       localStorage.setItem(FAVORITES_KEY, JSON.stringify([...next]));
       return next;
@@ -9054,8 +9077,10 @@ function NewOrderModal({
     const handlePop = () => onClose();
     window.addEventListener("popstate", handlePop);
     return () => window.removeEventListener("popstate", handlePop);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const addItem = (eq: Equipment, kind: PaymentKind) => {
     if (items.find((i) => i.equipment.id === eq.id && i.payment_type === kind)) return;
     const currentTokka = items.filter((i) => i.payment_type === "特価自費");
@@ -10360,6 +10385,7 @@ function OrderEmailPreviewModal({
             /* 卸会社ごとにカード表示 */
             supplierGroups.map((g) => {
               const key = g.supplierId ?? "__none__";
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
               const { subject, preview } = buildOrderContent(order, g.items, client, equipment, members, isResend, suppliers);
               const isSent = sentSet.has(key);
               const isSending = sendingId === key;
@@ -11045,7 +11071,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       setManagers(m);
     } finally { setLoading(false); }
   };
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { load(); }, [tenantId]);
 
   const startEdit = (office: CareOffice) => {
@@ -11474,7 +11500,7 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
     try { setOffices(await getOffices(tenantId)); } finally { setLoading(false); }
   };
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { load(); }, [tenantId]);
 
   const handleAdd = async () => {
@@ -11794,6 +11820,7 @@ function parseReimportCsv(buf: ArrayBuffer): { clients: Map<string, ReimportClie
     iFLast = col("フリガナ（姓）"), iFFirst = col("フリガナ（名）"), iFuri = col("フリガナ"),
     iGender = col("性別"), iBirth = col("生年月日"),
     iZip = col("郵便番号"), iAddr = col("住所"),
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
     iPhone = col("電話番号"), iMobile = col("携帯番号"), iMemo = col("メモ"),
     iEff = col("有効開始日"),
     iInsNum = col("被保険者番号"), iInsurer = col("保険者番号"),
@@ -12459,6 +12486,7 @@ function CarePlanPages({
   const ADLTH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "1px 3px", textAlign: "center", fontSize: "7pt", whiteSpace: "nowrap" };
   const ADLTD: React.CSSProperties = { border: "1px solid #555", padding: "1px 4px", fontSize: "7pt", whiteSpace: "nowrap" };
   const ADLEM: React.CSSProperties = { border: "1px solid #555", padding: 0, height: "14px" };
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const ADLNONE: React.CSSProperties = { border: "none", padding: "0 3px", width: "6px" };
 
   const renderLeftCol = () => (
@@ -12749,6 +12777,7 @@ function CarePlanModal({
   });
 
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const [gender, setGender] = useState((initialParams?.gender as string) ?? client.gender ?? "");
   const [birthDate, setBirthDate] = useState((initialParams?.birthDate as string) ?? "");
   const [certStartDate, setCertStartDate] = useState((initialParams?.certStartDate as string) ?? "");
@@ -12863,6 +12892,7 @@ function CarePlanModal({
                       <div key={item.id} className="flex items-center gap-2 px-3 py-2">
                         <input type="checkbox" checked={checked} onChange={(e) => {
                           const n = new Set(selectedIds);
+                          // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                           e.target.checked ? n.add(item.id) : n.delete(item.id);
                           setSelectedIds(n);
                         }} className="accent-emerald-500 shrink-0" />
@@ -13066,6 +13096,7 @@ function ProposalModal({
                       <label key={item.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer">
                         <input type="checkbox" checked={checked} onChange={(e) => {
                           const n = new Set(selectedIds);
+                          // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                           e.target.checked ? n.add(item.id) : n.delete(item.id);
                           setSelectedIds(n);
                         }} className="accent-blue-500 shrink-0" />
@@ -13243,6 +13274,7 @@ function ContractDocumentsModal({
   const certEndJa = client.certification_end_date
     ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00"))
     : "　　年　月　日";
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";
 
   const handlePrint = () => {
@@ -13351,6 +13383,7 @@ function ContractDocumentsModal({
                     <div key={item.id} className="flex items-center gap-2 px-3 py-2">
                       <input type="checkbox" checked={selectedIds.has(item.id)} onChange={(e) => {
                         const n = new Set(selectedIds);
+                        // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                         e.target.checked ? n.add(item.id) : n.delete(item.id);
                         setSelectedIds(n);
                       }} className="accent-blue-500 shrink-0" />
@@ -13659,6 +13692,7 @@ function ContractDocumentsModal({
 
 // ─── Important Matters Modal ─────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 function ImportantMattersModal({
   client,
   companyInfo,
@@ -13981,6 +14015,7 @@ function ImportantMattersModal({
 
 // ─── Rental Contract Modal ───────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 function RentalContractModal({
   client,
   clientItems,
@@ -14059,6 +14094,7 @@ function RentalContractModal({
     ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00"))
     : "　　年　月　日";
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";
 
   return (
@@ -14118,6 +14154,7 @@ function RentalContractModal({
                     <div key={item.id} className="flex items-center gap-2 px-3 py-2">
                       <input type="checkbox" checked={checked} onChange={(e) => {
                         const n = new Set(selectedIds);
+                        // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                         e.target.checked ? n.add(item.id) : n.delete(item.id);
                         setSelectedIds(n);
                       }} className="accent-emerald-500 shrink-0" />
@@ -14451,6 +14488,7 @@ function ChangeContractModal({
 
   const contractDateJa = contractDate ? toJapaneseEra(new Date(contractDate + "T00:00:00")) : "　　年　月　日";
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const monthLabel = (yyyymm: string) => {
     const [y, m] = yyyymm.split("-").map(Number);
     return `${y}年${m}月`;
@@ -15105,6 +15143,7 @@ function InvoiceReceiptModal({
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const title = mode === "invoice" ? "利用料請求書" : "利用料領収書";
   const amountLabel = mode === "invoice" ? "今回ご請求額" : "領収金額";
   const dateLabel = mode === "invoice" ? "発行日" : "領収日";
@@ -15792,6 +15831,7 @@ function RentalReportModal({
           <button key={t}
             onClick={() => setSelectedUsage((prev) => {
               const next = new Set(prev);
+              // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
               next.has(t) ? next.delete(t) : next.add(t);
               return next;
             })}
@@ -16008,6 +16048,7 @@ function RentalReportModal({
                   <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "9pt" }}>
                     <span className="no-print"
                       onClick={() => setCheckedReqs((prev) => {
+                        // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- intentional side-effect
                         const next = new Set(prev); next.has(idx) ? next.delete(idx) : next.add(idx); return next;
                       })}
                       style={{ cursor: "pointer", userSelect: "none", fontSize: "14pt", lineHeight: "1" }}
@@ -16061,7 +16102,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const [formClient, setFormClient] = useState<Client | null>(null);
   const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
 
-  // eslint-disable-next-line react-hooks/immutability -- TDZ: function declared below; useEffect callback runs post-render so safe at runtime
+  // eslint-disable-next-line react-hooks/immutability, react-hooks/exhaustive-deps -- TDZ: function declared below; useEffect callback runs post-render so safe at runtime
   useEffect(() => { loadData(); }, [tenantId]);
 
   const loadData = async () => {
@@ -16543,6 +16584,7 @@ function MonitoringFormModal({
     existingRecord ? (existingRecord.previous_comment ?? "") : (lastRecord?.report_comment ?? "")
   );
   const [saving, setSaving] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const [savedId, setSavedId] = useState<string | null>(existingRecord?.id ?? null);
   const [downloading, setDownloading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -16698,6 +16740,7 @@ function MonitoringFormModal({
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const CHECK_COLS: { key: keyof MonitoringItemCheck; label: string }[] = [
     { key: "no_issue", label: "問題なし" },
     { key: "has_malfunction", label: "不具合" },

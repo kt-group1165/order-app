@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ ok: true });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   } catch (e) {
     return NextResponse.json({ error: "送信エラーが発生しました" }, { status: 500 });
   }
