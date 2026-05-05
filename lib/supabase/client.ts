@@ -6,10 +6,12 @@ import { createBrowserClient } from "@supabase/ssr";
 // row の型を強くは見ていない)、Database 型を未定義のまま createBrowserClient
 // すると row が `unknown` になり `select(...)` 結果の reduce が型エラー。
 // 必要になったら types/database.ts を生成して <Database> に差替え。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-typed value (CSV row / DB row / component prop widening)
 let client: ReturnType<typeof createBrowserClient<any>> | null = null;
 
 export function createClient() {
   if (!client) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-typed value (CSV row / DB row / component prop widening)
     client = createBrowserClient<any>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!

@@ -299,6 +299,7 @@ export default function TenantPage({
     // localStorage から事業所設定を復元
     if (typeof window !== "undefined") {
       const savedOffice = localStorage.getItem(CURRENT_OFFICE_KEY(tenantId));
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       if (savedOffice) setCurrentOfficeId(savedOffice);
       const savedMode = localStorage.getItem(OFFICE_VIEW_MODE_KEY(tenantId));
       if (savedMode === "all") setOfficeViewAll(true);
@@ -324,6 +325,7 @@ export default function TenantPage({
   useEffect(() => {
     if (typeof window !== "undefined") {
       if (localStorage.getItem(PIN_AUTH_KEY(tenantId)) === "true") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
         setPinVerified(true);
       }
       setPinChecked(true);
@@ -590,6 +592,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   }, [tenantId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     load();
   }, [load]);
 
@@ -1343,6 +1346,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
 
   // equipmentが変わったらlocalEquipmentも更新（デフォルト順）
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setLocalEquipment(equipment);
     setOrderChanged(false);
   }, [equipment]);
@@ -1715,6 +1719,52 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
 
 // ─── Equipment Detail ────────────────────────────────────────────────────────
 
+// EquipmentDetail / ClientDetail で使う read-only field 表示 (module scope に hoist)
+function Field({ label, value }: { label: string; value: string | number | null | undefined }) {
+  if (value == null || value === "") return null;
+  return (
+    <div className="bg-gray-50 rounded-xl p-3">
+      <p className="text-xs text-gray-400 mb-0.5">{label}</p>
+      <p className="text-sm text-gray-800">{value}</p>
+    </div>
+  );
+}
+
+// 設定タブ各画面の戻る付きヘッダ (module scope に hoist。state setter は props 経由)
+function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center gap-3">
+      <button onClick={onBack} className="text-gray-400 hover:text-gray-600">
+        <ChevronLeft size={20} />
+      </button>
+      <h2 className="font-semibold text-gray-800">{title}</h2>
+    </div>
+  );
+}
+
+// 居宅マスタ編集 form の汎用 row (module scope。form / setForm は props 経由)
+function CareOfficeFormRow({
+  label, field, placeholder, form, setForm,
+}: {
+  label: string;
+  field: keyof CareOffice;
+  placeholder?: string;
+  form: Partial<CareOffice>;
+  setForm: React.Dispatch<React.SetStateAction<Partial<CareOffice>>>;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500 w-24 shrink-0">{label}</span>
+      <input
+        value={(form[field] as string) ?? ""}
+        onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))}
+        placeholder={placeholder}
+        className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+      />
+    </div>
+  );
+}
+
 function EquipmentDetail({
   item,
   tenantId,
@@ -1751,6 +1801,7 @@ function EquipmentDetail({
     const m: Record<string, string> = {};
     const prices = item ? officePrices.filter((p) => p.product_code === item.product_code) : [];
     prices.forEach((p) => { m[p.office_id] = String(p.rental_price); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setOfficePriceMap(m);
   }, [isEditing, officePrices, item]);
 
@@ -1854,14 +1905,6 @@ function EquipmentDetail({
     setIsEditing(false);
     setError("");
   };
-
-  const Field = ({ label, value }: { label: string; value: string | number | null | undefined }) =>
-    value != null && value !== "" ? (
-      <div className="bg-gray-50 rounded-xl p-3">
-        <p className="text-xs text-gray-400 mb-0.5">{label}</p>
-        <p className="text-sm text-gray-800">{value}</p>
-      </div>
-    ) : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -5050,6 +5093,7 @@ function ClientDetail({
     }
   }, [client.id, tenantId]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { loadItems(); }, [loadItems]);
 
   const today = new Date().toISOString().split("T")[0];
@@ -7343,6 +7387,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
   // DBからフラグを読み込む
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setLoading(true);
     Promise.all([
       getUnitOverrides(tenantId, billingMonth),
@@ -8959,6 +9004,7 @@ function NewOrderModal({
   useEffect(() => {
     if (suppliers.length > 0 && !supplierId) {
       const def = suppliers.find((s) => s.name.includes("日本ケアサプライ"));
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       if (def) setSupplierId(def.id);
     }
   }, [suppliers]);
@@ -8967,6 +9013,7 @@ function NewOrderModal({
   useEffect(() => {
     if (clientId) {
       const c = clients.find((cl) => cl.id === clientId);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       setDeliveryAddress(c?.address ?? "");
     } else {
       setDeliveryAddress("");
@@ -10531,6 +10578,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
       setSavedCompany(true);
       setTimeout(() => setSavedCompany(false), 2500);
     } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-typed value (CSV row / DB row / component prop widening)
       const msg = err instanceof Error ? err.message : (err as any)?.message ?? JSON.stringify(err);
       alert("保存に失敗しました: " + msg);
     } finally {
@@ -10577,15 +10625,6 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
     { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
     { id: "data_reimport", label: "データ再取込（危険）",    desc: "利用者・保険情報・居宅マスタを一括再構築" },
   ];
-
-  const PageHeader = ({ title }: { title: string }) => (
-    <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center gap-3">
-      <button onClick={() => setSettingsPage("menu")} className="text-gray-400 hover:text-gray-600">
-        <ChevronLeft size={20} />
-      </button>
-      <h2 className="font-semibold text-gray-800">{title}</h2>
-    </div>
-  );
 
   // ── メニュー画面 ──
   if (settingsPage === "menu") {
@@ -10663,7 +10702,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "company") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="会社情報" />
+        <PageHeader title="会社情報" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-white rounded-xl p-4 space-y-3">
             {companyFields.map(({ key, label, placeholder }) => (
@@ -10721,7 +10760,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "own_offices") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="自事業所管理" />
+        <PageHeader title="自事業所管理" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <OfficeManagementSection tenantId={tenantId} />
         </div>
@@ -10733,7 +10772,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "suppliers") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="卸会社メールアドレス" />
+        <PageHeader title="卸会社メールアドレス" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {suppliers.map((s) => (
             <div key={s.id} className="bg-white rounded-xl p-4 space-y-2">
@@ -10763,7 +10802,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "care_offices") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="居宅事業所マスタ" />
+        <PageHeader title="居宅事業所マスタ" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <CareOfficeSection tenantId={tenantId} />
         </div>
@@ -10775,7 +10814,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "speech_usage") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="AI使用状況・料金" />
+        <PageHeader title="AI使用状況・料金" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           <div>
             <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">🎤 音声認識（Google Speech-to-Text）</h2>
@@ -10793,7 +10832,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "data_reimport") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="データ再取込" />
+        <PageHeader title="データ再取込" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <DataReimportSection tenantId={tenantId} />
         </div>
@@ -10804,7 +10843,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   // ── 個別援助計画書テンプレート ──
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      <PageHeader title="個別援助計画書テンプレート" />
+      <PageHeader title="個別援助計画書テンプレート" onBack={() => setSettingsPage("menu")} />
       <div className="flex-1 overflow-y-auto p-4">
         <CarePlanTemplateSection tenantId={tenantId} />
       </div>
@@ -11006,6 +11045,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       setManagers(m);
     } finally { setLoading(false); }
   };
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { load(); }, [tenantId]);
 
   const startEdit = (office: CareOffice) => {
@@ -11070,18 +11110,6 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     try { await deleteCareManager(id); await load(); }
     catch { alert("削除に失敗しました"); }
   };
-
-  const FormRow = ({ label, field, placeholder }: { label: string; field: keyof CareOffice; placeholder?: string }) => (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-500 w-24 shrink-0">{label}</span>
-      <input
-        value={(form[field] as string) ?? ""}
-        onChange={e => setForm(prev => ({ ...prev, [field]: e.target.value }))}
-        placeholder={placeholder}
-        className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
-      />
-    </div>
-  );
 
   // CSV取込：厚労省オープンデータを care_offices_opendata に保存
   const [importing, setImporting] = useState(false);
@@ -11274,12 +11302,12 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                     <p className="text-xs text-gray-400 text-center py-1">該当なし（オープンデータ未取込 or 事業所名不一致）</p>
                   )}
                 </div>
-                <FormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" />
-                <FormRow label="事業所番号" field="office_number" placeholder="1270102658" />
-                <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
-                <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
-                <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
-                <FormRow label="メール" field="email" placeholder="example@example.com" />
+                <CareOfficeFormRow label="事業所名 *" field="name" placeholder="○○居宅介護支援事業所" form={form} setForm={setForm} />
+                <CareOfficeFormRow label="事業所番号" field="office_number" placeholder="1270102658" form={form} setForm={setForm} />
+                <CareOfficeFormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" form={form} setForm={setForm} />
+                <CareOfficeFormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" form={form} setForm={setForm} />
+                <CareOfficeFormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" form={form} setForm={setForm} />
+                <CareOfficeFormRow label="メール" field="email" placeholder="example@example.com" form={form} setForm={setForm} />
                 <div className="flex gap-2 pt-1">
                   <button onClick={() => { setAddingNew(false); setOpendataQuery(""); setOpendataResults([]); }} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
                   <button onClick={handleSave} disabled={saving || !form.name?.trim()} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
@@ -11332,12 +11360,12 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
                         )}
                         <p className="text-[10px] text-gray-500 px-1">選ぶと事業所名・事業所番号・住所・電話・FAXが上書きされます（ID はそのまま）</p>
                       </div>
-                      <FormRow label="事業所名 *" field="name" />
-                      <FormRow label="事業所番号" field="office_number" placeholder="1270102658" />
-                      <FormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" />
-                      <FormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" />
-                      <FormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" />
-                      <FormRow label="メール" field="email" placeholder="example@example.com" />
+                      <CareOfficeFormRow label="事業所名 *" field="name" form={form} setForm={setForm} />
+                      <CareOfficeFormRow label="事業所番号" field="office_number" placeholder="1270102658" form={form} setForm={setForm} />
+                      <CareOfficeFormRow label="所在地" field="address" placeholder="千葉県市原市○○1-2-3" form={form} setForm={setForm} />
+                      <CareOfficeFormRow label="FAX番号" field="fax_number" placeholder="0436-00-0000" form={form} setForm={setForm} />
+                      <CareOfficeFormRow label="電話番号" field="phone_number" placeholder="0436-00-0000" form={form} setForm={setForm} />
+                      <CareOfficeFormRow label="メール" field="email" placeholder="example@example.com" form={form} setForm={setForm} />
                       <div className="flex gap-2 pt-1">
                         <button onClick={() => { setEditingId(null); setOpendataQuery(""); setOpendataResults([]); }} className="flex-1 py-1.5 rounded-lg text-sm text-gray-500 bg-white border border-gray-200">キャンセル</button>
                         <button onClick={handleSave} disabled={saving} className="flex-1 py-1.5 rounded-lg text-sm text-white bg-emerald-500 disabled:opacity-50">
@@ -11446,6 +11474,7 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
     try { setOffices(await getOffices(tenantId)); } finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { load(); }, [tenantId]);
 
   const handleAdd = async () => {
@@ -14413,6 +14442,7 @@ function ChangeContractModal({
   const [rows, setRows] = useState<Row[]>(() => buildRows());
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setRows(buildRows());
   }, [buildRows]);
 
@@ -14904,6 +14934,7 @@ function InvoiceReceiptModal({
   // 既存番号のチェック（対象月で既に発行済みなら再利用）
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setLoadingExisting(true);
     setInvoiceNumber(null);
     setYearIssued(null);
@@ -15524,6 +15555,7 @@ function RentalReportModal({
   useEffect(() => {
     if (client.care_manager_org) {
       const matched = careOffices.find(o => o.name === client.care_manager_org);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       if (matched?.fax_number) setSelectedFaxNumber(matched.fax_number);
     }
   }, [careOffices, client.care_manager_org]);
@@ -15677,6 +15709,7 @@ function RentalReportModal({
     }
 
     if (usage.size === 0) usage.add("継続");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
     setSelectedUsage(usage);
   }, [targetMonth, items]);
 
@@ -16028,6 +16061,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const [formClient, setFormClient] = useState<Client | null>(null);
   const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
 
+  // eslint-disable-next-line react-hooks/immutability -- TDZ: function declared below; useEffect callback runs post-render so safe at runtime
   useEffect(() => { loadData(); }, [tenantId]);
 
   const loadData = async () => {
