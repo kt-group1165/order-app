@@ -1,6 +1,6 @@
 // OpenAI を使った漢字混じり日本語テキスト → カタカナ読み変換
 import OpenAI from "openai";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/server";
 
 const MODEL = "gpt-4o-mini";
 
@@ -36,10 +36,7 @@ async function logUsage(opts: {
   textCount: number;
 }): Promise<void> {
   try {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) return;
-    const sb = createClient(url, key);
+    const sb = await createClient();
     const costJpy = calcKanaCostJpy(opts.inputTokens, opts.outputTokens);
     await sb.from("openai_usage").insert({
       tenant_id: opts.tenantId ?? null,

@@ -1,9 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
+// Phase 3-6: Supabase Auth 化に伴い、browser supabase client は
+// @supabase/ssr の createBrowserClient (cookie 連携) に切替。
+// 既存の `import { supabase } from "@/lib/supabase"` 互換のため
+// re-export shim を維持する。型定義はこのファイル内に残す。
+import { createClient } from "@/lib/supabase/client";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient();
 
 // 利用者（calendar-appと共有）
 export type Client = {

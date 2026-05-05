@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v2 } from "@google-cloud/speech";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/server";
 import { toKatakanaReadingsDetailed } from "@/lib/openaiKana";
 
 export const runtime = "nodejs";
@@ -38,11 +38,8 @@ export async function POST(req: NextRequest) {
       { value: "はい", boost: 8 },
     ];
 
-    if (tenantId && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      );
+    if (tenantId) {
+      const supabase = await createClient();
       const [clientsRes, equipmentRes] = await Promise.all([
         supabase.from("clients").select("name, furigana").eq("tenant_id", tenantId),
         supabase.from("equipment_master").select("name, furigana, category").eq("tenant_id", tenantId),
@@ -158,11 +155,8 @@ export async function POST(req: NextRequest) {
           : 0;
       // long モデル: $0.016/分 ≒ ¥2.4/分（¥150/USD想定）
       const costJpy = (seconds / 60) * 2.4;
-      if (tenantId && seconds > 0 && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-        const supabase = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-        );
+      if (tenantId && seconds > 0) {
+        const supabase = await createClient();
         await supabase.from("speech_usage").insert({
           tenant_id: tenantId,
           billed_seconds: Number(seconds.toFixed(3)),
