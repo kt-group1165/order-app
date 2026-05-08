@@ -301,6 +301,8 @@ export default function TenantPage({
   const [ordersDirty, setOrdersDirty] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
+  // 書類タスク → Documents タブ遷移時に、対象 client を pre-select するための受け渡し
+  const [docsTabTarget, setDocsTabTarget] = useState<string | null>(null);
   // 事業所切替: URL ?office= が primary、無ければ localStorage、それも無ければ null
   const [currentOfficeId, setCurrentOfficeId] = useState<string | null>(urlOfficeId);
   const [officeViewAll, setOfficeViewAll] = useState(false); // false=自事業所のみ, true=全事業所
@@ -364,9 +366,9 @@ export default function TenantPage({
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
-        {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={() => setActiveTab("documents")} />}
+        {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={(clientId) => { setDocsTabTarget(clientId ?? null); setActiveTab("documents"); }} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
-        {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
+        {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
@@ -7253,7 +7255,7 @@ function ClientDetail({
 
 // ─── Documents Tab ───────────────────────────────────────────────────────────
 
-function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
+function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelectedClientId, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; initialSelectedClientId?: string | null; onClearInitialClient?: () => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
@@ -7361,6 +7363,19 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: 
     const docs = await getClientDocuments(tenantId, selectedClient.id);
     setDocuments(docs);
   };
+
+  // 書類タスクからの遷移時、対象 client を pre-select
+  useEffect(() => {
+    if (!initialSelectedClientId || clients.length === 0) return;
+    const c = clients.find((cc) => cc.id === initialSelectedClientId);
+    if (c) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 親 state 駆動の cross-tab 遷移 pre-select (mount-time init 相当)
+      setSelectedClient(c);
+      void loadClientData(c);
+    }
+    onClearInitialClient?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 意図的: loadClientData/onClearInitialClient は依存外
+  }, [initialSelectedClientId, clients]);
 
   const KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
   const KANA_MAP: Record<string, string[]> = {
@@ -16654,7 +16669,7 @@ const DOC_BADGE_COLOR: Record<string, string> = {
   proposal: "bg-purple-100 text-purple-700",
 };
 
-function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOpenDocuments: () => void }) {
+function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOpenDocuments: (clientId?: string) => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [items, setItems] = useState<OrderItem[]>([]);
@@ -16966,7 +16981,7 @@ function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments
                     </td>
                     <td className="border-b border-gray-100 px-3 py-2 text-center">
                       <button
-                        onClick={onOpenDocuments}
+                        onClick={() => onOpenDocuments(client.id)}
                         className="text-[11px] px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
                       >
                         書類を作る
