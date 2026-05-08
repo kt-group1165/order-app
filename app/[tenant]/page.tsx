@@ -32,6 +32,7 @@ import {
   ClipboardCheck,
   Eye,
   CreditCard,
+  FileWarning,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   AlertTriangle,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -255,7 +256,7 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -363,6 +364,7 @@ export default function TenantPage({
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
+        {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={() => setActiveTab("documents")} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
@@ -376,6 +378,7 @@ export default function TenantPage({
             { id: "documents", icon: FileText, label: "書類" },
             { id: "clients", icon: Users, label: "利用者別" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
+            { id: "doc-tasks", icon: FileWarning, label: "書類タスク" },
             { id: "billing", icon: CreditCard, label: "請求" },
             { id: "equipment", icon: Package, label: "用具マスタ" },
             { id: "settings", icon: Settings, label: "設定" },
@@ -16340,6 +16343,364 @@ function RentalReportModal({
 
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── DocTasksTab ──────────────────────────────────────────────────────────────
+// 「タイミング来たのに書類が無い」リストを 1 画面に集約する。
+// expected_docs(client) を items から計算し、existing_docs (client_documents) と差分を取って
+// missing 数 > 0 の利用者だけを表示する。
+//
+// マッピング:
+//  - 発注書             … status='ordered' の order がある (客 client_documents 上は supplier_email 1 件 / order)
+//  - 契約書             … status='rental_started' の item がある (rental_contract or important_matters)
+//  - 提案書             … status='rental_started' の item がある (proposal)
+//  - 契約書別紙         … rental_started + 一部解約 (change_contract)
+//  - 個別援助計画書     … rental_started + 一部解約 (care_plan)
+//
+// 「一部解約」検出 (簡易版): client 内に status='terminated' の item と status='rental_started' の item が
+// 共存していたら、その client は一部解約があったとみなす。さらに、最新の terminated item の
+// rental_end_date / cancelled_at / updated_at の最大が、最新の change_contract / care_plan
+// 書類の created_at より新しい場合、再作成が必要 (= missing) と判定する。
+
+const DOC_KEY = {
+  PURCHASE: "purchase_order",      // 発注書 (UI ラベル用、実 type は supplier_email)
+  CONTRACT: "contract",            // 契約書 (rental_contract or important_matters)
+  CONTRACT_APPENDIX: "change_contract", // 契約書別紙
+  CARE_PLAN: "care_plan",          // 個別援助計画書
+  PROPOSAL: "proposal",            // 提案書
+} as const;
+
+const DOC_LABEL: Record<string, string> = {
+  purchase_order: "発注書",
+  contract: "契約書",
+  change_contract: "契約書別紙",
+  care_plan: "個別援助計画書",
+  proposal: "提案書",
+};
+
+const DOC_BADGE_COLOR: Record<string, string> = {
+  purchase_order: "bg-blue-100 text-blue-700",
+  contract: "bg-orange-100 text-orange-700",
+  change_contract: "bg-amber-100 text-amber-700",
+  care_plan: "bg-emerald-100 text-emerald-700",
+  proposal: "bg-purple-100 text-purple-700",
+};
+
+function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOpenDocuments: () => void }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [items, setItems] = useState<OrderItem[]>([]);
+  const [documents, setDocuments] = useState<ClientDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string | null>(null); // null = 全, それ以外 = doc key
+
+  useEffect(() => {
+    const officeFilter = officeViewAll ? null : currentOfficeId;
+    const fetchAllPaged = async <T,>(buildQuery: (from: number, to: number) => unknown): Promise<T[]> => {
+      const PAGE = 1000;
+      const all: T[] = [];
+      let from = 0;
+      while (true) {
+        const q = buildQuery(from, from + PAGE - 1) as { then: (resolve: (r: { data: T[] | null; error: unknown }) => void) => void };
+        const { data, error } = (await q) as unknown as { data: T[] | null; error: unknown };
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+      return all;
+    };
+
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        // clients (office 絞り込み)
+        const cls = await fetchAllPaged<Client>((from, to) => {
+          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).range(from, to);
+          if (officeFilter) q = q.eq("office_id", officeFilter);
+          return q;
+        });
+        // orders (office 絞り込み)
+        const ords = await fetchAllPaged<Order>((from, to) => {
+          let q = supabase.from("orders").select("*").eq("tenant_id", tenantId).range(from, to);
+          if (officeFilter) q = q.eq("office_id", officeFilter);
+          return q;
+        });
+        const orderIdSet = new Set(ords.map((o) => o.id));
+        // items は order 経由で絞る (items に office_id が無いため)
+        const allItems = await fetchAllPaged<OrderItem>((from, to) =>
+          supabase.from("order_items").select("*").eq("tenant_id", tenantId).range(from, to)
+        );
+        const filteredItems = allItems.filter((i) => orderIdSet.has(i.order_id));
+        // documents (tenant 全件、client_id ベースで JOIN)
+        const docs = await fetchAllPaged<ClientDocument>((from, to) =>
+          supabase.from("client_documents").select("*").eq("tenant_id", tenantId).range(from, to)
+        );
+        if (cancelled) return;
+        setClients(cls);
+        setOrders(ords);
+        setItems(filteredItems);
+        setDocuments(docs);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, currentOfficeId, officeViewAll]);
+
+  // client_id → orders / items map
+  const clientOrdersMap = useMemo(() => {
+    const m = new Map<string, Order[]>();
+    for (const o of orders) {
+      if (!o.client_id) continue;
+      if (!m.has(o.client_id)) m.set(o.client_id, []);
+      m.get(o.client_id)!.push(o);
+    }
+    return m;
+  }, [orders]);
+
+  const orderToClient = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of orders) if (o.client_id) m.set(o.id, o.client_id);
+    return m;
+  }, [orders]);
+
+  const clientItemsMap = useMemo(() => {
+    const m = new Map<string, OrderItem[]>();
+    for (const it of items) {
+      const cid = orderToClient.get(it.order_id);
+      if (!cid) continue;
+      if (!m.has(cid)) m.set(cid, []);
+      m.get(cid)!.push(it);
+    }
+    return m;
+  }, [items, orderToClient]);
+
+  const clientDocsMap = useMemo(() => {
+    const m = new Map<string, ClientDocument[]>();
+    for (const d of documents) {
+      if (!m.has(d.client_id)) m.set(d.client_id, []);
+      m.get(d.client_id)!.push(d);
+    }
+    return m;
+  }, [documents]);
+
+  // 各 client の missing 書類を計算
+  const tasks = useMemo(() => {
+    type Task = {
+      client: Client;
+      missing: { key: string; reason: string }[];
+      relatedOrders: Order[];
+    };
+    const result: Task[] = [];
+    for (const c of clients) {
+      const cItems = clientItemsMap.get(c.id) ?? [];
+      const cDocs = clientDocsMap.get(c.id) ?? [];
+      if (cItems.length === 0) continue;
+
+      const missing: { key: string; reason: string }[] = [];
+
+      // 1) 発注書 (per order) — order ごとに supplier_email が有るか確認
+      const orderedItems = cItems.filter((i) => i.status === "ordered");
+      if (orderedItems.length > 0) {
+        const orderIdsWithOrdered = new Set(orderedItems.map((i) => i.order_id));
+        const supplierEmailOrderIds = new Set(
+          cDocs
+            .filter((d) => d.type === "supplier_email")
+            .map((d) => (d.params as { orderId?: string } | null | undefined)?.orderId)
+            .filter((x): x is string => !!x)
+        );
+        const ordersMissingEmail = [...orderIdsWithOrdered].filter((oid) => !supplierEmailOrderIds.has(oid));
+        if (ordersMissingEmail.length > 0) {
+          missing.push({
+            key: DOC_KEY.PURCHASE,
+            reason: `発注済 order ${ordersMissingEmail.length} 件に発注書未作成`,
+          });
+        }
+      }
+
+      // 2) rental_started 系
+      const rentalStartedItems = cItems.filter((i) => i.status === "rental_started");
+      const hasRentalStarted = rentalStartedItems.length > 0;
+
+      if (hasRentalStarted) {
+        // 2a) 契約書 (rental_contract or important_matters)
+        const hasContract = cDocs.some((d) => d.type === "rental_contract" || d.type === "important_matters");
+        if (!hasContract) missing.push({ key: DOC_KEY.CONTRACT, reason: "レンタル開始済 / 契約書未作成" });
+
+        // 2b) 提案書 (proposal) — rental_started のみトリガー (新規)
+        const hasProposal = cDocs.some((d) => d.type === "proposal");
+        if (!hasProposal) missing.push({ key: DOC_KEY.PROPOSAL, reason: "レンタル開始済 / 提案書未作成" });
+
+        // 2c) 個別援助計画書 (care_plan)
+        const carePlanDocs = cDocs.filter((d) => d.type === "care_plan");
+        const hasCarePlan = carePlanDocs.length > 0;
+
+        // 2d) 契約書別紙 (change_contract)
+        const changeContractDocs = cDocs.filter((d) => d.type === "change_contract");
+
+        // ---- 一部解約検出 (簡易版) ----
+        // rental_started item と terminated item が共存していて、最新 terminated の更新日時が
+        // 最新 care_plan / change_contract の created_at より後 → 再作成が必要
+        const terminatedItems = cItems.filter((i) => i.status === "terminated");
+        const hasPartialTermination = terminatedItems.length > 0; // rental_started と共存している (上で判定済)
+        const latestTerminationDate = (() => {
+          if (terminatedItems.length === 0) return null;
+          const dates = terminatedItems
+            .map((i) => i.rental_end_date ?? i.cancelled_at ?? i.updated_at ?? null)
+            .filter((d): d is string => !!d);
+          return dates.sort().pop() ?? null;
+        })();
+
+        if (!hasCarePlan) {
+          missing.push({ key: DOC_KEY.CARE_PLAN, reason: "レンタル開始済 / 個別援助計画書未作成" });
+        } else if (hasPartialTermination && latestTerminationDate) {
+          const latestDocDate = carePlanDocs.map((d) => d.created_at).sort().pop() ?? null;
+          if (latestDocDate && latestDocDate < latestTerminationDate) {
+            missing.push({ key: DOC_KEY.CARE_PLAN, reason: "一部解約後に個別援助計画書が更新されていません" });
+          }
+        }
+
+        // 契約書別紙: 一部解約があれば必須 (新規 rental_start のみ では発生しない)
+        if (hasPartialTermination && latestTerminationDate) {
+          if (changeContractDocs.length === 0) {
+            missing.push({ key: DOC_KEY.CONTRACT_APPENDIX, reason: "一部解約検出 / 契約書別紙未作成" });
+          } else {
+            const latestDocDate = changeContractDocs.map((d) => d.created_at).sort().pop() ?? null;
+            if (latestDocDate && latestDocDate < latestTerminationDate) {
+              missing.push({ key: DOC_KEY.CONTRACT_APPENDIX, reason: "一部解約後に契約書別紙が更新されていません" });
+            }
+          }
+        }
+      }
+
+      if (missing.length > 0) {
+        result.push({
+          client: c,
+          missing,
+          relatedOrders: clientOrdersMap.get(c.id) ?? [],
+        });
+      }
+    }
+    // 利用者名 (furigana) でソート
+    return result.sort((a, b) =>
+      (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja")
+    );
+  }, [clients, clientItemsMap, clientDocsMap, clientOrdersMap]);
+
+  const filteredTasks = filter ? tasks.filter((t) => t.missing.some((m) => m.key === filter)) : tasks;
+
+  const totalMissing = tasks.reduce((sum, t) => sum + t.missing.length, 0);
+  const countByKey: Record<string, number> = {};
+  for (const t of tasks) for (const m of t.missing) countByKey[m.key] = (countByKey[m.key] ?? 0) + 1;
+
+  return (
+    <div className="flex flex-col h-full bg-white text-sm">
+      {/* ツールバー */}
+      <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
+        <FileWarning size={16} className="text-amber-600" />
+        <span className="font-semibold text-gray-700">書類タスク</span>
+        <span className="text-xs text-gray-500">未作成書類のある利用者一覧</span>
+        <span className="ml-auto text-xs text-gray-600">
+          対象 {tasks.length} 名 / 未作成 {totalMissing} 件
+        </span>
+      </div>
+
+      {/* フィルタ */}
+      <div className="px-3 py-2 border-b border-gray-200 flex items-center gap-1 flex-wrap shrink-0">
+        <button
+          onClick={() => setFilter(null)}
+          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${filter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
+        >
+          全 ({totalMissing})
+        </button>
+        {Object.entries(DOC_LABEL).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setFilter(filter === key ? null : key)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${filter === key ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
+          >
+            {label} ({countByKey[key] ?? 0})
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-amber-400" /></div>
+      ) : filteredTasks.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <CheckCircle2 size={32} className="text-emerald-400 mx-auto mb-2" />
+            <p className="text-sm text-gray-500">{tasks.length === 0 ? "未作成の書類はありません" : "該当する書類タスクはありません"}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-3">
+          <div className="overflow-x-auto">
+            <table className="w-full table-auto bg-white text-left text-xs border-collapse min-w-[600px]">
+              <thead className="bg-gray-50 sticky top-0 z-10">
+                <tr className="text-gray-600">
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-44">利用者</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold">未作成書類</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-40">関連 order</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-28 text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTasks.map(({ client, missing, relatedOrders }) => (
+                  <tr key={client.id} className="hover:bg-gray-50 align-top">
+                    <td className="border-b border-gray-100 px-3 py-2 font-medium text-gray-800">
+                      <div>{client.name}</div>
+                      {client.furigana && <div className="text-gray-400 text-[10px] mt-0.5">{client.furigana}</div>}
+                    </td>
+                    <td className="border-b border-gray-100 px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        {missing.map((m, idx) => (
+                          <span
+                            key={`${m.key}-${idx}`}
+                            title={m.reason}
+                            className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${DOC_BADGE_COLOR[m.key] ?? "bg-gray-100 text-gray-700"}`}
+                          >
+                            {DOC_LABEL[m.key] ?? m.key}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="border-b border-gray-100 px-3 py-2 text-gray-600">
+                      {relatedOrders.length === 0 ? (
+                        <span className="text-gray-300">—</span>
+                      ) : (
+                        <div className="space-y-0.5">
+                          {relatedOrders.slice(0, 3).map((o) => (
+                            <div key={o.id} className="font-mono text-[10px] text-gray-500 truncate" title={o.id}>
+                              {o.ordered_at?.slice(0, 10) ?? "—"} · {o.id.slice(0, 8)}
+                            </div>
+                          ))}
+                          {relatedOrders.length > 3 && (
+                            <div className="text-[10px] text-gray-400">他 {relatedOrders.length - 3} 件</div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="border-b border-gray-100 px-3 py-2 text-center">
+                      <button
+                        onClick={onOpenDocuments}
+                        className="text-[11px] px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
+                      >
+                        書類を作る
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
