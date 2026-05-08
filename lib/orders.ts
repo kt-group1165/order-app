@@ -132,6 +132,7 @@ export async function updateOrderItemStatus(
 
 export async function createOrder(params: {
   tenantId: string;
+  officeId?: string | null;
   clientId?: string;
   eventId?: string;
   notes?: string;
@@ -150,6 +151,7 @@ export async function createOrder(params: {
     .from("orders")
     .insert({
       tenant_id: params.tenantId,
+      office_id: params.officeId ?? null,
       client_id: params.clientId ?? null,
       event_id: params.eventId ?? null,
       ordered_at: new Date().toISOString(),

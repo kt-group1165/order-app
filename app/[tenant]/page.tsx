@@ -1100,6 +1100,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       {showNewOrder && (
         <NewOrderModal
           tenantId={tenantId}
+          currentOfficeId={currentOfficeId}
           clients={clients}
           equipment={equipment}
           suppliers={suppliers}
@@ -2892,6 +2893,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         // clients テーブルに保存する項目一式
         const data: ClientData = {
           tenant_id: tenantId,
+          office_id: currentOfficeId ?? null,
           user_number: userNumber ?? String(nextNum++),
           name,
           furigana: furigana,
@@ -4341,6 +4343,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       {newOrderClient && (
         <NewOrderModal
           tenantId={tenantId}
+          currentOfficeId={currentOfficeId}
           clients={clients}
           equipment={equipment}
           suppliers={suppliers}
@@ -8925,6 +8928,7 @@ function PostSaveModal({
 
 function NewOrderModal({
   tenantId,
+  currentOfficeId,
   clients,
   equipment,
   suppliers,
@@ -8934,6 +8938,7 @@ function NewOrderModal({
   onDone,
 }: {
   tenantId: string;
+  currentOfficeId: string | null;
   clients: Client[];
   equipment: Equipment[];
   suppliers: Supplier[];
@@ -9096,8 +9101,12 @@ function NewOrderModal({
     setLoading(true);
     setError("");
     try {
+      // 利用者の office を優先 (発注は利用者と同じ office に紐付くべき)、
+      // 利用者未指定なら currentOfficeId を fallback
+      const clientOffice = clientId ? clients.find((c) => c.id === clientId)?.office_id ?? null : null;
       const order = await createOrder({
         tenantId,
+        officeId: clientOffice ?? currentOfficeId,
         clientId: clientId || undefined,
         notes: notes || undefined,
         paymentType: Array.from(selectedKinds)[0],

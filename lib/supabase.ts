@@ -10,6 +10,7 @@ export const supabase = createClient();
 export type Client = {
   id: string;
   tenant_id: string;
+  office_id: string | null;
   user_number: string | null;
   name: string;
   furigana: string | null;
