@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, use, useCallback, Fragment, useRef, useMemo, useTransition, memo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   Package,
   ClipboardList,
@@ -283,29 +284,48 @@ export default function TenantPage({
   params: Promise<{ tenant: string }>;
 }) {
   const { tenant: tenantId } = use(params);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // 旧 slug `/care-chiba` 互換: kt-group + ケア・サポート千葉 office に redirect
+  // (Phase A2 で tenant=care-chiba は削除済、data は kt-group + office=1bfc0d57 に統合済)
+  useEffect(() => {
+    if (tenantId === "care-chiba") {
+      router.replace(`/kt-group?office=1bfc0d57-9ee0-4ae2-baa5-80edb776290a`);
+    }
+  }, [tenantId, router]);
+
+  const urlOfficeId = searchParams.get("office");
   const [activeTab, setActiveTab] = useState<Tab>("orders");
   const [tenantName, setTenantName] = useState(tenantId);
   const [ordersDirty, setOrdersDirty] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
-  // 事業所切替
-  const [currentOfficeId, setCurrentOfficeId] = useState<string | null>(null);
+  // 事業所切替: URL ?office= が primary、無ければ localStorage、それも無ければ null
+  const [currentOfficeId, setCurrentOfficeId] = useState<string | null>(urlOfficeId);
   const [officeViewAll, setOfficeViewAll] = useState(false); // false=自事業所のみ, true=全事業所
+
+  // URL ?office= 変更時 (戻る/進む等) は state を追従
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL synchronization
+    setCurrentOfficeId(urlOfficeId);
+  }, [urlOfficeId]);
 
   useEffect(() => {
     getTenants().then((list) => {
       const found = list.find((t) => t.id === tenantId);
       if (found) setTenantName(found.name);
     });
-    // localStorage から事業所設定を復元
-    if (typeof window !== "undefined") {
+    // URL 未指定時のみ localStorage を fallback として読む
+    if (!urlOfficeId && typeof window !== "undefined") {
       const savedOffice = localStorage.getItem(CURRENT_OFFICE_KEY(tenantId));
       // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
       if (savedOffice) setCurrentOfficeId(savedOffice);
+    }
+    if (typeof window !== "undefined") {
       const savedMode = localStorage.getItem(OFFICE_VIEW_MODE_KEY(tenantId));
       if (savedMode === "all") setOfficeViewAll(true);
     }
-  }, [tenantId]);
+  }, [tenantId, urlOfficeId]);
 
   const handleOfficeChange = (officeId: string | null) => {
     setCurrentOfficeId(officeId);
@@ -313,6 +333,11 @@ export default function TenantPage({
       if (officeId) localStorage.setItem(CURRENT_OFFICE_KEY(tenantId), officeId);
       else localStorage.removeItem(CURRENT_OFFICE_KEY(tenantId));
     }
+    // URL も更新
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    if (officeId) params.set("office", officeId);
+    else params.delete("office");
+    router.replace(`/${tenantId}?${params.toString()}`);
   };
 
   const handleOfficeViewModeChange = (viewAll: boolean) => {
@@ -440,7 +465,6 @@ function MobileOrderUrlButton({ tenantId }: { tenantId: string }) {
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, onSwitchToClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onDirtyChange: (dirty: boolean) => void; onSwitchToClient?: (clientId: string) => void }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -483,11 +507,13 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Phase 8: officeViewAll=false なら currentOfficeId でサーバ側絞り込み
+      const officeFilter = officeViewAll ? null : currentOfficeId;
       // 全 order_items を一括取得して order_id でグループ化（N+1 を排除）
       const [ordersData, allItems, clientsData, equipData, suppliersData, membersData] = await Promise.all([
-        getOrders(tenantId),
+        getOrders(tenantId, officeFilter),
         getAllOrderItemsByTenant(tenantId),
-        getClients(tenantId),
+        getClients(tenantId, { officeId: officeFilter }),
         getEquipment(tenantId),
         getSuppliers(),
         getMembers(tenantId),
@@ -515,7 +541,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     } finally {
       setLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, currentOfficeId, officeViewAll]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
@@ -2338,11 +2364,13 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     (async () => {
       setLoading(true);
       try {
+        // Phase 8: office filter (officeViewAll=false 時)
+        const officeFilter = officeViewAll ? null : currentOfficeId;
         const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments] = await Promise.all([
-          getClients(tenantId, { onlyDeleted: trashFilter }),
+          getClients(tenantId, { onlyDeleted: trashFilter, officeId: officeFilter }),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
-          getOrders(tenantId),
+          getOrders(tenantId, officeFilter),
           getSuppliers(),
           getMembers(tenantId),
           supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).order("admission_date", { ascending: false }),
@@ -2388,7 +2416,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
-  }, [tenantId, trashFilter]);
+  }, [tenantId, trashFilter, currentOfficeId, officeViewAll]);
 
   // ⚡ パフォーマンス最適化：Map ルックアップ（O(N) → O(1)）
   // 注意: フックの順序を保つため、必ず早期 return より前に置くこと
@@ -2610,7 +2638,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     setAddingClient(true);
     try {
       await insertFreshClient();
-      const newClients = await getClients(tenantId);
+      const newClients = await getClients(tenantId, { officeId: officeViewAll ? null : currentOfficeId });
       setClients(newClients);
       setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
       setShowNewClient(false);
@@ -2627,7 +2655,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     setAddingClient(true);
     try {
       await promoteProvisional(provisionalId);
-      const newClients = await getClients(tenantId);
+      const newClients = await getClients(tenantId, { officeId: officeViewAll ? null : currentOfficeId });
       setClients(newClients);
       setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
       setShowNewClient(false);
@@ -2645,7 +2673,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
     setAddingClient(true);
     try {
       await insertFreshClient();
-      const newClients = await getClients(tenantId);
+      const newClients = await getClients(tenantId, { officeId: officeViewAll ? null : currentOfficeId });
       setClients(newClients);
       setNewClientForm({ name: "", furigana: "", phone: "", mobile: "", address: "" });
       setShowNewClient(false);
@@ -3338,7 +3366,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         }
       }
 
-      const newClients = await getClients(tenantId);
+      const newClients = await getClients(tenantId, { officeId: officeViewAll ? null : currentOfficeId });
       setClients(newClients);
 
       // 保険情報の書き込み
@@ -7223,11 +7251,12 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   }, [tenantInfo]);
 
   useEffect(() => {
+    // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
     Promise.all([
-      getClients(tenantId),
+      getClients(tenantId, { officeId: currentOfficeId ?? undefined }),
       getEquipment(tenantId),
       getAllOrderItemsByTenant(tenantId),
-      getAllOrders(tenantId),
+      getAllOrders(tenantId, currentOfficeId),
       getTenantById(tenantId),
       getOffices(tenantId),
       supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
@@ -7247,7 +7276,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         getPriceHistory(tenantId, codes).then(setPriceHistoryAll).catch(() => {});
       }
     }).catch(console.error).finally(() => setDataLoading(false));
-  }, [tenantId]);
+  }, [tenantId, currentOfficeId]);
   const [billingMonth, setBillingMonth] = useState(() => {
     // デフォルトは今月
     const d = new Date();

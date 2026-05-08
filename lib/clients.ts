@@ -3,12 +3,14 @@ import { cached, invalidateCache } from "./cache";
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
 // 既定では削除済み（deleted_at IS NOT NULL）を除外する
+// officeId 指定時は clients.office_id でも絞り込む (Phase 8 office-centric)
 export async function getClients(
   tenantId: string,
-  opts: { includeDeleted?: boolean; onlyDeleted?: boolean; bypassCache?: boolean } = {}
+  opts: { includeDeleted?: boolean; onlyDeleted?: boolean; bypassCache?: boolean; officeId?: string | null } = {}
 ): Promise<Client[]> {
   const filterKey = opts.onlyDeleted ? "deleted" : opts.includeDeleted ? "all" : "active";
-  const key = `clients:${tenantId}:${filterKey}`;
+  const officeKey = opts.officeId ?? "all";
+  const key = `clients:${tenantId}:${filterKey}:${officeKey}`;
   const fetcher = async (): Promise<Client[]> => {
     const PAGE = 1000;
     const all: Client[] = [];
@@ -20,6 +22,9 @@ export async function getClients(
         .eq("tenant_id", tenantId)
         .order("furigana", { ascending: true, nullsFirst: false })
         .range(from, from + PAGE - 1);
+      if (opts.officeId) {
+        q = q.eq("office_id", opts.officeId);
+      }
       if (opts.onlyDeleted) {
         q = q.not("deleted_at", "is", null);
       } else if (!opts.includeDeleted) {

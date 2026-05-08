@@ -15,19 +15,23 @@ export async function getMembers(tenantId: string): Promise<Member[]> {
 }
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
-export async function getOrders(tenantId: string): Promise<Order[]> {
-  return cached(`orders:${tenantId}:active`, async () => {
+// officeId 指定時は orders.office_id でも絞り込む (Phase 8 office-centric)
+export async function getOrders(tenantId: string, officeId?: string | null): Promise<Order[]> {
+  const officeKey = officeId ?? "all";
+  return cached(`orders:${tenantId}:active:${officeKey}`, async () => {
     const PAGE = 1000;
     const all: Order[] = [];
     let from = 0;
     while (true) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("orders")
         .select("*")
         .eq("tenant_id", tenantId)
         .neq("status", "cancelled")
         .order("ordered_at", { ascending: false })
         .range(from, from + PAGE - 1);
+      if (officeId) q = q.eq("office_id", officeId);
+      const { data, error } = await q;
       if (error) throw error;
       if (!data || data.length === 0) break;
       all.push(...data);
@@ -38,18 +42,21 @@ export async function getOrders(tenantId: string): Promise<Order[]> {
   });
 }
 
-export async function getAllOrders(tenantId: string): Promise<Order[]> {
-  return cached(`orders:${tenantId}:all`, async () => {
+export async function getAllOrders(tenantId: string, officeId?: string | null): Promise<Order[]> {
+  const officeKey = officeId ?? "all";
+  return cached(`orders:${tenantId}:all:${officeKey}`, async () => {
     const PAGE = 1000;
     const all: Order[] = [];
     let from = 0;
     while (true) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("orders")
         .select("*")
         .eq("tenant_id", tenantId)
         .order("ordered_at", { ascending: false })
         .range(from, from + PAGE - 1);
+      if (officeId) q = q.eq("office_id", officeId);
+      const { data, error } = await q;
       if (error) throw error;
       if (!data || data.length === 0) break;
       all.push(...data);
