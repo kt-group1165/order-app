@@ -16956,7 +16956,10 @@ function DocTasksTab({
     });
   }, [allRows, statusFilter, triggerFilter, docTypeFilter]);
 
-  // 集計 (現 status filter 配下での件数)
+  // 集計 (status / 他フィルタを反映した chip count)
+  // - countByTrigger: docType filter のみ反映 (= trigger ごとの「他フィルタ AND 後」件数)
+  // - countByDocType: trigger filter のみ反映 (= docType ごとの「他フィルタ AND 後」件数)
+  // これで chip 表示の (N) が AND 適用後の実件数となり、0 件 chip は混乱を回避
   const countByTrigger: Record<string, number> = {};
   const countByDocType: Record<string, number> = {};
   const countByStatus: Record<StatusFilter, number> = { pending: 0, completed: 0, received: 0, all: allRows.length };
@@ -16964,8 +16967,13 @@ function DocTasksTab({
     if (r.status === "pending")   countByStatus.pending   += 1;
     if (r.status === "completed") countByStatus.completed += 1;
     if (r.status === "received")  countByStatus.received  += 1;
-    if (statusFilter === "all" || r.status === statusFilter) {
+    if (statusFilter !== "all" && r.status !== statusFilter) continue;
+    // trigger chip: docType filter を反映
+    if (docTypeFilter === null || r.expected_doc_type === docTypeFilter) {
       countByTrigger[r.trigger_type] = (countByTrigger[r.trigger_type] ?? 0) + 1;
+    }
+    // docType chip: trigger filter を反映
+    if (triggerFilter === null || r.trigger_type === triggerFilter) {
       countByDocType[r.expected_doc_type] = (countByDocType[r.expected_doc_type] ?? 0) + 1;
     }
   }
