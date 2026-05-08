@@ -9000,6 +9000,7 @@ function NewOrderModal({
     }
     return "";
   });
+  const [clientKanaFilter, setClientKanaFilter] = useState<string>("");
   const [showClientList, setShowClientList] = useState(false);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<NewOrderItem[]>([]);
@@ -9336,6 +9337,24 @@ function NewOrderModal({
                     />
                     {clientSearch && <button onClick={() => setClientSearch("")}><X size={14} className="text-gray-400" /></button>}
                   </div>
+                  {/* かな行フィルター (検索と併用可) */}
+                  <div className="flex gap-1 mt-1.5 overflow-x-auto">
+                    <button
+                      onClick={() => { setClientKanaFilter(""); setShowClientList(true); }}
+                      className={`shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${!clientKanaFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+                    >
+                      全
+                    </button>
+                    {KANA_ROWS.map((row) => (
+                      <button
+                        key={row.label}
+                        onClick={() => { setClientKanaFilter(clientKanaFilter === row.label ? "" : row.label); setShowClientList(true); }}
+                        className={`shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${clientKanaFilter === row.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+                      >
+                        {row.label}
+                      </button>
+                    ))}
+                  </div>
                   {showClientList && (
                     <div className="mt-1 border border-gray-200 rounded-xl overflow-hidden max-h-40 overflow-y-auto bg-white">
                       <button
@@ -9345,14 +9364,25 @@ function NewOrderModal({
                         選択しない
                       </button>
                       {clients
-                        .filter((c) => matchClient(c, clientSearch))
+                        .filter((c) => {
+                          if (!matchClient(c, clientSearch)) return false;
+                          if (clientKanaFilter) {
+                            const row = KANA_ROWS.find((r) => r.label === clientKanaFilter);
+                            if (row) {
+                              const first = (c.furigana ?? c.name ?? "").charAt(0);
+                              const firstKata = first.replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+                              if (!row.chars.includes(firstKata)) return false;
+                            }
+                          }
+                          return true;
+                        })
                         .sort((a, b) => {
                           const fa = a.is_facility ? 1 : 0;
                           const fb = b.is_facility ? 1 : 0;
                           if (fa !== fb) return fa - fb;
                           return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
                         })
-                        .slice(0, 20).map((c) => (
+                        .slice(0, 50).map((c) => (
                         <button
                           key={c.id}
                           onClick={() => { setClientId(c.id); setShowClientList(false); setClientSearch(""); }}
