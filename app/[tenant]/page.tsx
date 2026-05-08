@@ -17767,13 +17767,81 @@ function MonitoringPreview({
   const TD = "border border-gray-400 px-1 py-0.5 text-[10px]";
   const TH = `${TD} bg-gray-100 font-semibold text-center whitespace-nowrap`;
 
+  // 用具行数に応じて A4 縦 1 枚に収まるよう tier を決定（印刷時のみ反映）
+  const rowCount = itemChecks.length;
+  const tier =
+    rowCount <= 3 ? "few" :
+    rowCount <= 6 ? "medium" :
+    rowCount <= 10 ? "many" : "overflow";
+
+  // 印刷用スタイル: モーダルだけを A4 縦 1 枚に展開し、tier 別に余白/行高を調整
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.id = "__monitoring_print__";
+    style.textContent = `
+      @page { size: A4 portrait; margin: 10mm 12mm; }
+      @media print {
+        body > * { visibility: hidden !important; }
+        #monitoring-preview-modal, #monitoring-preview-modal * { visibility: visible !important; }
+        #monitoring-preview-modal {
+          position: fixed !important; top: 0 !important; left: 0 !important;
+          width: 100% !important; height: auto !important;
+          background: white !important; z-index: 99999 !important;
+          overflow: visible !important; padding: 0 !important;
+        }
+        #monitoring-preview-modal .monitoring-shell {
+          box-shadow: none !important; border-radius: 0 !important;
+          width: 100% !important; max-width: none !important;
+          padding: 0 !important; margin: 0 !important;
+        }
+        #monitoring-preview-modal .monitoring-doc { padding: 0 !important; }
+
+        /* tier: few (1-3 行) — ゆったり */
+        .monitoring-doc.tier-few { gap: 14px; }
+        .monitoring-doc.tier-few > * { margin-top: 0 !important; margin-bottom: 14px !important; }
+        .monitoring-doc.tier-few .monitoring-equipment-table td,
+        .monitoring-doc.tier-few .monitoring-equipment-table th { height: 30px; padding: 4px 4px !important; }
+        .monitoring-doc.tier-few .monitoring-report-area { min-height: 240px !important; }
+        .monitoring-doc.tier-few .monitoring-continuity-area { min-height: 70px !important; }
+
+        /* tier: medium (4-6 行) — 中 */
+        .monitoring-doc.tier-medium { gap: 10px; }
+        .monitoring-doc.tier-medium > * { margin-top: 0 !important; margin-bottom: 10px !important; }
+        .monitoring-doc.tier-medium .monitoring-equipment-table td,
+        .monitoring-doc.tier-medium .monitoring-equipment-table th { height: 24px; padding: 3px 4px !important; }
+        .monitoring-doc.tier-medium .monitoring-report-area { min-height: 160px !important; }
+        .monitoring-doc.tier-medium .monitoring-continuity-area { min-height: 50px !important; }
+
+        /* tier: many (7-10 行) — コンパクト */
+        .monitoring-doc.tier-many { gap: 7px; font-size: 10px; }
+        .monitoring-doc.tier-many > * { margin-top: 0 !important; margin-bottom: 7px !important; }
+        .monitoring-doc.tier-many .monitoring-equipment-table td,
+        .monitoring-doc.tier-many .monitoring-equipment-table th { height: 20px; padding: 2px 3px !important; font-size: 9px; }
+        .monitoring-doc.tier-many .monitoring-report-area { min-height: 100px !important; }
+        .monitoring-doc.tier-many .monitoring-continuity-area { min-height: 36px !important; }
+
+        /* tier: overflow (11+ 行) — 最低限まで縮小 */
+        .monitoring-doc.tier-overflow { gap: 5px; font-size: 9px; }
+        .monitoring-doc.tier-overflow > * { margin-top: 0 !important; margin-bottom: 5px !important; }
+        .monitoring-doc.tier-overflow .monitoring-equipment-table td,
+        .monitoring-doc.tier-overflow .monitoring-equipment-table th { height: 16px; padding: 1px 2px !important; font-size: 8px; line-height: 1.1; }
+        .monitoring-doc.tier-overflow .monitoring-report-area { min-height: 60px !important; }
+        .monitoring-doc.tier-overflow .monitoring-continuity-area { min-height: 24px !important; }
+        .monitoring-doc.tier-overflow .monitoring-header { padding: 6px !important; }
+        .monitoring-doc.tier-overflow .monitoring-header > div { line-height: 1.25; }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => { document.getElementById("__monitoring_print__")?.remove(); };
+  }, []);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 overflow-y-auto" onClick={onClose}>
+    <div id="monitoring-preview-modal" className="fixed inset-0 z-50 bg-black/60 overflow-y-auto" onClick={onClose}>
       <div className="min-h-full flex items-start justify-center py-4 px-2">
-        <div className="bg-white w-full max-w-3xl rounded-xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="monitoring-shell bg-white w-full max-w-3xl rounded-xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
           {/* Toolbar */}
           <div className="bg-gray-800 text-white px-4 py-2.5 flex items-center justify-between print:hidden">
-            <span className="text-sm font-medium">プレビュー：モニタリング報告書</span>
+            <span className="text-sm font-medium">プレビュー：モニタリング報告書（{rowCount}行 / {tier}）</span>
             <div className="flex gap-2">
               <button onClick={() => window.print()} className="text-xs bg-blue-500 hover:bg-blue-600 px-3 py-1.5 rounded-lg">印刷</button>
               <button onClick={onClose} className="text-xs bg-gray-600 hover:bg-gray-700 px-3 py-1.5 rounded-lg">閉じる</button>
@@ -17781,9 +17849,9 @@ function MonitoringPreview({
           </div>
 
           {/* Document */}
-          <div className="p-6 text-[11px] leading-relaxed font-sans space-y-3" style={{ fontFamily: "'MS Gothic', monospace" }}>
+          <div className={`monitoring-doc tier-${tier} p-6 text-[11px] leading-relaxed font-sans space-y-3`} style={{ fontFamily: "'MS Gothic', monospace" }}>
             {/* Header */}
-            <div className="border-2 border-gray-700 p-3 space-y-1">
+            <div className="monitoring-header border-2 border-gray-700 p-3 space-y-1">
               <div className="text-center text-sm font-bold mb-2">福祉用具貸与　モニタリング報告書</div>
               <div className="flex gap-4">
                 <span className="text-gray-500 w-28 shrink-0">居宅支援事業所</span>
@@ -17822,7 +17890,7 @@ function MonitoringPreview({
             {/* Equipment check table */}
             <div>
               <div className="text-xs font-bold mb-1 border-b-2 border-gray-700 pb-0.5">■ 福祉用具チェック</div>
-              <table className="w-full border-collapse">
+              <table className="monitoring-equipment-table w-full border-collapse">
                 <thead>
                   <tr>
                     <th className={`${TH} w-20`}>種目</th>
@@ -17844,7 +17912,7 @@ function MonitoringPreview({
                   </tr>
                 </thead>
                 <tbody>
-                  {itemChecks.slice(0, 8).map((item, idx) => {
+                  {itemChecks.map((item, idx) => {
                     const eq = equipment.find(e => e.product_code === item.product_code);
                     const name = eq?.name ?? item.equipment_name;
                     const cat = eq?.category ?? item.category;
@@ -17873,11 +17941,11 @@ function MonitoringPreview({
             <div className="border border-gray-400 p-2 space-y-2">
               <div>
                 <div className="text-gray-500 font-semibold mb-0.5">■ 継続・必要性</div>
-                <div className="whitespace-pre-wrap min-h-[2.5rem]">{continuityComment}</div>
+                <div className="monitoring-continuity-area whitespace-pre-wrap min-h-[2.5rem]">{continuityComment}</div>
               </div>
               <div className="border-t border-gray-300 pt-2">
                 <div className="text-gray-500 font-semibold mb-0.5">■ 報告内容</div>
-                <div className="whitespace-pre-wrap min-h-[3rem]">{reportComment}</div>
+                <div className="monitoring-report-area whitespace-pre-wrap min-h-[3rem]">{reportComment}</div>
               </div>
             </div>
 
