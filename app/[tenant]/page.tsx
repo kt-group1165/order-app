@@ -16068,17 +16068,32 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
     try {
       // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
       const officeFilter = officeViewAll ? null : currentOfficeId;
-      let clientsQ = supabase.from("clients").select("*").eq("tenant_id", tenantId);
-      if (officeFilter) clientsQ = clientsQ.eq("office_id", officeFilter);
-      const [clientsRes, monRes, eqData, tenantData, rentalHistRes] = await Promise.all([
-        clientsQ,
+      // clients は 1000 件超えるケースあり (kt-group の office=1bfc0d57 で 1777 件)。
+      // 必ずページングで全件取得する。
+      const fetchAllClients = async (): Promise<Client[]> => {
+        const PAGE = 1000;
+        const all: Client[] = [];
+        let from = 0;
+        while (true) {
+          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+          if (officeFilter) q = q.eq("office_id", officeFilter);
+          const { data, error } = await q;
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          all.push(...(data as Client[]));
+          if (data.length < PAGE) break;
+          from += PAGE;
+        }
+        return all;
+      };
+      const [cls, monRes, eqData, tenantData, rentalHistRes] = await Promise.all([
+        fetchAllClients(),
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
         getTenantById(tenantId),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
           .or(`end_date.is.null,end_date.gte.${new Date().toISOString().split("T")[0]}`),
       ]);
-      const cls = (clientsRes.data ?? []) as Client[];
       // orders をページングで全件取得
       const allOrders: { id: string; client_id: string }[] = [];
       let ordFrom = 0;
