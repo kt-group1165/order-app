@@ -41,7 +41,7 @@ import {
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
-import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail } from "@/lib/orders";
+import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail, mergeOrders, unmergeOrder } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
@@ -506,6 +506,14 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     companyInfo: CompanyInfo;
     priceHistory: EquipmentPriceHistory[];
   } | null>(null);
+  // 発注統合: 複数選択 ID
+  const [selectedMergeIds, setSelectedMergeIds] = useState<Set<string>>(new Set());
+  // 発注統合: 確認モーダル ({orders} = 統合対象、targetId = 統合先)
+  const [mergeModal, setMergeModal] = useState<{ orders: OrderWithItems[]; targetId: string } | null>(null);
+  // 発注統合: 候補 banner を表示するかどうか (利用者ごと展開状態)
+  const [candidateBannerHiddenFor, setCandidateBannerHiddenFor] = useState<Set<string>>(new Set());
+  // 発注統合: 実行中
+  const [mergeExecuting, setMergeExecuting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -690,6 +698,100 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     }
   };
 
+  // ── 発注統合: 同日同利用者の order グループ検出 (clientGroups から計算) ──
+  // returns Map<clientId, group[]> where each group has 2+ orders on same date
+  const mergeCandidates = useMemo(() => {
+    const result = new Map<string, OrderWithItems[][]>();
+    for (const grp of clientGroups) {
+      if (!grp.clientId) continue;
+      // 同 client 内で ordered_at の date 部分でグルーピング
+      const byDate = new Map<string, OrderWithItems[]>();
+      for (const o of grp.orders) {
+        // 統合済 (merged_from が空でない) はスキップ: 既に統合済なので候補から除外
+        if ((o.merged_from_order_ids?.length ?? 0) > 0) continue;
+        const date = (o.ordered_at ?? "").slice(0, 10);
+        if (!date) continue;
+        const arr = byDate.get(date) ?? [];
+        arr.push(o);
+        byDate.set(date, arr);
+      }
+      const groups: OrderWithItems[][] = [];
+      for (const arr of byDate.values()) {
+        if (arr.length >= 2) groups.push(arr);
+      }
+      if (groups.length > 0) result.set(grp.clientId, groups);
+    }
+    return result;
+  }, [clientGroups]);
+
+  const toggleSelectMerge = (orderId: string) => {
+    setSelectedMergeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+  // 選択された ID から統合 modal を開く (target = 最古、source = それ以外)
+  const openMergeModalFromSelection = (clientId: string | null) => {
+    const selected = orders.filter((o) => selectedMergeIds.has(o.id) && o.client_id === clientId);
+    if (selected.length < 2) {
+      alert("統合には 2 件以上の発注を選択してください");
+      return;
+    }
+    // 最古を target にデフォルト
+    const sorted = [...selected].sort(
+      (a, b) => new Date(a.ordered_at).getTime() - new Date(b.ordered_at).getTime()
+    );
+    setMergeModal({ orders: sorted, targetId: sorted[0].id });
+  };
+
+  const openMergeModalForCandidates = (clientGroupOrders: OrderWithItems[]) => {
+    const sorted = [...clientGroupOrders].sort(
+      (a, b) => new Date(a.ordered_at).getTime() - new Date(b.ordered_at).getTime()
+    );
+    setMergeModal({ orders: sorted, targetId: sorted[0].id });
+  };
+
+  const handleExecuteMerge = async () => {
+    if (!mergeModal) return;
+    const target = mergeModal.targetId;
+    const sources = mergeModal.orders.filter((o) => o.id !== target).map((o) => o.id);
+    if (sources.length === 0) {
+      alert("統合元が選択されていません");
+      return;
+    }
+    setMergeExecuting(true);
+    try {
+      const res = await mergeOrders({ targetOrderId: target, sourceOrderIds: sources });
+      if (res.warnings.length > 0) {
+        alert(`統合完了 (${res.sources_merged} 件をマージ、${res.items_moved} 点を移動)\n\n警告:\n${res.warnings.join("\n")}`);
+      }
+      setMergeModal(null);
+      setSelectedMergeIds(new Set());
+      await load();
+    } catch (e) {
+      alert(`統合失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMergeExecuting(false);
+    }
+  };
+
+  const handleUnmerge = async (orderId: string) => {
+    if (!confirm("この統合を解除し、元の発注単位に戻しますか？")) return;
+    setMergeExecuting(true);
+    try {
+      const res = await unmergeOrder(orderId);
+      alert(`統合解除完了 (${res.restored_orders} 件を復元、${res.items_reassigned} 点を割戻し)${res.warning ? "\n警告: " + res.warning : ""}`);
+      await load();
+    } catch (e) {
+      alert(`統合解除失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMergeExecuting(false);
+    }
+  };
+
   // プレビューモーダルはloadingに関わらず常に表示（新規登録後のload()競合を防ぐ）
   if (previewOrder) {
     return (
@@ -786,6 +888,9 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                 showEnded ? true : o.items.some((i) => i.status !== "cancelled" && i.status !== "terminated")
               );
               if (!hasVisible) return null;
+              const candidateGroups = group.clientId ? (mergeCandidates.get(group.clientId) ?? []) : [];
+              const showCandidateBanner = candidateGroups.length > 0 && !candidateBannerHiddenFor.has(group.clientId ?? "__none__");
+              const selectedInGroup = group.orders.filter((o) => selectedMergeIds.has(o.id));
               return (
               <div key={group.clientId ?? "__none__"}>
                 {/* 利用者ヘッダー */}
@@ -802,8 +907,43 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                       利用者情報へ
                     </button>
                   )}
+                  {selectedInGroup.length >= 2 && (
+                    <button
+                      onClick={() => openMergeModalFromSelection(group.clientId)}
+                      className="text-xs px-2.5 py-0.5 rounded-full border border-blue-300 bg-blue-500 text-white font-medium hover:bg-blue-600"
+                    >
+                      選択中 {selectedInGroup.length} 件を統合
+                    </button>
+                  )}
                   <span className="ml-auto text-xs text-emerald-400">{group.orders.length}発注</span>
                 </div>
+                {/* 統合候補 banner */}
+                {showCandidateBanner && (
+                  <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-col gap-1.5">
+                    {candidateGroups.map((cg, i) => {
+                      const date = (cg[0].ordered_at ?? "").slice(0, 10);
+                      return (
+                        <div key={`${group.clientId}-cand-${i}`} className="flex items-center gap-2 text-xs">
+                          <span className="text-blue-700">
+                            {new Date(date).toLocaleDateString("ja-JP")} に {cg.length} 件の発注 → 統合候補
+                          </span>
+                          <button
+                            onClick={() => openMergeModalForCandidates(cg)}
+                            className="px-2 py-0.5 rounded-full border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 font-medium"
+                          >
+                            確認
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      onClick={() => setCandidateBannerHiddenFor((prev) => new Set(prev).add(group.clientId ?? "__none__"))}
+                      className="self-start text-[11px] text-blue-500 hover:underline"
+                    >
+                      この通知を閉じる
+                    </button>
+                  </div>
+                )}
                 {/* その利用者の発注一覧 */}
                 <ul className="flex flex-col gap-4 px-3 pb-3 pt-0">
                   {group.orders.map((order) => {
@@ -825,6 +965,17 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                         <div className="overflow-x-auto">
                         {/* 発注ヘッダー行 */}
                         <div className="min-w-[600px] px-4 py-0.5 flex items-center gap-2 hover:bg-gray-50 transition-colors">
+                          {/* 統合用 checkbox (利用者あり、未統合の order のみ) */}
+                          {group.clientId && (order.merged_from_order_ids?.length ?? 0) === 0 && (
+                            <input
+                              type="checkbox"
+                              checked={selectedMergeIds.has(order.id)}
+                              onChange={() => toggleSelectMerge(order.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              title="統合用に選択"
+                              className="accent-blue-500 w-3.5 h-3.5 shrink-0"
+                            />
+                          )}
                           {/* 折りたたみボタン（固定幅） */}
                           <button
                             onClick={toggleExpand}
@@ -834,12 +985,31 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                               {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
                             </span>
                             <span className="text-xs text-gray-400 whitespace-nowrap">{activeItems.length}点</span>
+                            {(order.merged_from_order_ids?.length ?? 0) > 0 && (
+                              <span
+                                title={`${order.merged_from_order_ids.length} 件の発注が統合されています`}
+                                className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded shrink-0"
+                              >
+                                統合済 +{order.merged_from_order_ids.length}
+                              </span>
+                            )}
                             {isOpen ? (
                               <ChevronDown size={16} className="text-gray-400 shrink-0" />
                             ) : (
                               <ChevronRight size={16} className="text-gray-400 shrink-0" />
                             )}
                           </button>
+                          {/* 統合解除 button */}
+                          {(order.merged_from_order_ids?.length ?? 0) > 0 && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleUnmerge(order.id); }}
+                              disabled={mergeExecuting}
+                              title="統合を解除して元の発注単位に戻す"
+                              className="text-xs px-2 py-0.5 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-50 shrink-0"
+                            >
+                              統合解除
+                            </button>
+                          )}
                           {/* 一括操作ボタン（左寄せ） */}
                           {(() => {
                             const bulkTargets = (ns: OrderItem["status"]) =>
@@ -1186,6 +1356,79 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
           onClose={() => { setPostSaveChanges(null); setSupplierSentIds(new Set()); setCareSentIds(new Set()); }}
         />
       )}
+
+      {/* 発注統合モーダル */}
+      {mergeModal && (() => {
+        const targetOrder = mergeModal.orders.find((o) => o.id === mergeModal.targetId);
+        const sourceOrders = mergeModal.orders.filter((o) => o.id !== mergeModal.targetId);
+        const totalItems = mergeModal.orders.reduce((s, o) => s + o.items.length, 0);
+        const cli = targetOrder ? clientByIdOrders.get(targetOrder.client_id ?? "") : null;
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+              <div className="px-5 pt-4 pb-2 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-base font-bold text-gray-800">発注を統合</h2>
+                <button onClick={() => setMergeModal(null)} className="text-gray-400 hover:text-gray-600">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+                <p className="text-sm text-gray-600">
+                  {cli ? `${cli.name} の` : ""}{mergeModal.orders.length} 件の発注を 1 件にまとめます (合計 {totalItems} 点)。
+                </p>
+                <div className="text-xs text-gray-500 leading-relaxed">
+                  ・統合先以外の発注は <span className="font-semibold">削除</span> され、明細だけが統合先に移動します<br />
+                  ・各明細の発注時刻は元のまま保持されます<br />
+                  ・統合解除すれば元の発注単位に戻せます
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-gray-500">統合先 (この発注に他の明細を吸収):</p>
+                  {mergeModal.orders.map((o) => (
+                    <label key={o.id} className="flex items-start gap-2 p-2.5 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="merge-target"
+                        checked={mergeModal.targetId === o.id}
+                        onChange={() => setMergeModal({ ...mergeModal, targetId: o.id })}
+                        className="mt-0.5 accent-blue-500"
+                      />
+                      <div className="flex-1 text-xs">
+                        <div className="font-medium text-gray-800">
+                          {new Date(o.ordered_at).toLocaleString("ja-JP")}
+                          <span className="ml-2 text-gray-400">({o.items.length}点)</span>
+                        </div>
+                        {o.notes && <div className="text-gray-500 mt-0.5 truncate">{o.notes}</div>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                {sourceOrders.some((o) => (o.email_sent_count ?? 0) > 0) && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                    送信済みのメールがある発注が含まれます。統合後もメール書類は再生成可能ですが、統合先発注として表示されます。
+                  </div>
+                )}
+              </div>
+              <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+                <button
+                  onClick={() => setMergeModal(null)}
+                  disabled={mergeExecuting}
+                  className="px-4 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleExecuteMerge}
+                  disabled={mergeExecuting}
+                  className="px-4 py-1.5 text-sm bg-blue-500 text-white font-medium rounded-lg hover:bg-blue-600 disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {mergeExecuting && <Loader2 size={14} className="animate-spin" />}
+                  統合する
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );
@@ -6084,9 +6327,9 @@ function ClientDetail({
                           alert("この発注メール書類には発注ID(orderId)が記録されていないため、再生成できません。\n古い書類の可能性があります。");
                           return;
                         }
-                        const [orderRes, items, suppliers, members] = await Promise.all([
+                        // まず orderId で直接検索 (未統合 or 統合先)
+                        const [orderRes, suppliers, members] = await Promise.all([
                           supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
-                          getOrderItems(orderId),
                           getSuppliers(),
                           getMembers(tenantId),
                         ]);
@@ -6095,11 +6338,23 @@ function ClientDetail({
                           alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
                           return;
                         }
-                        if (!orderRes.data) {
+                        let foundOrder: Order | null = (orderRes.data as Order) ?? null;
+                        // 見つからなければ merged_from_order_ids で統合先 order を検索
+                        if (!foundOrder) {
+                          const { data: mergedRows } = await supabase
+                            .from("orders")
+                            .select("*")
+                            .contains("merged_from_order_ids", [{ id: orderId }]);
+                          if (mergedRows && mergedRows.length > 0) {
+                            foundOrder = mergedRows[0] as Order;
+                          }
+                        }
+                        if (!foundOrder) {
                           alert("元の発注が見つかりません（削除された可能性があります）。");
                           return;
                         }
-                        setEmailPreview({ order: orderRes.data as Order, items, suppliers, members, sentAt: doc.created_at });
+                        const items = await getOrderItems(foundOrder.id);
+                        setEmailPreview({ order: foundOrder, items, suppliers, members, sentAt: doc.created_at });
                       }
                     } catch (e) {
                       console.error("再生成エラー:", e);
@@ -7288,9 +7543,8 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: 
                                       showSavedFromParams("この発注メール書類には発注ID(orderId)が記録されていません（古い書類）。");
                                       return;
                                     }
-                                    const [orderRes, items, suppliers, members] = await Promise.all([
+                                    const [orderRes, suppliers, members] = await Promise.all([
                                       supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
-                                      getOrderItems(orderId),
                                       getSuppliers(),
                                       getMembers(tenantId),
                                     ]);
@@ -7299,11 +7553,23 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: 
                                       alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
                                       return;
                                     }
-                                    if (!orderRes.data) {
+                                    let foundOrder: Order | null = (orderRes.data as Order) ?? null;
+                                    // 統合済の場合: merged_from_order_ids に元 orderId を含む統合先 order を探す
+                                    if (!foundOrder) {
+                                      const { data: mergedRows } = await supabase
+                                        .from("orders")
+                                        .select("*")
+                                        .contains("merged_from_order_ids", [{ id: orderId }]);
+                                      if (mergedRows && mergedRows.length > 0) {
+                                        foundOrder = mergedRows[0] as Order;
+                                      }
+                                    }
+                                    if (!foundOrder) {
                                       showSavedFromParams("元の発注が見つかりません（削除された可能性があります）。");
                                       return;
                                     }
-                                    setEmailPreview({ order: orderRes.data as Order, items, suppliers, members, sentAt: doc.created_at });
+                                    const items = await getOrderItems(foundOrder.id);
+                                    setEmailPreview({ order: foundOrder, items, suppliers, members, sentAt: doc.created_at });
                                   }
                                 } catch (e) {
                                   console.error("再生成エラー:", e);
@@ -16505,6 +16771,7 @@ function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments
       const missing: { key: string; reason: string }[] = [];
 
       // 1) 発注書 (per order) — order ごとに supplier_email が有るか確認
+      // 統合済 order の場合: merged_from_order_ids に含まれる元 order id にも supplier_email を許容
       const orderedItems = cItems.filter((i) => i.status === "ordered");
       if (orderedItems.length > 0) {
         const orderIdsWithOrdered = new Set(orderedItems.map((i) => i.order_id));
@@ -16514,7 +16781,18 @@ function DocTasksTab({ tenantId, currentOfficeId, officeViewAll, onOpenDocuments
             .map((d) => (d.params as { orderId?: string } | null | undefined)?.orderId)
             .filter((x): x is string => !!x)
         );
-        const ordersMissingEmail = [...orderIdsWithOrdered].filter((oid) => !supplierEmailOrderIds.has(oid));
+        // 統合済 order: merged_from_order_ids の元 id を持つ supplier_email も「発注書あり」と見なす
+        const cOrders = clientOrdersMap.get(c.id) ?? [];
+        const targetWithMergedFrom = new Map<string, string[]>();
+        for (const o of cOrders) {
+          const merged = o.merged_from_order_ids ?? [];
+          if (merged.length > 0) targetWithMergedFrom.set(o.id, merged.map((m) => m.id));
+        }
+        const ordersMissingEmail = [...orderIdsWithOrdered].filter((oid) => {
+          if (supplierEmailOrderIds.has(oid)) return false;
+          const sourceIds = targetWithMergedFrom.get(oid) ?? [];
+          return !sourceIds.some((sid) => supplierEmailOrderIds.has(sid));
+        });
         if (ordersMissingEmail.length > 0) {
           missing.push({
             key: DOC_KEY.PURCHASE,

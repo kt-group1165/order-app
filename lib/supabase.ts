@@ -219,8 +219,35 @@ export type Order = {
   email_sent_count: number;
   tokka_set_price: number | null;
   office_id: string | null;
+  // 発注統合: 統合元 order の発注情報配列 (空配列 = 未統合)
+  merged_from_order_ids: MergedOrderInfo[];
   created_at: string;
   updated_at: string;
+};
+
+// 統合元 order の発注情報 (orders.merged_from_order_ids JSONB の各要素)
+export type MergedOrderInfo = {
+  id: string;
+  ordered_at: string | null;
+  created_by: string | null;
+  status: string | null;
+  notes: string | null;
+  supplier_id: string | null;
+  payment_type: string | null;
+  delivery_date: string | null;
+  delivery_time: string | null;
+  delivery_address: string | null;
+  delivery_type: string | null;
+  attendance_required: boolean | null;
+  attendee_ids: string[] | null;
+  tokka_set_price: number | null;
+  email_sent_at: string | null;
+  email_sent_count: number | null;
+  office_id: string | null;
+  event_id: string | null;
+  client_id: string | null;
+  tenant_id: string;
+  created_at: string | null;
 };
 
 // 発注明細

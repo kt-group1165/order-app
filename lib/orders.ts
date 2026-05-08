@@ -250,3 +250,47 @@ export async function updateOrderStatus(
   if (error) throw error;
   invalidateCache("orders:");
 }
+
+// 発注統合: source orders を target にマージ
+// API 経由 (service_role tx 風処理) で merged_from_order_ids への push + items 移動 + source DELETE
+export async function mergeOrders(params: {
+  targetOrderId: string;
+  sourceOrderIds: string[];
+}): Promise<{ ok: true; items_moved: number; sources_merged: number; warnings: string[] }> {
+  const res = await fetch("/api/orders/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target_order_id: params.targetOrderId,
+      source_order_ids: params.sourceOrderIds,
+    }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.error ?? "merge_failed");
+  }
+  invalidateCache("orders:");
+  invalidateCache("order_items:");
+  return json;
+}
+
+// 発注統合解除: 統合元 orders を再 INSERT し items を割り戻し
+export async function unmergeOrder(orderId: string): Promise<{
+  ok: true;
+  restored_orders: number;
+  items_reassigned: number;
+  warning?: string;
+}> {
+  const res = await fetch("/api/orders/unmerge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order_id: orderId }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.error ?? "unmerge_failed");
+  }
+  invalidateCache("orders:");
+  invalidateCache("order_items:");
+  return json;
+}
