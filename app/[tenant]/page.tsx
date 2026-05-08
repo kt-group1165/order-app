@@ -27,7 +27,6 @@ import {
   Printer,
   Send,
   FileText,
-  Lock,
   Download,
   ClipboardCheck,
   Eye,
@@ -44,7 +43,6 @@ import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOr
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
-import { verifyPin } from "@/lib/settings";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -276,7 +274,6 @@ type PendingChange = {
 
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
-const PIN_AUTH_KEY = (tenantId: string) => `order_pin_verified_${tenantId}`;
 const CURRENT_OFFICE_KEY = (tenantId: string) => `current_office_${tenantId}`;
 const OFFICE_VIEW_MODE_KEY = (tenantId: string) => `office_view_mode_${tenantId}`;
 
@@ -291,11 +288,6 @@ export default function TenantPage({
   const [ordersDirty, setOrdersDirty] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
-  const [pinVerified, setPinVerified] = useState(false);
-  const [pinChecked, setPinChecked] = useState(false);
-  const [pin, setPin] = useState("");
-  const [pinError, setPinError] = useState(false);
-  const [pinLoading, setPinLoading] = useState(false);
   // 事業所切替
   const [currentOfficeId, setCurrentOfficeId] = useState<string | null>(null);
   const [officeViewAll, setOfficeViewAll] = useState(false); // false=自事業所のみ, true=全事業所
@@ -329,82 +321,6 @@ export default function TenantPage({
       localStorage.setItem(OFFICE_VIEW_MODE_KEY(tenantId), viewAll ? "all" : "mine");
     }
   };
-
-  // localStorageで認証済みか確認
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      if (localStorage.getItem(PIN_AUTH_KEY(tenantId)) === "true") {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
-        setPinVerified(true);
-      }
-      setPinChecked(true);
-    }
-  }, [tenantId]);
-
-  async function handlePinSubmit() {
-    if (!pin.trim()) return;
-    setPinLoading(true);
-    setPinError(false);
-    try {
-      const ok = await verifyPin(pin.trim(), tenantId);
-      if (ok) {
-        localStorage.setItem(PIN_AUTH_KEY(tenantId), "true");
-        setPinVerified(true);
-      } else {
-        setPinError(true);
-        setPin("");
-      }
-    } finally {
-      setPinLoading(false);
-    }
-  }
-
-  // 初期チェック前はブランク
-  if (!pinChecked) return null;
-
-  // PIN未認証→ログイン画面
-  if (!pinVerified) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-white flex items-center justify-center p-6">
-        <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6 space-y-5">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center">
-              <Lock size={26} className="text-emerald-600" />
-            </div>
-            <div className="text-center">
-              <h1 className="text-lg font-bold text-gray-800">用具・発注管理</h1>
-              <p className="text-sm text-gray-400 mt-0.5">PINを入力してください</p>
-            </div>
-          </div>
-
-          <div>
-            <input
-              type="password"
-              inputMode="numeric"
-              placeholder="PIN"
-              value={pin}
-              onChange={(e) => { setPin(e.target.value); setPinError(false); }}
-              onKeyDown={(e) => e.key === "Enter" && handlePinSubmit()}
-              autoFocus
-              className={`w-full text-center text-xl tracking-widest border-2 rounded-xl px-4 py-3 focus:outline-none transition-colors ${
-                pinError ? "border-red-400 bg-red-50" : "border-gray-200 focus:border-emerald-400"
-              }`}
-            />
-            {pinError && <p className="text-xs text-red-500 mt-1.5 text-center">PINが正しくありません</p>}
-          </div>
-
-          <button
-            onClick={handlePinSubmit}
-            disabled={pinLoading || !pin.trim()}
-            className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
-          >
-            {pinLoading && <Loader2 size={16} className="animate-spin" />}
-            ログイン
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
