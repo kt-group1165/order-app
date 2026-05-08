@@ -2515,6 +2515,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
         allOrderItems={orderItems}
         equipment={equipment}
         tenantId={tenantId}
+        currentOfficeId={currentOfficeId}
         initialViewMode={selectedClientInitialViewMode}
         hospitalizations={hospitalizations}
         onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
@@ -4833,6 +4834,7 @@ function ClientDetail({
   allOrderItems,
   equipment,
   tenantId,
+  currentOfficeId,
   initialViewMode,
   hospitalizations,
   onBack,
@@ -4841,6 +4843,7 @@ function ClientDetail({
   allOrderItems: OrderItem[];
   equipment: Equipment[];
   tenantId: string;
+  currentOfficeId: string | null;
   initialViewMode?: "current" | "insurance";
   hospitalizations?: import("@/lib/supabase").ClientHospitalization[];
   onBack: () => void;
@@ -4991,6 +4994,36 @@ function ClientDetail({
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+  // 利用期間 (client_office_assignments) — Stage A
+  const [clientAssignments, setClientAssignments] = useState<ClientOfficeAssignment[]>([]);
+  const [assignmentOffices, setAssignmentOffices] = useState<Office[]>([]);
+  const [assignmentEditingId, setAssignmentEditingId] = useState<string | null>(null);
+  const [assignmentEditForm, setAssignmentEditForm] = useState<{ start_date: string; end_date: string }>({ start_date: "", end_date: "" });
+  const [assignmentAdding, setAssignmentAdding] = useState<{ office_id: string; start_date: string; end_date: string } | null>(null);
+
+  const reloadAssignments = useCallback(async () => {
+    try {
+      const rows = await getClientAssignmentsForClient(client.id);
+      setClientAssignments(rows);
+    } catch (e) { console.error("利用期間の取得に失敗", e); }
+  }, [client.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [rows, offs] = await Promise.all([
+          getClientAssignmentsForClient(client.id),
+          getOffices(tenantId),
+        ]);
+        if (!cancelled) {
+          setClientAssignments(rows);
+          setAssignmentOffices(offs);
+        }
+      } catch (e) { console.error("利用期間/事業所の初期取得に失敗", e); }
+    })();
+    return () => { cancelled = true; };
+  }, [client.id, tenantId]);
 
   // 会社情報ロード
   useEffect(() => {
@@ -5093,6 +5126,16 @@ function ClientDetail({
         ]);
         if (orderData) {
           setEmailPreview({ order: orderData as Order, items: orderItems, suppliers, members, emailType: newStatus as "rental_started" | "terminated" | "cancelled" });
+        }
+        // Stage A: rental_started 時に利用期間を自動 INSERT (open 行が無ければ)
+        if (newStatus === "rental_started") {
+          const officeId = (orderData as Order | null)?.office_id ?? currentOfficeId;
+          if (officeId) {
+            try {
+              await ensureActiveAssignment(client.id, officeId, tenantId);
+              await reloadAssignments();
+            } catch (e) { console.error("利用期間の自動作成に失敗", e); }
+          }
         }
       }
     } finally {
@@ -5723,6 +5766,178 @@ function ClientDetail({
               <p className="text-xs text-gray-500">月額合計</p>
             </div>
           </div>
+
+          {/* 利用期間 (client_office_assignments) */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-gray-500">利用期間</h3>
+              <div className="flex gap-1.5">
+                {currentOfficeId && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const inserted = await ensureActiveAssignment(client.id, currentOfficeId, tenantId);
+                        if (inserted === null) alert("既に現在利用中の期間があります。");
+                        await reloadAssignments();
+                      } catch (e) { alert("利用開始に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                    }}
+                    className="text-[11px] px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600">
+                    新規利用開始
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const today = new Date().toISOString().split("T")[0];
+                    const defaultOffice = currentOfficeId ?? assignmentOffices[0]?.id ?? "";
+                    setAssignmentAdding({ office_id: defaultOffice, start_date: today, end_date: "" });
+                  }}
+                  className="text-[11px] px-2 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600">
+                  期間追加
+                </button>
+              </div>
+            </div>
+            {assignmentAdding && (
+              <div className="bg-blue-50 rounded-xl p-3 mb-2 space-y-2">
+                <div className="flex flex-wrap gap-2 items-center text-xs">
+                  <label className="flex items-center gap-1">
+                    <span className="text-gray-600">事業所</span>
+                    <select
+                      value={assignmentAdding.office_id}
+                      onChange={(e) => setAssignmentAdding({ ...assignmentAdding, office_id: e.target.value })}
+                      className="border border-gray-300 rounded px-2 py-1 text-xs">
+                      {assignmentOffices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <span className="text-gray-600">開始</span>
+                    <input
+                      type="date"
+                      value={assignmentAdding.start_date}
+                      onChange={(e) => setAssignmentAdding({ ...assignmentAdding, start_date: e.target.value })}
+                      className="border border-gray-300 rounded px-2 py-1 text-xs" />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <span className="text-gray-600">終了</span>
+                    <input
+                      type="date"
+                      value={assignmentAdding.end_date}
+                      onChange={(e) => setAssignmentAdding({ ...assignmentAdding, end_date: e.target.value })}
+                      className="border border-gray-300 rounded px-2 py-1 text-xs" />
+                  </label>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setAssignmentAdding(null)}
+                    className="text-[11px] px-2 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">キャンセル</button>
+                  <button
+                    onClick={async () => {
+                      if (!assignmentAdding.office_id || !assignmentAdding.start_date) {
+                        alert("事業所と開始日を入力してください"); return;
+                      }
+                      try {
+                        await addAssignment(
+                          tenantId, client.id, assignmentAdding.office_id,
+                          assignmentAdding.start_date,
+                          assignmentAdding.end_date || null,
+                        );
+                        setAssignmentAdding(null);
+                        await reloadAssignments();
+                      } catch (e) { alert("追加に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                    }}
+                    className="text-[11px] px-2 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600">保存</button>
+                </div>
+              </div>
+            )}
+            {clientAssignments.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-4">利用期間の記録はありません</p>
+            ) : (
+              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left text-xs">
+                <tbody className="divide-y divide-gray-100">
+                  {clientAssignments.map((a) => {
+                    const officeName = assignmentOffices.find((o) => o.id === a.office_id)?.name ?? "(未設定の事業所)";
+                    const isActive = a.end_date === null;
+                    const isEditing = assignmentEditingId === a.id;
+                    return (
+                      <tr key={a.id} className="px-2">
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-800">{officeName}</span>
+                            {isActive && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded">利用中</span>}
+                          </div>
+                          {isEditing ? (
+                            <div className="flex flex-wrap gap-2 items-center mt-1.5">
+                              <input
+                                type="date"
+                                value={assignmentEditForm.start_date}
+                                onChange={(e) => setAssignmentEditForm({ ...assignmentEditForm, start_date: e.target.value })}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs" />
+                              <span className="text-gray-400">〜</span>
+                              <input
+                                type="date"
+                                value={assignmentEditForm.end_date}
+                                onChange={(e) => setAssignmentEditForm({ ...assignmentEditForm, end_date: e.target.value })}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs" />
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await updateAssignment(a.id, {
+                                      start_date: assignmentEditForm.start_date || null,
+                                      end_date: assignmentEditForm.end_date || null,
+                                    });
+                                    setAssignmentEditingId(null);
+                                    await reloadAssignments();
+                                  } catch (e) { alert("更新に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                                }}
+                                className="text-[11px] px-2 py-0.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600">保存</button>
+                              <button
+                                onClick={() => setAssignmentEditingId(null)}
+                                className="text-[11px] px-2 py-0.5 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">×</button>
+                            </div>
+                          ) : (
+                            <div className="text-gray-600 mt-0.5">
+                              {a.start_date ?? "(開始未設定)"} 〜 {a.end_date ?? "(継続中)"}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 align-top w-32 text-right">
+                          {!isEditing && (
+                            <div className="flex flex-col items-end gap-1">
+                              <button
+                                onClick={() => {
+                                  setAssignmentEditingId(a.id);
+                                  setAssignmentEditForm({ start_date: a.start_date ?? "", end_date: a.end_date ?? "" });
+                                }}
+                                className="text-[11px] text-blue-600 hover:underline">編集</button>
+                              {isActive && (
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`${officeName} の利用を終了しますか？(終了日 = 今日)`)) return;
+                                    try {
+                                      await closeActiveAssignment(client.id, a.office_id);
+                                      await reloadAssignments();
+                                    } catch (e) { alert("利用終了に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                                  }}
+                                  className="text-[11px] text-red-600 hover:underline">利用終了</button>
+                              )}
+                              <button
+                                onClick={async () => {
+                                  if (!confirm("この利用期間を削除しますか？(履歴から消えます)")) return;
+                                  try {
+                                    await deleteAssignment(a.id);
+                                    await reloadAssignments();
+                                  } catch (e) { alert("削除に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                                }}
+                                className="text-[11px] text-gray-400 hover:underline">削除</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
 
           {orderedItems.length > 0 && (
             <section>
