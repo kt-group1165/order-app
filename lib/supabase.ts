@@ -197,6 +197,37 @@ export type ClientDocument = {
   created_at: string;
 };
 
+// 書類タスク (v2: event-driven)
+// 1 trigger (発注 / レンタル開始 / 一部解約 / 認定更新) ごとに 1 行 INSERT。
+// status='pending' / 'completed' / 'cancelled' で受領管理。
+export type DocTaskTriggerType =
+  | "order_placed"
+  | "rental_started"
+  | "partial_termination"
+  | "cert_renewal";
+
+export type DocTaskStatus = "pending" | "completed" | "cancelled";
+
+export type DocTask = {
+  id: string;
+  tenant_id: string;
+  office_id: string;
+  client_id: string;
+  trigger_type: DocTaskTriggerType;
+  trigger_ref_id: string;
+  trigger_ref_table: string;
+  trigger_label: string | null;
+  trigger_date: string; // YYYY-MM-DD
+  expected_doc_type: string;
+  status: DocTaskStatus;
+  linked_document_id: string | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  cancelled_at: string | null;
+};
+
 // 発注
 export type Order = {
   id: string;
