@@ -206,7 +206,7 @@ export type DocTaskTriggerType =
   | "partial_termination"
   | "cert_renewal";
 
-export type DocTaskStatus = "pending" | "completed" | "cancelled";
+export type DocTaskStatus = "pending" | "completed" | "received" | "cancelled";
 
 export type DocTask = {
   id: string;
@@ -226,6 +226,11 @@ export type DocTask = {
   updated_at: string;
   completed_at: string | null;
   cancelled_at: string | null;
+  // v3: 受領管理
+  received_at: string | null;
+  received_by: string | null;
+  // v3: 統合 (同 client × 同 expected_doc_type × 14 日以内 のときに source 側にセット)
+  merged_into_task_id: string | null;
 };
 
 // 発注

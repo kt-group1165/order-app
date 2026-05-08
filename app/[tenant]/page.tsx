@@ -39,9 +39,9 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
-import { getPendingDocTasks, completeDocTask, insertCertRenewalTask } from "@/lib/docTasks";
+import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail, mergeOrders, unmergeOrder } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
@@ -16682,9 +16682,10 @@ function RentalReportModal({
   );
 }
 
-// ─── DocTasksTab v2 ───────────────────────────────────────────────────────────
+// ─── DocTasksTab v3 ───────────────────────────────────────────────────────────
 // v1 (commit da99236) の「client × 書類種別」計算ベースから、event-driven な
-// doc_tasks table ベースに refactor (2026-05-09)。
+// doc_tasks table ベースに refactor (cfd252e=v2, 2026-05-09)。
+// v3 (2026-05-09): 受領管理 + 同 client × 同 expected_doc_type × 14 日以内の統合機能
 //
 // 設計:
 //   - DB trigger (migrations/order_app_doc_tasks_triggers.sql) が
@@ -16692,7 +16693,14 @@ function RentalReportModal({
 //     一部解約 を観測して doc_tasks を 1 row INSERT
 //   - cert_renewal は cron 不要、UI 表示時に client_insurance_records から
 //     on-the-fly 仮想 doc_task を生成 (DB INSERT は「書類を作る」押下時のみ)
-//   - 完了時は doc_task.status='completed' + linked_document_id をセット
+//   - 書類作成時: doc_task.status='completed' + linked_document_id をセット
+//   - 受領時:     doc_task.status='received' + received_at + received_by をセット
+//   - 統合時 (v3): source.merged_into_task_id=target.id + source.status='cancelled'
+//
+// 統合判定 (v3):
+//   - 同 client × 同 expected_doc_type × 両方 pending (= 1 つ目未受領)
+//   - 14 日以内かつ同月内 (year+month 一致)
+//   - banner 表示 → user click で merge modal → 統合実行
 //
 // expected_doc_type の正規化:
 //   - supplier_email   = 発注書 (実 client_documents.type='supplier_email')
@@ -16740,9 +16748,28 @@ type DocTaskRow = {
   client_id: string;
   office_id: string;
   due_date: string | null;
+  status: DocTaskStatus;         // v3: pending / completed / received / cancelled
+  received_at?: string | null;
+  received_by?: string | null;
   // virtual cert_renewal 専用
   insuranceRecordId?: string;
   certEndDate?: string;
+};
+
+// v3: status filter chip
+type StatusFilter = "pending" | "completed" | "received" | "all";
+const STATUS_FILTER_LABEL: Record<StatusFilter, string> = {
+  pending:   "未作成",
+  completed: "作成済・未受領",
+  received:  "受領済",
+  all:       "全て",
+};
+
+const STATUS_BADGE: Record<DocTaskStatus, { cls: string; label: string }> = {
+  pending:   { cls: "bg-amber-100 text-amber-700",    label: "未作成"   },
+  completed: { cls: "bg-blue-100 text-blue-700",      label: "作成済"   },
+  received:  { cls: "bg-emerald-100 text-emerald-700", label: "受領済"   },
+  cancelled: { cls: "bg-gray-100 text-gray-500",      label: "取消"     },
 };
 
 function DocTasksTab({
@@ -16763,6 +16790,12 @@ function DocTasksTab({
   const [loading, setLoading] = useState(true);
   const [triggerFilter, setTriggerFilter] = useState<string | null>(null);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
+  const [reload, setReload] = useState(0);
+
+  // v3: 受領モーダル / 統合モーダル
+  const [receiveTarget, setReceiveTarget] = useState<DocTask | null>(null);
+  const [mergeTarget, setMergeTarget] = useState<MergeCandidateGroup | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -16776,10 +16809,11 @@ function DocTasksTab({
             ? [currentOfficeId]
             : []; // 全社 view OFF & office 未選択 → 何も見せない
 
-        // 2. doc_tasks
+        // 2. doc_tasks (v3: 全 active status を fetch して client 側で filter)
+        // 統合候補検出のため pending / completed / received すべて取る (cancelled は除外)
         const fetchedTasks = officeIds && officeIds.length === 0
           ? []
-          : await getPendingDocTasks(tenantId, officeIds);
+          : await getDocTasks(tenantId, officeIds, ["pending", "completed", "received"]);
 
         // 3. clients (office 絞り込み) — task client_id 解決と cert_renewal 表示用
         const PAGE = 1000;
@@ -16839,7 +16873,7 @@ function DocTasksTab({
       }
     })();
     return () => { cancelled = true; };
-  }, [tenantId, currentOfficeId, officeViewAll]);
+  }, [tenantId, currentOfficeId, officeViewAll, reload]);
 
   // cert_renewal の仮想 task 生成 (DB 未 INSERT)
   const certRenewalRows = useMemo<DocTaskRow[]>(() => {
@@ -16849,8 +16883,13 @@ function DocTasksTab({
     const out: DocTaskRow[] = [];
     // client × end_date 単位で最新 1 件のみ拾う (重複認定 record 対応)
     const seen = new Set<string>();
+    // DB 上に既に実体化済の cert_renewal task が居るかどうか (insurance_record_id で照合) → 仮想 row 抑止
+    const existingCertRefIds = new Set(
+      tasks.filter((t) => t.trigger_type === "cert_renewal").map((t) => t.trigger_ref_id),
+    );
     for (const r of insuranceRecords) {
       if (!r.certification_end_date) continue;
+      if (existingCertRefIds.has(r.id)) continue; // 実 task が居るなら仮想は出さない
       const endMs = new Date(r.certification_end_date).getTime();
       if (Number.isNaN(endMs)) continue;
       // 今日 ≦ end ≦ today + 30 日 が警告対象
@@ -16876,12 +16915,13 @@ function DocTasksTab({
         client_id: r.client_id,
         office_id: c.office_id,
         due_date: r.certification_end_date,
+        status: "pending" as DocTaskStatus,
         insuranceRecordId: r.id,
         certEndDate: r.certification_end_date,
       });
     }
     return out;
-  }, [insuranceRecords, careplanByClient, clientById]);
+  }, [insuranceRecords, careplanByClient, clientById, tasks]);
 
   // 全 row (DB tasks + virtual cert_renewal)
   const allRows = useMemo<DocTaskRow[]>(() => {
@@ -16895,6 +16935,9 @@ function DocTasksTab({
       client_id: t.client_id,
       office_id: t.office_id,
       due_date: t.due_date,
+      status: t.status,
+      received_at: t.received_at,
+      received_by: t.received_by,
     }));
     return [...rows, ...certRenewalRows];
   }, [tasks, certRenewalRows]);
@@ -16902,6 +16945,7 @@ function DocTasksTab({
   // フィルタ適用
   const filteredRows = useMemo(() => {
     return allRows.filter((r) => {
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (triggerFilter && r.trigger_type !== triggerFilter) return false;
       if (docTypeFilter && r.expected_doc_type !== docTypeFilter) return false;
       return true;
@@ -16910,15 +16954,24 @@ function DocTasksTab({
       if (!!a.due_date !== !!b.due_date) return a.due_date ? -1 : 1;
       return a.trigger_date.localeCompare(b.trigger_date);
     });
-  }, [allRows, triggerFilter, docTypeFilter]);
+  }, [allRows, statusFilter, triggerFilter, docTypeFilter]);
 
-  // 集計
+  // 集計 (現 status filter 配下での件数)
   const countByTrigger: Record<string, number> = {};
   const countByDocType: Record<string, number> = {};
+  const countByStatus: Record<StatusFilter, number> = { pending: 0, completed: 0, received: 0, all: allRows.length };
   for (const r of allRows) {
-    countByTrigger[r.trigger_type] = (countByTrigger[r.trigger_type] ?? 0) + 1;
-    countByDocType[r.expected_doc_type] = (countByDocType[r.expected_doc_type] ?? 0) + 1;
+    if (r.status === "pending")   countByStatus.pending   += 1;
+    if (r.status === "completed") countByStatus.completed += 1;
+    if (r.status === "received")  countByStatus.received  += 1;
+    if (statusFilter === "all" || r.status === statusFilter) {
+      countByTrigger[r.trigger_type] = (countByTrigger[r.trigger_type] ?? 0) + 1;
+      countByDocType[r.expected_doc_type] = (countByDocType[r.expected_doc_type] ?? 0) + 1;
+    }
   }
+
+  // v3: 統合候補 (DB tasks のみ。virtual は対象外)
+  const mergeCandidates = useMemo(() => findMergeCandidates(tasks), [tasks]);
 
   const handleOpenDocs = async (row: DocTaskRow) => {
     let docTaskId: string | null = row.isVirtual ? null : row.id;
@@ -16937,6 +16990,16 @@ function DocTasksTab({
     onOpenDocuments(row.client_id, docTaskId, row.expected_doc_type);
   };
 
+  const handleClickReceive = (row: DocTaskRow) => {
+    if (row.isVirtual || row.status !== "completed") return;
+    const t = tasks.find((tt) => tt.id === row.id);
+    if (t) setReceiveTarget(t);
+  };
+
+  const handleClickMerge = (group: MergeCandidateGroup) => {
+    setMergeTarget(group);
+  };
+
   const totalCount = allRows.length;
 
   return (
@@ -16945,11 +17008,62 @@ function DocTasksTab({
       <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
         <FileWarning size={16} className="text-amber-600" />
         <span className="font-semibold text-gray-700">書類タスク</span>
-        <span className="text-xs text-gray-500">動きに紐付く未作成書類タスク (event-driven)</span>
-        <span className="ml-auto text-xs text-gray-600">
-          全 {totalCount} 件 / 表示 {filteredRows.length} 件
+        <span className="text-xs text-gray-500">動きに紐付く書類タスク (event-driven, v3)</span>
+        <span className="ml-auto text-xs text-gray-600 flex items-center gap-3">
+          <span>未作成 <strong className="text-amber-700">{countByStatus.pending}</strong></span>
+          <span>受領待ち <strong className="text-blue-700">{countByStatus.completed}</strong></span>
+          <span>受領済 <strong className="text-emerald-700">{countByStatus.received}</strong></span>
+          <span className="text-gray-400">/ 表示 {filteredRows.length} 件</span>
         </span>
       </div>
+
+      {/* フィルタ: status (v3) */}
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1 flex-wrap shrink-0">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">状態</span>
+        {(["pending", "completed", "received", "all"] as StatusFilter[]).map((s) => (
+          <button
+            key={s}
+            onClick={() => setStatusFilter(s)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${statusFilter === s ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
+          >
+            {STATUS_FILTER_LABEL[s]} ({countByStatus[s]})
+          </button>
+        ))}
+      </div>
+
+      {/* v3: 統合候補 banner */}
+      {mergeCandidates.length > 0 && (
+        <div className="px-3 py-2 border-b border-amber-200 bg-amber-50 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <AlertCircle size={14} className="text-amber-600 shrink-0" />
+            <span className="text-xs font-semibold text-amber-800">
+              統合候補 {mergeCandidates.length} 組
+            </span>
+            <span className="text-[11px] text-amber-700">
+              同利用者 × 同書類種別 × 14 日以内 (1 つ目未受領) の task は 1 通にまとめられます
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {mergeCandidates.map((g, gi) => {
+              const c = clientById.get(g.clientId);
+              return (
+                <button
+                  key={`merge-${gi}`}
+                  onClick={() => handleClickMerge(g)}
+                  className="text-[11px] px-2 py-1 rounded border border-amber-300 bg-white text-amber-700 hover:bg-amber-100 flex items-center gap-1"
+                >
+                  <span className="font-medium">{c?.name ?? g.clientId.slice(0, 8)}</span>
+                  <span className="text-amber-500">·</span>
+                  <span>{DOC_LABEL[g.expectedDocType] ?? g.expectedDocType}</span>
+                  <span className="text-amber-500">·</span>
+                  <span>{g.taskIds.length} 件</span>
+                  <span className="ml-1 text-[10px] underline">統合</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* フィルタ: trigger_type */}
       <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1 flex-wrap shrink-0">
@@ -16958,7 +17072,7 @@ function DocTasksTab({
           onClick={() => setTriggerFilter(null)}
           className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${triggerFilter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
         >
-          全 ({totalCount})
+          全
         </button>
         {Object.entries(TRIGGER_LABEL).map(([key, label]) => (
           <button
@@ -16997,25 +17111,27 @@ function DocTasksTab({
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <CheckCircle2 size={32} className="text-emerald-400 mx-auto mb-2" />
-            <p className="text-sm text-gray-500">{totalCount === 0 ? "未作成の書類タスクはありません" : "該当する書類タスクはありません"}</p>
+            <p className="text-sm text-gray-500">{totalCount === 0 ? "該当する書類タスクはありません" : "該当する書類タスクはありません"}</p>
           </div>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-3">
           <div className="overflow-x-auto">
-            <table className="w-full table-auto bg-white text-left text-xs border-collapse min-w-[600px]">
+            <table className="w-full table-auto bg-white text-left text-xs border-collapse min-w-[680px]">
               <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr className="text-gray-600">
-                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-48">トリガー</th>
-                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-44">利用者</th>
-                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-32">期待書類</th>
-                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-24">期限</th>
-                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-28 text-center">操作</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-44">トリガー</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-40">利用者</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-28">期待書類</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-20">期限</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-24">状態</th>
+                  <th className="border-b border-gray-200 px-3 py-2 font-semibold w-32 text-center">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.map((row) => {
                   const client = clientById.get(row.client_id);
+                  const badge = STATUS_BADGE[row.status];
                   return (
                     <tr key={row.id} className="hover:bg-gray-50 align-top">
                       <td className="border-b border-gray-100 px-3 py-2">
@@ -17045,13 +17161,36 @@ function DocTasksTab({
                       <td className="border-b border-gray-100 px-3 py-2 text-gray-600 text-[11px]">
                         {row.due_date ?? "—"}
                       </td>
+                      <td className="border-b border-gray-100 px-3 py-2">
+                        <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                        {row.status === "received" && row.received_by && (
+                          <div className="text-[9px] text-gray-400 mt-0.5">
+                            {row.received_by} / {row.received_at?.slice(0, 10) ?? ""}
+                          </div>
+                        )}
+                      </td>
                       <td className="border-b border-gray-100 px-3 py-2 text-center">
-                        <button
-                          onClick={() => { void handleOpenDocs(row); }}
-                          className="text-[11px] px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
-                        >
-                          書類を作る
-                        </button>
+                        {row.status === "pending" && (
+                          <button
+                            onClick={() => { void handleOpenDocs(row); }}
+                            className="text-[11px] px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
+                          >
+                            書類を作る
+                          </button>
+                        )}
+                        {row.status === "completed" && (
+                          <button
+                            onClick={() => handleClickReceive(row)}
+                            className="text-[11px] px-2 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                          >
+                            受領
+                          </button>
+                        )}
+                        {row.status === "received" && (
+                          <span className="text-[10px] text-gray-400">完了</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -17061,6 +17200,213 @@ function DocTasksTab({
           </div>
         </div>
       )}
+
+      {/* v3: 受領モーダル */}
+      {receiveTarget && (
+        <DocTaskReceiveModal
+          task={receiveTarget}
+          client={clientById.get(receiveTarget.client_id) ?? null}
+          onClose={() => setReceiveTarget(null)}
+          onSaved={() => { setReceiveTarget(null); setReload((r) => r + 1); }}
+        />
+      )}
+
+      {/* v3: 統合モーダル */}
+      {mergeTarget && (
+        <DocTaskMergeModal
+          group={mergeTarget}
+          tasks={tasks}
+          client={clientById.get(mergeTarget.clientId) ?? null}
+          onClose={() => setMergeTarget(null)}
+          onSaved={() => { setMergeTarget(null); setReload((r) => r + 1); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── DocTaskReceiveModal (v3) ─────────────────────────────────────────────────
+function DocTaskReceiveModal({
+  task,
+  client,
+  onClose,
+  onSaved,
+}: {
+  task: DocTask;
+  client: Client | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [receivedBy, setReceivedBy] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    const trimmed = receivedBy.trim();
+    if (!trimmed) {
+      setError("受領者氏名を入力してください");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await markDocTaskReceived(task.id, trimmed);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+      <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+          <CheckCircle2 size={18} className="text-emerald-500" />
+          <h3 className="font-semibold text-gray-800">受領記録</h3>
+          <button onClick={onClose} className="ml-auto"><X size={18} className="text-gray-400" /></button>
+        </div>
+        <div className="px-4 py-3 space-y-3">
+          <div className="text-xs text-gray-500">
+            <div>利用者: <span className="font-medium text-gray-800">{client?.name ?? task.client_id.slice(0, 8)}</span></div>
+            <div>書類: <span className="font-medium text-gray-800">{DOC_LABEL[task.expected_doc_type] ?? task.expected_doc_type}</span></div>
+            <div>トリガー: {task.trigger_label ?? task.trigger_date}</div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-600 block mb-1">受領者氏名</label>
+            <input
+              type="text"
+              value={receivedBy}
+              onChange={(e) => setReceivedBy(e.target.value)}
+              placeholder="例: 山田太郎"
+              className="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-emerald-400"
+              autoFocus
+            />
+          </div>
+          {error && <div className="text-xs text-red-600">{error}</div>}
+        </div>
+        <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={() => { void handleSave(); }}
+            disabled={saving}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 flex items-center gap-1"
+          >
+            {saving && <Loader2 size={12} className="animate-spin" />}
+            受領済にする
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DocTaskMergeModal (v3) ───────────────────────────────────────────────────
+function DocTaskMergeModal({
+  group,
+  tasks,
+  client,
+  onClose,
+  onSaved,
+}: {
+  group: MergeCandidateGroup;
+  tasks: DocTask[];
+  client: Client | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const groupTasks = useMemo(
+    () => group.taskIds.map((id) => tasks.find((t) => t.id === id)).filter((t): t is DocTask => !!t),
+    [group, tasks],
+  );
+  // default target: 最新 (= 最後の trigger_date)
+  const [targetId, setTargetId] = useState<string>(() => groupTasks[groupTasks.length - 1]?.id ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleMerge = async () => {
+    const sourceIds = group.taskIds.filter((id) => id !== targetId);
+    if (sourceIds.length === 0) {
+      setError("統合先以外の task が必要です");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await mergeDocTasks(targetId, sourceIds);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+      <div className="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+          <AlertCircle size={18} className="text-amber-500" />
+          <h3 className="font-semibold text-gray-800">書類タスクの統合</h3>
+          <button onClick={onClose} className="ml-auto"><X size={18} className="text-gray-400" /></button>
+        </div>
+        <div className="px-4 py-3 space-y-3">
+          <div className="text-xs text-gray-500">
+            <div>利用者: <span className="font-medium text-gray-800">{client?.name ?? group.clientId.slice(0, 8)}</span></div>
+            <div>書類: <span className="font-medium text-gray-800">{DOC_LABEL[group.expectedDocType] ?? group.expectedDocType}</span></div>
+            <div className="mt-1">統合先 (= 残す task) を選択してください。残り {groupTasks.length - 1} 件は取消扱いになります。</div>
+          </div>
+          <div className="space-y-1">
+            {groupTasks.map((t) => (
+              <label
+                key={t.id}
+                className={`flex items-start gap-2 px-2.5 py-2 border rounded-lg cursor-pointer ${targetId === t.id ? "border-amber-400 bg-amber-50" : "border-gray-200 hover:border-gray-300"}`}
+              >
+                <input
+                  type="radio"
+                  name="merge-target"
+                  checked={targetId === t.id}
+                  onChange={() => setTargetId(t.id)}
+                  className="mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-800 font-medium">
+                    {t.trigger_label ?? t.trigger_date}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">
+                    {TRIGGER_LABEL[t.trigger_type] ?? t.trigger_type} · {t.trigger_date}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+          {error && <div className="text-xs text-red-600">{error}</div>}
+        </div>
+        <div className="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            キャンセル
+          </button>
+          <button
+            onClick={() => { void handleMerge(); }}
+            disabled={saving || !targetId}
+            className="text-xs px-3 py-1.5 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1"
+          >
+            {saving && <Loader2 size={12} className="animate-spin" />}
+            統合する
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
