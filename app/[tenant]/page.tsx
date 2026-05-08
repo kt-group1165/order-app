@@ -362,9 +362,9 @@ export default function TenantPage({
         {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
-        {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} />}
+        {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
-        {activeTab === "documents" && <DocumentsTab tenantId={tenantId} />}
+        {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
@@ -6777,7 +6777,7 @@ function ClientDetail({
 
 // ─── Documents Tab ───────────────────────────────────────────────────────────
 
-function DocumentsTab({ tenantId }: { tenantId: string }) {
+function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
@@ -6810,8 +6810,12 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
   } | null>(null);
 
   useEffect(() => {
+    // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
+    const officeFilter = officeViewAll ? null : currentOfficeId;
+    let clientsQ = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana");
+    if (officeFilter) clientsQ = clientsQ.eq("office_id", officeFilter);
     Promise.all([
-      supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana"),
+      clientsQ,
       getEquipment(tenantId),
       getTenantById(tenantId),
     ]).then(([clientResult, equip, tenant]) => {
@@ -6836,7 +6840,7 @@ function DocumentsTab({ tenantId }: { tenantId: string }) {
       });
       setLoading(false);
     });
-  }, [tenantId]);
+  }, [tenantId, currentOfficeId, officeViewAll]);
 
   const loadClientData = async (client: Client) => {
     setClientLoading(true);
@@ -16031,7 +16035,7 @@ function RentalReportModal({
 
 // ─── MonitoringTab ────────────────────────────────────────────────────────────
 
-function MonitoringTab({ tenantId }: { tenantId: string }) {
+function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -16048,13 +16052,17 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
   const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
 
   // eslint-disable-next-line react-hooks/immutability, react-hooks/exhaustive-deps -- TDZ: function declared below; useEffect callback runs post-render so safe at runtime
-  useEffect(() => { loadData(); }, [tenantId]);
+  useEffect(() => { loadData(); }, [tenantId, currentOfficeId, officeViewAll]);
 
   const loadData = async () => {
     setLoading(true);
     try {
+      // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
+      const officeFilter = officeViewAll ? null : currentOfficeId;
+      let clientsQ = supabase.from("clients").select("*").eq("tenant_id", tenantId);
+      if (officeFilter) clientsQ = clientsQ.eq("office_id", officeFilter);
       const [clientsRes, monRes, eqData, tenantData, rentalHistRes] = await Promise.all([
-        supabase.from("clients").select("*").eq("tenant_id", tenantId),
+        clientsQ,
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
         getTenantById(tenantId),
@@ -16066,10 +16074,12 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
       const allOrders: { id: string; client_id: string }[] = [];
       let ordFrom = 0;
       while (true) {
-        const { data: ordChunk } = await supabase
+        let ordQ = supabase
           .from("orders").select("id, client_id")
           .eq("tenant_id", tenantId)
           .range(ordFrom, ordFrom + 999);
+        if (officeFilter) ordQ = ordQ.eq("office_id", officeFilter);
+        const { data: ordChunk } = await ordQ;
         if (!ordChunk || ordChunk.length === 0) break;
         allOrders.push(...(ordChunk as { id: string; client_id: string }[]));
         if (ordChunk.length < 1000) break;
@@ -16100,6 +16110,7 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         });
       }
       // order_items を tenant_id で直接取得（URLの長さ制限を回避）
+      // order_items は office_id 列を持たないので、上で office filter 済の allOrders 経由で絞る
       const items: OrderItem[] = [];
       let itemFrom = 0;
       while (true) {
@@ -16114,7 +16125,9 @@ function MonitoringTab({ tenantId }: { tenantId: string }) {
         if (chunk.length < 1000) break;
         itemFrom += 1000;
       }
-      setActiveItems(items);
+      const orderIds = new Set(allOrders.map((o) => o.id));
+      const filteredItems = officeFilter ? items.filter((i) => orderIds.has(i.order_id)) : items;
+      setActiveItems(filteredItems);
     } finally {
       setLoading(false);
     }
