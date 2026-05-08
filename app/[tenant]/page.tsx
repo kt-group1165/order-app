@@ -47,7 +47,7 @@ import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { CarePlanTemplate } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
-import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
+import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, getClientAssignmentsForClient, ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
 import {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   getLateFlags, setLateFlag, removeLateFlag,
