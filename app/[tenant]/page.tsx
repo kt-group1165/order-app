@@ -6815,14 +6815,29 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: 
   useEffect(() => {
     // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
     const officeFilter = officeViewAll ? null : currentOfficeId;
-    let clientsQ = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana");
-    if (officeFilter) clientsQ = clientsQ.eq("office_id", officeFilter);
+    // PostgREST default limit 1000 を超えるケース対応 (ページング)
+    const fetchAllClients = async (): Promise<Client[]> => {
+      const PAGE = 1000;
+      const all: Client[] = [];
+      let from = 0;
+      while (true) {
+        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana").range(from, from + PAGE - 1);
+        if (officeFilter) q = q.eq("office_id", officeFilter);
+        const { data, error } = await q;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...(data as Client[]));
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+      return all;
+    };
     Promise.all([
-      clientsQ,
+      fetchAllClients(),
       getEquipment(tenantId),
       getTenantById(tenantId),
-    ]).then(([clientResult, equip, tenant]) => {
-      setClients((clientResult.data ?? []) as Client[]);
+    ]).then(([cls, equip, tenant]) => {
+      setClients(cls);
       setEquipment(equip);
       if (tenant) setCompanyInfo({
         businessNumber: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
@@ -7259,6 +7274,21 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
   useEffect(() => {
     // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
+    // PostgREST default limit 1000 を超えるテーブル (insurance_records 8370 件等) は必ずページング
+    const fetchAllPaged = async <T,>(table: string): Promise<T[]> => {
+      const PAGE = 1000;
+      const all: T[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase.from(table).select("*").eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...(data as T[]));
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+      return all;
+    };
     Promise.all([
       getClients(tenantId, { officeId: currentOfficeId ?? undefined }),
       getEquipment(tenantId),
@@ -7266,8 +7296,8 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       getAllOrders(tenantId, currentOfficeId),
       getTenantById(tenantId),
       getOffices(tenantId),
-      supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
-      supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).then(r => r.data ?? []),
+      fetchAllPaged<ClientInsuranceRecord>("client_insurance_records"),
+      fetchAllPaged<ClientHospitalization>("client_hospitalizations"),
     ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw]) => {
       setClients(c);
       setEquipment(eq);
@@ -8044,23 +8074,39 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       setLoading(true);
       try {
         const { getSalesRecords } = await import("@/lib/sales");
-        const [sr, docs, priceHist, ppRes, offRes, mgrRes] = await Promise.all([
+        // PostgREST default 1000 行制限対策。client_documents/care_offices/care_managers
+        // など増える可能性のあるテーブルはページング取得
+        const fetchAllRows = async <T,>(table: string, columns = "*"): Promise<T[]> => {
+          const PAGE = 1000;
+          const all: T[] = [];
+          let from = 0;
+          while (true) {
+            const { data, error } = await supabase.from(table).select(columns).eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+            if (error) throw error;
+            if (!data || data.length === 0) break;
+            all.push(...(data as unknown as T[]));
+            if (data.length < PAGE) break;
+            from += PAGE;
+          }
+          return all;
+        };
+        const [sr, docs, priceHist, ppRes, offs, mgrs] = await Promise.all([
           getSalesRecords(tenantId),
-          supabase.from("client_documents").select("client_id, type").eq("tenant_id", tenantId),
+          fetchAllRows<{ client_id: string; type: string }>("client_documents", "client_id, type"),
           getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
           supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
-          supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId),
-          supabase.from("care_managers").select("id, name").eq("tenant_id", tenantId),
+          fetchAllRows<{ id: string; name: string }>("care_offices", "id, name"),
+          fetchAllRows<{ id: string; name: string }>("care_managers", "id, name"),
         ]);
         setSalesRecords(sr);
-        setDocuments((docs.data ?? []) as Array<{ client_id: string; type: string }>);
+        setDocuments(docs);
         setPriceHistory(priceHist);
         setPurchasePrices((ppRes.data ?? []) as Array<{ product_code: string; supplier_id: string; purchase_price: number }>);
         const om = new Map<string, string>();
-        (offRes.data ?? []).forEach((o: { id: string; name: string }) => om.set(o.id, o.name));
+        offs.forEach((o) => om.set(o.id, o.name));
         setCareOfficesMap(om);
         const mm = new Map<string, string>();
-        (mgrRes.data ?? []).forEach((m: { id: string; name: string }) => mm.set(m.id, m.name));
+        mgrs.forEach((m) => mm.set(m.id, m.name));
         setCareManagersMap(mm);
       } finally {
         setLoading(false);
@@ -12018,10 +12064,21 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       setProgress("3/5 介護保険情報を入替中...");
       // 既存全削除
       await supabase.from("client_insurance_records").delete().eq("tenant_id", tenantId);
-      // client_id を再取得
-      const { data: clientIds } = await supabase.from("clients").select("id, user_number").eq("tenant_id", tenantId).is("deleted_at", null);
+      // client_id を再取得 (1810 件等あるためページング)
+      const allClientIds: { id: string; user_number: string | null }[] = [];
+      {
+        const PAGE = 1000;
+        let from = 0;
+        while (true) {
+          const { data } = await supabase.from("clients").select("id, user_number").eq("tenant_id", tenantId).is("deleted_at", null).range(from, from + PAGE - 1);
+          if (!data || data.length === 0) break;
+          allClientIds.push(...(data as { id: string; user_number: string | null }[]));
+          if (data.length < PAGE) break;
+          from += PAGE;
+        }
+      }
       const unum2id = new Map<string, string>();
-      (clientIds ?? []).forEach((c: { id: string; user_number: string | null }) => { if (c.user_number) unum2id.set(c.user_number, c.id); });
+      allClientIds.forEach((c) => { if (c.user_number) unum2id.set(c.user_number, c.id); });
       // バッチ insert
       const insRows = parsed.insurance
         .filter((r) => unum2id.has(r.user_number))
