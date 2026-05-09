@@ -257,7 +257,7 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -375,6 +375,7 @@ export default function TenantPage({
         {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={(clientId, docTaskId, expectedDocType) => { setDocsTabTarget(clientId ? { clientId, docTaskId, expectedDocType } : null); setActiveTab("documents"); }} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
+        {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
@@ -385,6 +386,7 @@ export default function TenantPage({
             { id: "orders", icon: ClipboardList, label: "発注管理" },
             { id: "documents", icon: FileText, label: "書類" },
             { id: "clients", icon: Users, label: "利用者別" },
+            { id: "staff", icon: Users, label: "職員" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
             { id: "doc-tasks", icon: FileWarning, label: "書類タスク" },
             { id: "billing", icon: CreditCard, label: "請求" },
@@ -18328,6 +18330,224 @@ function MonitoringFormModal({
           previousComment={previousComment}
           onClose={() => setShowPreview(false)}
         />
+      )}
+    </div>
+  );
+}
+
+// ─── StaffTab ───────────────────────────────────────────────────────
+// 現 office に紐付く members を表示 + 招待発行 button + modal。
+// 編集機能は kaigo-app /staff に集約。
+function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
+  const [members, setMembers] = useState<(Member & { status?: string | null; role?: string | null; employment_type?: string | null })[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ display_name: "", login_id: "", role: "member" as "member" | "office_admin" });
+  const [inviting, setInviting] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{ invite_url: string; initial_password: string; login_id: string } | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  const officeFilter = officeViewAll ? null : currentOfficeId;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        // member_offices junction 経由で current office の member_ids を取得
+        let memberIds: string[] | null = null;
+        if (officeFilter) {
+          const { data: junction } = await supabase
+            .from("member_offices")
+            .select("member_id")
+            .eq("office_id", officeFilter);
+          memberIds = ((junction ?? []) as { member_id: string }[]).map((r) => r.member_id);
+        }
+        let q = supabase.from("members").select("*").eq("tenant_id", tenantId);
+        if (!includeInactive) q = q.eq("status", "active");
+        if (memberIds) q = q.in("id", memberIds);
+        const { data } = await q.order("furigana", { nullsFirst: false }).order("name");
+        if (!cancelled) setMembers((data ?? []) as typeof members);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, officeFilter, includeInactive]);
+
+  const submitInvite = async () => {
+    setInviteError(null);
+    if (!currentOfficeId) {
+      setInviteError("自事業所を選択してから発行してください");
+      return;
+    }
+    if (!inviteForm.display_name.trim()) {
+      setInviteError("氏名は必須です");
+      return;
+    }
+    setInviting(true);
+    try {
+      const res = await fetch("/api/staff/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          display_name: inviteForm.display_name.trim(),
+          login_id: inviteForm.login_id.trim() || undefined,
+          role: inviteForm.role,
+          office_id: currentOfficeId,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setInviteError(json.message ?? json.error ?? "発行に失敗しました");
+        return;
+      }
+      setInviteResult({ invite_url: json.invite_url, initial_password: json.initial_password, login_id: json.login_id });
+    } catch (e) {
+      setInviteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const closeModal = () => {
+    setInviteOpen(false);
+    setInviteResult(null);
+    setInviteError(null);
+    setInviteForm({ display_name: "", login_id: "", role: "member" });
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 shrink-0">
+        <Users size={18} className="text-emerald-600" />
+        <h2 className="font-semibold text-gray-700">職員 ({members.length})</h2>
+        <label className="ml-2 text-xs text-gray-600 flex items-center gap-1">
+          <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
+          退職者を含める
+        </label>
+        <div className="ml-auto">
+          <button
+            onClick={() => setInviteOpen(true)}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1"
+          >
+            <Plus size={14} />
+            招待発行
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-emerald-400" /></div>
+      ) : members.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">職員がいません</div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-3">
+          <table className="w-full text-sm bg-white">
+            <thead className="bg-gray-50 text-xs text-gray-600">
+              <tr>
+                <th className="text-left px-3 py-2">氏名</th>
+                <th className="text-left px-3 py-2">役職</th>
+                <th className="text-left px-3 py-2">雇用形態</th>
+                <th className="text-left px-3 py-2 w-20">状態</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m) => (
+                <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="px-3 py-2">{m.name}</td>
+                  <td className="px-3 py-2 text-gray-600">{m.role ?? "—"}</td>
+                  <td className="px-3 py-2 text-gray-600">{m.employment_type ?? "—"}</td>
+                  <td className="px-3 py-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${m.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-gray-200 text-gray-600"}`}>
+                      {m.status === "active" ? "在籍" : "退職"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {inviteOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+            {inviteResult ? (
+              <>
+                <h3 className="text-base font-semibold mb-3">招待を発行しました</h3>
+                <p className="text-xs text-gray-600 mb-2">下記 URL と初期パスワードを本人に伝えてください。</p>
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <div className="text-gray-500 mb-0.5">ログイン ID</div>
+                    <div className="font-mono bg-gray-50 px-2 py-1 rounded">{inviteResult.login_id}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500 mb-0.5">招待 URL</div>
+                    <div className="flex items-center gap-1">
+                      <input readOnly value={inviteResult.invite_url} className="flex-1 font-mono bg-gray-50 px-2 py-1 rounded text-[10px]" />
+                      <button onClick={() => navigator.clipboard.writeText(inviteResult.invite_url)} className="text-[10px] px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">コピー</button>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500 mb-0.5">初期パスワード</div>
+                    <div className="flex items-center gap-1">
+                      <input readOnly value={inviteResult.initial_password} className="flex-1 font-mono bg-gray-50 px-2 py-1 rounded" />
+                      <button onClick={() => navigator.clipboard.writeText(inviteResult.initial_password)} className="text-[10px] px-2 py-1 border border-gray-300 rounded hover:bg-gray-50">コピー</button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button onClick={closeModal} className="text-sm px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded">閉じる</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-base font-semibold mb-3">招待発行</h3>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <label className="text-xs text-gray-600">氏名 (必須)</label>
+                    <input
+                      value={inviteForm.display_name}
+                      onChange={(e) => setInviteForm((f) => ({ ...f, display_name: e.target.value }))}
+                      className="w-full border border-gray-300 rounded px-2 py-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">ログイン ID (任意、空欄なら自動派生)</label>
+                    <input
+                      value={inviteForm.login_id}
+                      onChange={(e) => setInviteForm((f) => ({ ...f, login_id: e.target.value }))}
+                      className="w-full border border-gray-300 rounded px-2 py-1 font-mono"
+                      placeholder="例: yamada"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">役職</label>
+                    <div className="flex gap-3 mt-1">
+                      <label className="text-xs flex items-center gap-1">
+                        <input type="radio" checked={inviteForm.role === "member"} onChange={() => setInviteForm((f) => ({ ...f, role: "member" }))} />
+                        一般
+                      </label>
+                      <label className="text-xs flex items-center gap-1">
+                        <input type="radio" checked={inviteForm.role === "office_admin"} onChange={() => setInviteForm((f) => ({ ...f, role: "office_admin" }))} />
+                        事業所管理者
+                      </label>
+                    </div>
+                  </div>
+                  {inviteError && <div className="text-xs text-red-600">{inviteError}</div>}
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button onClick={closeModal} className="text-sm px-4 py-1.5 border border-gray-300 rounded hover:bg-gray-50">キャンセル</button>
+                  <button onClick={submitInvite} disabled={inviting} className="text-sm px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded disabled:opacity-50">
+                    {inviting ? "発行中..." : "発行"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
