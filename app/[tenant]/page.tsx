@@ -16180,6 +16180,11 @@ function RentalReportModal({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [checkedReqs, setCheckedReqs] = useState<Set<number>>(new Set());
+  // 居宅事業所への送付モーダル
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [sendToast, setSendToast] = useState<{ kind: "success" | "error"; msg: string } | null>(null);
+  const searchParamsForSend = useSearchParams();
+  const currentOfficeIdForSend = searchParamsForSend.get("office");
   const [faxSending, setFaxSending] = useState(false);
   const [faxResult, setFaxResult] = useState<"ok" | "err" | null>(null);
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
@@ -16380,6 +16385,14 @@ function RentalReportModal({
           className="flex items-center gap-1.5 bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
           <Send size={14} /> FAX送信
         </button>
+        <button
+          onClick={() => setShowSendModal(true)}
+          disabled={!currentOfficeIdForSend}
+          title={!currentOfficeIdForSend ? "送信元事業所が選択されていません" : "居宅介護支援事業所に貸与報告書を送付"}
+          className="flex items-center gap-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-xl text-sm font-medium"
+        >
+          <Send size={14} /> 居宅事業所に送付
+        </button>
       </div>
 
       {/* FAX送信ダイアログ */}
@@ -16448,7 +16461,7 @@ function RentalReportModal({
 
       {/* 帳票本体 */}
       <div className="flex-1 overflow-y-auto bg-gray-100">
-        <div className="max-w-4xl mx-auto my-6 bg-white shadow-lg px-10 py-8"
+        <div id="rental-report-doc" className="max-w-4xl mx-auto my-6 bg-white shadow-lg px-10 py-8"
           style={{ fontFamily: "'MS Mincho','Yu Mincho','ＭＳ 明朝',serif", fontSize: "11pt", lineHeight: "1.5" }}>
 
           <h1 style={{ textAlign: "center", fontSize: "15pt", fontWeight: "bold", marginBottom: "18px" }}>
@@ -16680,6 +16693,36 @@ function RentalReportModal({
 
         </div>
       </div>
+
+      {/* 居宅事業所への送付モーダル */}
+      {showSendModal && currentOfficeIdForSend && (
+        <SendRentalReportModal
+          tenantId={tenantId}
+          client={client}
+          sourceOfficeId={currentOfficeIdForSend}
+          monitoringRecordId={null}
+          visitDate={visitDate}
+          reportDate={`${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`}
+          getHtmlSnapshot={() => document.getElementById("rental-report-doc")?.outerHTML ?? ""}
+          onClose={() => setShowSendModal(false)}
+          onSuccess={() => {
+            setShowSendModal(false);
+            setSendToast({ kind: "success", msg: "送付しました" });
+            setTimeout(() => setSendToast(null), 3500);
+          }}
+          onError={(msg) => {
+            setSendToast({ kind: "error", msg: `送付失敗: ${msg}` });
+            setTimeout(() => setSendToast(null), 5000);
+          }}
+        />
+      )}
+
+      {/* 送付トースト */}
+      {sendToast && (
+        <div className={`fixed top-4 right-4 z-[80] px-4 py-2 rounded-lg shadow-lg text-sm text-white ${sendToast.kind === "success" ? "bg-emerald-500" : "bg-red-500"}`}>
+          {sendToast.msg}
+        </div>
+      )}
     </div>
   );
 }
