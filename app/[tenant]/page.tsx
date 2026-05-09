@@ -17610,6 +17610,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
         equipment={equipment}
         companyInfo={companyInfo}
         tenantId={tenantId}
+        currentOfficeId={currentOfficeId}
         lastRecord={lastRecord}
         targetMonth={selectedMonth}
         existingRecord={openRecord}
@@ -17738,6 +17739,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
 function MonitoringPreview({
   client, visitDate, reportDate, tm, staffName, companyInfo,
   itemChecks, equipment, insuranceRecord, continuityComment, reportComment, previousComment, onClose,
+  tenantId, currentOfficeId, monitoringRecordId,
 }: {
   client: Client;
   visitDate: string;
@@ -17752,7 +17754,17 @@ function MonitoringPreview({
   reportComment: string;
   previousComment: string;
   onClose: () => void;
+  tenantId: string;
+  currentOfficeId: string | null;
+  monitoringRecordId: string | null;
 }) {
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [sendToast, setSendToast] = useState<{ kind: "success" | "error"; msg: string } | null>(null);
+  useEffect(() => {
+    if (!sendToast) return;
+    const t = setTimeout(() => setSendToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [sendToast]);
   const toJaDate = (s: string) => {
     if (!s) return "";
     const d = new Date(s + "T00:00:00");
@@ -17845,6 +17857,14 @@ function MonitoringPreview({
           <div className="bg-gray-800 text-white px-4 py-2.5 flex items-center justify-between print:hidden">
             <span className="text-sm font-medium">プレビュー：モニタリング報告書（{rowCount}行 / {tier}）</span>
             <div className="flex gap-2">
+              <button
+                onClick={() => setShowSendModal(true)}
+                disabled={!currentOfficeId}
+                title={!currentOfficeId ? "送信元事業所が選択されていません" : "居宅介護支援事業所に貸与報告書を送付"}
+                className="text-xs bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-500 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg flex items-center gap-1"
+              >
+                <Send size={12} /> 居宅事業所に送付
+              </button>
               <button onClick={() => window.print()} className="text-xs bg-blue-500 hover:bg-blue-600 px-3 py-1.5 rounded-lg">印刷</button>
               <button onClick={onClose} className="text-xs bg-gray-600 hover:bg-gray-700 px-3 py-1.5 rounded-lg">閉じる</button>
             </div>
@@ -17967,6 +17987,257 @@ function MonitoringPreview({
           </div>
         </div>
       </div>
+
+      {/* 送付トースト */}
+      {sendToast && (
+        <div className="fixed top-6 right-6 z-[60] print:hidden" onClick={e => e.stopPropagation()}>
+          <div className={`px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium ${sendToast.kind === "success" ? "bg-emerald-500 text-white" : "bg-red-500 text-white"}`}>
+            {sendToast.msg}
+          </div>
+        </div>
+      )}
+
+      {/* 送付確認モーダル */}
+      {showSendModal && currentOfficeId && (
+        <SendRentalReportModal
+          tenantId={tenantId}
+          client={client}
+          sourceOfficeId={currentOfficeId}
+          monitoringRecordId={monitoringRecordId}
+          visitDate={visitDate}
+          reportDate={reportDate}
+          getHtmlSnapshot={() => {
+            const docEl = document.querySelector("#monitoring-preview-modal .monitoring-doc");
+            return docEl ? docEl.outerHTML : "";
+          }}
+          onClose={() => setShowSendModal(false)}
+          onSuccess={() => { setShowSendModal(false); setSendToast({ kind: "success", msg: "送付しました" }); }}
+          onError={(msg) => { setShowSendModal(false); setSendToast({ kind: "error", msg: `送付失敗: ${msg}` }); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── SendRentalReportModal ───────────────────────────────────────────────────
+// 貸与報告書を居宅介護支援事業所に送付する確認モーダル
+
+type CareOfficeChoice = {
+  id: string;
+  name: string;
+  is_assigned: boolean;  // 当該 client の assignment にあるか
+};
+
+function SendRentalReportModal({
+  tenantId, client, sourceOfficeId, monitoringRecordId, visitDate, reportDate,
+  getHtmlSnapshot, onClose, onSuccess, onError,
+}: {
+  tenantId: string;
+  client: Client;
+  sourceOfficeId: string;
+  monitoringRecordId: string | null;
+  visitDate: string;
+  reportDate: string;
+  getHtmlSnapshot: () => string;
+  onClose: () => void;
+  onSuccess: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [choices, setChoices] = useState<CareOfficeChoice[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sourceOfficeName, setSourceOfficeName] = useState<string>("");
+  const [sending, setSending] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);  // assigned 居宅 が無い時に全 居宅 表示に切替
+
+  // 候補 office 取得
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        // 1. 当該利用者の assignment 一覧
+        const { data: asgn, error: asgnErr } = await supabase
+          .from("client_office_assignments")
+          .select("office_id")
+          .eq("tenant_id", tenantId)
+          .eq("client_id", client.id);
+        if (asgnErr) throw asgnErr;
+        const assignedIds = new Set((asgn ?? []).map(a => a.office_id as string));
+
+        // 2. tenant 内の 居宅介護支援 事業所一覧
+        const { data: careOffices, error: careErr } = await supabase
+          .from("offices")
+          .select("id, name, service_type")
+          .eq("tenant_id", tenantId)
+          .eq("service_type", "居宅介護支援")
+          .order("sort_order", { ascending: true })
+          .order("created_at", { ascending: true });
+        if (careErr) throw careErr;
+
+        // 3. 送信元 office 名
+        const { data: srcOffice } = await supabase
+          .from("offices")
+          .select("name")
+          .eq("id", sourceOfficeId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (srcOffice?.name) setSourceOfficeName(srcOffice.name as string);
+
+        const all = (careOffices ?? []).map(o => ({
+          id: o.id as string,
+          name: o.name as string,
+          is_assigned: assignedIds.has(o.id as string),
+        }));
+        const assigned = all.filter(c => c.is_assigned);
+        setChoices(all);
+        // assigned 居宅 が 1+ あれば assigned のみを既定で見せる
+        if (assigned.length > 0) {
+          setShowAll(false);
+          setSelectedId(assigned[0].id);
+        } else {
+          setShowAll(true);
+          setSelectedId(all[0]?.id ?? null);
+        }
+      } catch (e) {
+        if (!cancelled) setErrorMsg(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, client.id, sourceOfficeId]);
+
+  const visibleChoices = showAll ? choices : choices.filter(c => c.is_assigned);
+  const assignedCount = choices.filter(c => c.is_assigned).length;
+
+  const handleSend = async () => {
+    if (!selectedId) return;
+    setSending(true);
+    setErrorMsg(null);
+    try {
+      // current user 取得
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData?.user) throw new Error("ユーザー情報が取得できません");
+      const userId = userData.user.id;
+
+      // HTML スナップショット
+      const html = getHtmlSnapshot();
+      if (!html) throw new Error("プレビュー DOM が見つかりません");
+
+      // タイトル
+      const dateForTitle = visitDate || reportDate || new Date().toISOString().split("T")[0];
+      const title = `貸与報告書 ${dateForTitle} ${client.name} 様`;
+
+      // shared_documents INSERT
+      const { data: sd, error: sdErr } = await supabase
+        .from("shared_documents")
+        .insert({
+          tenant_id: tenantId,
+          client_id: client.id,
+          source_office_id: sourceOfficeId,
+          target_office_id: selectedId,
+          document_type: "rental_report",
+          title,
+          html_content: html,
+          payload: { monitoring_record_id: monitoringRecordId, visit_date: visitDate, report_date: reportDate, client_id: client.id, client_name: client.name },
+          sent_by: userId,
+        })
+        .select("id")
+        .single();
+      if (sdErr || !sd) throw sdErr ?? new Error("shared_documents 作成失敗");
+
+      // notifications INSERT (受信 office 全 staff 宛)
+      const { error: ntErr } = await supabase
+        .from("notifications")
+        .insert({
+          tenant_id: tenantId,
+          office_id: selectedId,
+          user_id: null,
+          type: "document_received",
+          ref_table: "shared_documents",
+          ref_id: sd.id,
+          title: `貸与報告書を受信: ${client.name} 様`,
+          body: `${sourceOfficeName || "送信元事業所"} から`,
+        });
+      if (ntErr) throw ntErr;
+
+      onSuccess();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErrorMsg(msg);
+      onError(msg);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[55] bg-black/60 flex items-center justify-center p-4 print:hidden" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">居宅介護支援事業所に送付</h3>
+          <p className="text-xs text-gray-500 mt-1">{client.name} 様の貸与報告書を送付します</p>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          {loading ? (
+            <div className="flex justify-center py-6"><Loader2 size={22} className="animate-spin text-emerald-400" /></div>
+          ) : choices.length === 0 ? (
+            <p className="text-sm text-red-500">tenant 内に居宅介護支援事業所が登録されていません</p>
+          ) : (
+            <>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1.5">送付先</label>
+                {assignedCount === 0 && (
+                  <p className="text-xs text-amber-600 mb-2">
+                    この利用者に紐付く居宅介護支援事業所がありません。全候補から手動選択してください。
+                  </p>
+                )}
+                {assignedCount > 0 && (
+                  <label className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+                    <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-emerald-500" />
+                    <span>全 居宅介護支援事業所 から選ぶ</span>
+                  </label>
+                )}
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                  {visibleChoices.map(c => (
+                    <label key={c.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${selectedId === c.id ? "border-emerald-400 bg-emerald-50" : "border-gray-200 hover:bg-gray-50"}`}>
+                      <input type="radio" name="target_office" value={c.id}
+                        checked={selectedId === c.id}
+                        onChange={() => setSelectedId(c.id)}
+                        className="accent-emerald-500" />
+                      <span className="text-sm text-gray-800 flex-1 truncate">{c.name}</span>
+                      {c.is_assigned && <span className="text-[10px] text-emerald-600 shrink-0 px-1.5 py-0.5 bg-emerald-100 rounded">担当</span>}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {errorMsg && (
+                <div className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {errorMsg}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
+          <button onClick={onClose} disabled={sending}
+            className="text-sm text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-100 disabled:opacity-50">
+            キャンセル
+          </button>
+          <button onClick={handleSend}
+            disabled={loading || sending || !selectedId}
+            className="text-sm text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 disabled:cursor-not-allowed px-4 py-2 rounded-lg flex items-center gap-1.5">
+            {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            送付確定
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -17986,7 +18257,7 @@ type MonitoringItemCheck = {
 };
 
 function MonitoringFormModal({
-  client, clientItems, clientHistItems, equipment, companyInfo, tenantId, lastRecord, targetMonth, existingRecord, onClose, onSaved,
+  client, clientItems, clientHistItems, equipment, companyInfo, tenantId, currentOfficeId, lastRecord, targetMonth, existingRecord, onClose, onSaved,
 }: {
   client: Client;
   clientItems: OrderItem[];
@@ -17994,6 +18265,7 @@ function MonitoringFormModal({
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   tenantId: string;
+  currentOfficeId: string | null;
   lastRecord: MonitoringRecord | null;
   targetMonth: string;
   existingRecord: MonitoringRecord | null;
@@ -18013,7 +18285,6 @@ function MonitoringFormModal({
     existingRecord ? (existingRecord.previous_comment ?? "") : (lastRecord?.report_comment ?? "")
   );
   const [saving, setSaving] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const [savedId, setSavedId] = useState<string | null>(existingRecord?.id ?? null);
   const [downloading, setDownloading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -18328,6 +18599,9 @@ function MonitoringFormModal({
           continuityComment={continuityComment}
           reportComment={reportComment}
           previousComment={previousComment}
+          tenantId={tenantId}
+          currentOfficeId={currentOfficeId}
+          monitoringRecordId={savedId}
           onClose={() => setShowPreview(false)}
         />
       )}
