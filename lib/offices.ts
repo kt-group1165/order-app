@@ -220,7 +220,8 @@ export async function getClientAssignmentsForClient(
 export async function ensureActiveAssignment(
   clientId: string,
   officeId: string,
-  tenantId: string
+  tenantId: string,
+  startDate?: string | null,
 ): Promise<ClientOfficeAssignment | null> {
   const { data: existing, error: selErr } = await supabase
     .from("client_office_assignments")
@@ -231,14 +232,14 @@ export async function ensureActiveAssignment(
     .limit(1);
   if (selErr) throw selErr;
   if (existing && existing.length > 0) return null;
-  const today = new Date().toISOString().split("T")[0];
+  const start = startDate ?? new Date().toISOString().split("T")[0];
   const { data, error } = await supabase
     .from("client_office_assignments")
     .insert({
       tenant_id: tenantId,
       client_id: clientId,
       office_id: officeId,
-      start_date: today,
+      start_date: start,
     })
     .select()
     .single();
@@ -247,15 +248,16 @@ export async function ensureActiveAssignment(
   return data as ClientOfficeAssignment;
 }
 
-/** 現 open 期間 (end_date IS NULL) があれば end_date=今日 で UPDATE。返り値は更新件数 */
+/** 現 open 期間 (end_date IS NULL) があれば end_date で UPDATE (default 今日)。返り値は更新件数 */
 export async function closeActiveAssignment(
   clientId: string,
-  officeId: string
+  officeId: string,
+  endDate?: string | null,
 ): Promise<number> {
-  const today = new Date().toISOString().split("T")[0];
+  const end = endDate ?? new Date().toISOString().split("T")[0];
   const { data, error } = await supabase
     .from("client_office_assignments")
-    .update({ end_date: today })
+    .update({ end_date: end })
     .eq("client_id", clientId)
     .eq("office_id", officeId)
     .is("end_date", null)

@@ -5288,6 +5288,8 @@ function ClientDetail({
   const [assignmentEditForm, setAssignmentEditForm] = useState<{ start_date: string; end_date: string }>({ start_date: "", end_date: "" });
   const [assignmentAdding, setAssignmentAdding] = useState<{ office_id: string; start_date: string; end_date: string } | null>(null);
   const [showAssignmentHistory, setShowAssignmentHistory] = useState(false);
+  const [startDatePicker, setStartDatePicker] = useState<{ officeId: string; officeName: string; date: string } | null>(null);
+  const [endDatePicker, setEndDatePicker] = useState<{ officeId: string; officeName: string; date: string } | null>(null);
 
   // 月次実績送信 (居宅事業所宛)
   const [showRecordModal, setShowRecordModal] = useState(false);
@@ -5424,13 +5426,37 @@ function ClientDetail({
           setEmailPreview({ order: orderData as Order, items: orderItems, suppliers, members, emailType: newStatus as "rental_started" | "terminated" | "cancelled" });
         }
         // Stage A: rental_started 時に利用期間を自動 INSERT (open 行が無ければ)
+        // 開始日は item.rental_start_date を使用 (manual 入力の date)
         if (newStatus === "rental_started") {
           const officeId = (orderData as Order | null)?.office_id ?? currentOfficeId;
           if (officeId) {
             try {
-              await ensureActiveAssignment(client.id, officeId, tenantId);
+              const startDate = date ?? item.rental_start_date ?? new Date().toISOString().split("T")[0];
+              await ensureActiveAssignment(client.id, officeId, tenantId, startDate);
               await reloadAssignments();
             } catch (e) { console.error("利用期間の自動作成に失敗", e); }
+          }
+        }
+        // Stage A: terminated/cancelled 時に「全 item が非 active」になったか check、
+        // なれば利用期間を auto-close (end_date = item の終了日 or 今日)
+        if (newStatus === "terminated" || newStatus === "cancelled") {
+          const officeId = (orderData as Order | null)?.office_id ?? currentOfficeId;
+          if (officeId) {
+            try {
+              // client × office 配下で rental_started item が他に残ってないか確認
+              const { data: remaining } = await supabase
+                .from("order_items")
+                .select("id, order_id, orders!inner(client_id, office_id)")
+                .eq("status", "rental_started")
+                .eq("orders.client_id", client.id)
+                .eq("orders.office_id", officeId)
+                .neq("id", item.id);
+              if ((remaining ?? []).length === 0) {
+                const endDate = date ?? item.rental_end_date ?? new Date().toISOString().split("T")[0];
+                await closeActiveAssignment(client.id, officeId, endDate);
+                await reloadAssignments();
+              }
+            } catch (e) { console.error("利用期間の自動クローズに失敗", e); }
           }
         }
       }
@@ -6112,17 +6138,13 @@ function ClientDetail({
                     </div>
                     {o.id === currentOfficeId ? (
                       <button
-                        onClick={async () => {
-                          try {
-                            if (isActive) {
-                              if (!confirm(`${o.name} の利用を終了しますか？(終了日 = 今日)`)) return;
-                              await closeActiveAssignment(client.id, o.id);
-                            } else {
-                              const inserted = await ensureActiveAssignment(client.id, o.id, tenantId);
-                              if (inserted === null) alert("既に現在利用中の期間があります。");
-                            }
-                            await reloadAssignments();
-                          } catch (e) { alert((isActive ? "利用終了" : "利用開始") + "に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                        onClick={() => {
+                          const today = new Date().toISOString().split("T")[0];
+                          if (isActive) {
+                            setEndDatePicker({ officeId: o.id, officeName: o.name, date: today });
+                          } else {
+                            setStartDatePicker({ officeId: o.id, officeName: o.name, date: today });
+                          }
                         }}
                         className={`text-[11px] px-2.5 py-1 rounded-lg shrink-0 ${isActive ? "bg-red-500 hover:bg-red-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
                         {isActive ? "利用終了" : "利用開始"}
@@ -7387,6 +7409,65 @@ function ClientDetail({
       {recordToast && (
         <div className={`fixed top-4 right-4 z-[80] px-4 py-2 rounded-lg shadow-lg text-sm text-white ${recordToast.kind === "success" ? "bg-emerald-500" : "bg-red-500"}`}>
           {recordToast.msg}
+        </div>
+      )}
+
+      {/* 利用開始日 picker modal */}
+      {startDatePicker && (
+        <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4" onClick={() => setStartDatePicker(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-gray-800 mb-1">利用開始</h3>
+            <p className="text-xs text-gray-500 mb-3">{startDatePicker.officeName} の利用を開始します。</p>
+            <label className="text-xs text-gray-600 block mb-1">開始日</label>
+            <input
+              type="date"
+              value={startDatePicker.date}
+              onChange={(e) => setStartDatePicker({ ...startDatePicker, date: e.target.value })}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-4"
+            />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setStartDatePicker(null)} className="text-sm px-3 py-1.5 rounded border border-gray-300 hover:bg-gray-50">キャンセル</button>
+              <button
+                onClick={async () => {
+                  try {
+                    const inserted = await ensureActiveAssignment(client.id, startDatePicker.officeId, tenantId, startDatePicker.date);
+                    if (inserted === null) alert("既に現在利用中の期間があります。");
+                    setStartDatePicker(null);
+                    await reloadAssignments();
+                  } catch (e) { alert("利用開始に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                }}
+                className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white">開始</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 利用終了日 picker modal */}
+      {endDatePicker && (
+        <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4" onClick={() => setEndDatePicker(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-gray-800 mb-1">利用終了</h3>
+            <p className="text-xs text-gray-500 mb-3">{endDatePicker.officeName} の利用を終了します。</p>
+            <label className="text-xs text-gray-600 block mb-1">終了日</label>
+            <input
+              type="date"
+              value={endDatePicker.date}
+              onChange={(e) => setEndDatePicker({ ...endDatePicker, date: e.target.value })}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-4"
+            />
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setEndDatePicker(null)} className="text-sm px-3 py-1.5 rounded border border-gray-300 hover:bg-gray-50">キャンセル</button>
+              <button
+                onClick={async () => {
+                  try {
+                    await closeActiveAssignment(client.id, endDatePicker.officeId, endDatePicker.date);
+                    setEndDatePicker(null);
+                    await reloadAssignments();
+                  } catch (e) { alert("利用終了に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                }}
+                className="text-sm px-3 py-1.5 rounded bg-red-500 hover:bg-red-600 text-white">終了</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
