@@ -5289,6 +5289,14 @@ function ClientDetail({
   const [assignmentAdding, setAssignmentAdding] = useState<{ office_id: string; start_date: string; end_date: string } | null>(null);
   const [showAssignmentHistory, setShowAssignmentHistory] = useState(false);
 
+  // 月次実績送信 (居宅事業所宛)
+  const [showRecordModal, setShowRecordModal] = useState(false);
+  const [recordYearMonth, setRecordYearMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [recordToast, setRecordToast] = useState<{ kind: "success" | "error"; msg: string } | null>(null);
+
   const reloadAssignments = useCallback(async () => {
     try {
       const rows = await getClientAssignmentsForClient(client.id);
@@ -6066,6 +6074,25 @@ function ClientDetail({
               </button>
             </div>
 
+            {/* 月次実績送信 (居宅事業所宛) */}
+            <div className="bg-white rounded-xl shadow-sm px-3 py-2.5 mb-3 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-gray-500 shrink-0">月次実績</span>
+              <input
+                type="month"
+                value={recordYearMonth}
+                onChange={(e) => setRecordYearMonth(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1 text-xs"
+              />
+              <button
+                onClick={() => setShowRecordModal(true)}
+                disabled={!currentOfficeId}
+                title={!currentOfficeId ? "送信元事業所が選択されていません" : "居宅事業所に当月の福祉用具実績を送信"}
+                className="ml-auto text-[11px] px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-1.5">
+                <Send size={12} />
+                居宅事業所に実績送信
+              </button>
+            </div>
+
             {/* 全 office (福祉用具) 一覧 + toggle */}
             <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100 mb-3">
               {assignmentOffices.length === 0 ? (
@@ -6076,28 +6103,33 @@ function ClientDetail({
                 return (
                   <div key={o.id} className="flex items-center justify-between px-3 py-2.5">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-medium text-sm text-gray-800 truncate">{o.name}</span>
+                      <span className={`font-medium text-sm truncate ${o.id === currentOfficeId ? "text-gray-800" : "text-gray-500"}`}>{o.name}</span>
+                      {o.id === currentOfficeId && <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded shrink-0">自事業所</span>}
                       {isActive && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded shrink-0">利用中</span>}
                       {isActive && activeAssignment.start_date && (
                         <span className="text-[10px] text-gray-400 shrink-0">{activeAssignment.start_date}〜</span>
                       )}
                     </div>
-                    <button
-                      onClick={async () => {
-                        try {
-                          if (isActive) {
-                            if (!confirm(`${o.name} の利用を終了しますか？(終了日 = 今日)`)) return;
-                            await closeActiveAssignment(client.id, o.id);
-                          } else {
-                            const inserted = await ensureActiveAssignment(client.id, o.id, tenantId);
-                            if (inserted === null) alert("既に現在利用中の期間があります。");
-                          }
-                          await reloadAssignments();
-                        } catch (e) { alert((isActive ? "利用終了" : "利用開始") + "に失敗: " + (e instanceof Error ? e.message : String(e))); }
-                      }}
-                      className={`text-[11px] px-2.5 py-1 rounded-lg shrink-0 ${isActive ? "bg-red-500 hover:bg-red-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
-                      {isActive ? "利用終了" : "利用開始"}
-                    </button>
+                    {o.id === currentOfficeId ? (
+                      <button
+                        onClick={async () => {
+                          try {
+                            if (isActive) {
+                              if (!confirm(`${o.name} の利用を終了しますか？(終了日 = 今日)`)) return;
+                              await closeActiveAssignment(client.id, o.id);
+                            } else {
+                              const inserted = await ensureActiveAssignment(client.id, o.id, tenantId);
+                              if (inserted === null) alert("既に現在利用中の期間があります。");
+                            }
+                            await reloadAssignments();
+                          } catch (e) { alert((isActive ? "利用終了" : "利用開始") + "に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                        }}
+                        className={`text-[11px] px-2.5 py-1 rounded-lg shrink-0 ${isActive ? "bg-red-500 hover:bg-red-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
+                        {isActive ? "利用終了" : "利用開始"}
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-gray-400 shrink-0">他事業所のため操作不可</span>
+                    )}
                   </div>
                 );
               })}
@@ -7325,6 +7357,36 @@ function ClientDetail({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 月次実績送信モーダル */}
+      {showRecordModal && currentOfficeId && (
+        <SendMonthlyRecordModal
+          tenantId={tenantId}
+          client={client}
+          sourceOfficeId={currentOfficeId}
+          yearMonth={recordYearMonth}
+          clientItems={clientItems}
+          equipment={equipment}
+          priceHistory={priceHistory}
+          onClose={() => setShowRecordModal(false)}
+          onSuccess={() => {
+            setShowRecordModal(false);
+            setRecordToast({ kind: "success", msg: "月次実績を送信しました" });
+            setTimeout(() => setRecordToast(null), 3500);
+          }}
+          onError={(msg) => {
+            setRecordToast({ kind: "error", msg: `送信失敗: ${msg}` });
+            setTimeout(() => setRecordToast(null), 5000);
+          }}
+        />
+      )}
+
+      {/* 月次実績送信トースト */}
+      {recordToast && (
+        <div className={`fixed top-4 right-4 z-[80] px-4 py-2 rounded-lg shadow-lg text-sm text-white ${recordToast.kind === "success" ? "bg-emerald-500" : "bg-red-500"}`}>
+          {recordToast.msg}
         </div>
       )}
     </div>
@@ -18348,6 +18410,311 @@ function SendRentalReportModal({
             className="text-sm text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 disabled:cursor-not-allowed px-4 py-2 rounded-lg flex items-center gap-1.5">
             {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
             送付確定
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SendMonthlyRecordModal ──────────────────────────────────────────────────
+// 福祉用具の月次実績を居宅介護支援事業所に送付する確認モーダル
+
+type MonthlyRecordRow = {
+  date_range_start: string;
+  date_range_end: string;
+  equipment_name: string;
+  tais_code: string | null;
+  monthly_rental_fee: number;
+  category: string | null;
+};
+
+function buildRecordsForMonth(
+  yearMonth: string,
+  clientItems: OrderItem[],
+  equipment: Equipment[],
+  priceHistory: EquipmentPriceHistory[],
+): MonthlyRecordRow[] {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const monthStart = `${yearMonth}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+  return clientItems
+    .filter((i) => {
+      if (i.status === "cancelled") return false;
+      const start = i.rental_start_date;
+      const end = i.rental_end_date;
+      if (!start) return false;
+      if (start > monthEnd) return false;
+      if (end && end < monthStart) return false;
+      return true;
+    })
+    .map((i) => {
+      const eq = equipment.find((e) => e.product_code === i.product_code);
+      const price = getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0;
+      const rangeStart = i.rental_start_date && i.rental_start_date > monthStart ? i.rental_start_date : monthStart;
+      const rangeEnd = i.rental_end_date && i.rental_end_date < monthEnd ? i.rental_end_date : monthEnd;
+      return {
+        date_range_start: rangeStart,
+        date_range_end: rangeEnd,
+        equipment_name: eq?.name ?? i.product_code,
+        tais_code: eq?.tais_code ?? null,
+        monthly_rental_fee: price,
+        category: eq?.category ?? null,
+      };
+    });
+}
+
+function buildRecordHtml(yearMonth: string, clientName: string, records: MonthlyRecordRow[]): string {
+  const totalRows = records
+    .map(
+      (r) =>
+        `<tr><td>${r.date_range_start}</td><td>${r.date_range_end}</td><td>${r.equipment_name}</td><td>${r.tais_code ?? "-"}</td><td>${r.category ?? "-"}</td><td style="text-align:right">¥${r.monthly_rental_fee.toLocaleString()}</td></tr>`,
+    )
+    .join("");
+  const sum = records.reduce((s, r) => s + r.monthly_rental_fee, 0);
+  return `<div style="font-family:sans-serif;font-size:12px;padding:16px;">
+<h2 style="font-size:16px;margin:0 0 8px;">${yearMonth} 福祉用具実績 - ${clientName} 様</h2>
+<table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
+<thead><tr style="background:#f3f4f6"><th>開始</th><th>終了</th><th>用具名</th><th>TAIS</th><th>区分</th><th>月額</th></tr></thead>
+<tbody>${totalRows || '<tr><td colspan="6" style="text-align:center;color:#888">対象なし</td></tr>'}</tbody>
+<tfoot><tr><td colspan="5" style="text-align:right;font-weight:bold">合計</td><td style="text-align:right;font-weight:bold">¥${sum.toLocaleString()}</td></tr></tfoot>
+</table>
+</div>`;
+}
+
+function SendMonthlyRecordModal({
+  tenantId, client, sourceOfficeId, yearMonth, clientItems, equipment, priceHistory,
+  onClose, onSuccess, onError,
+}: {
+  tenantId: string;
+  client: Client;
+  sourceOfficeId: string;
+  yearMonth: string;
+  clientItems: OrderItem[];
+  equipment: Equipment[];
+  priceHistory: EquipmentPriceHistory[];
+  onClose: () => void;
+  onSuccess: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [choices, setChoices] = useState<CareOfficeChoice[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sourceOfficeName, setSourceOfficeName] = useState<string>("");
+  const [sending, setSending] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const records = useMemo(
+    () => buildRecordsForMonth(yearMonth, clientItems, equipment, priceHistory),
+    [yearMonth, clientItems, equipment, priceHistory],
+  );
+  const total = useMemo(() => records.reduce((s, r) => s + r.monthly_rental_fee, 0), [records]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data: asgn, error: asgnErr } = await supabase
+          .from("client_office_assignments")
+          .select("office_id")
+          .eq("tenant_id", tenantId)
+          .eq("client_id", client.id);
+        if (asgnErr) throw asgnErr;
+        const assignedIds = new Set((asgn ?? []).map((a) => a.office_id as string));
+
+        const { data: careOffices, error: careErr } = await supabase
+          .from("offices")
+          .select("id, name, service_type")
+          .eq("tenant_id", tenantId)
+          .eq("service_type", "居宅介護支援")
+          .order("sort_order", { ascending: true })
+          .order("created_at", { ascending: true });
+        if (careErr) throw careErr;
+
+        const { data: srcOffice } = await supabase
+          .from("offices")
+          .select("name")
+          .eq("id", sourceOfficeId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (srcOffice?.name) setSourceOfficeName(srcOffice.name as string);
+
+        const all: CareOfficeChoice[] = (careOffices ?? []).map((o) => ({
+          id: o.id as string,
+          name: o.name as string,
+          is_assigned: assignedIds.has(o.id as string),
+        }));
+        const assigned = all.filter((c) => c.is_assigned);
+        setChoices(all);
+        if (assigned.length > 0) {
+          setShowAll(false);
+          setSelectedId(assigned[0].id);
+        } else {
+          setShowAll(true);
+          setSelectedId(all[0]?.id ?? null);
+        }
+      } catch (e) {
+        if (!cancelled) setErrorMsg(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, client.id, sourceOfficeId]);
+
+  const visibleChoices = showAll ? choices : choices.filter((c) => c.is_assigned);
+  const assignedCount = choices.filter((c) => c.is_assigned).length;
+
+  const handleSend = async () => {
+    if (!selectedId) return;
+    setSending(true);
+    setErrorMsg(null);
+    try {
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userData?.user) throw new Error("ユーザー情報が取得できません");
+      const userId = userData.user.id;
+
+      const html = buildRecordHtml(yearMonth, client.name, records);
+      const title = `${yearMonth} 福祉用具実績 - ${client.name} 様`;
+      const payload = {
+        service_type: "福祉用具",
+        year_month: yearMonth,
+        client_id: client.id,
+        client_name: client.name,
+        records,
+      };
+
+      const { data: sd, error: sdErr } = await supabase
+        .from("shared_documents")
+        .insert({
+          tenant_id: tenantId,
+          client_id: client.id,
+          source_office_id: sourceOfficeId,
+          target_office_id: selectedId,
+          document_type: "service_record_monthly",
+          title,
+          html_content: html,
+          payload,
+          sent_by: userId,
+        })
+        .select("id")
+        .single();
+      if (sdErr || !sd) throw sdErr ?? new Error("shared_documents 作成失敗");
+
+      const { error: ntErr } = await supabase
+        .from("notifications")
+        .insert({
+          tenant_id: tenantId,
+          office_id: selectedId,
+          user_id: null,
+          type: "document_received",
+          ref_table: "shared_documents",
+          ref_id: sd.id,
+          title: `福祉用具実績を受信: ${client.name} 様 (${yearMonth})`,
+          body: `${sourceOfficeName || "送信元事業所"} から`,
+        });
+      if (ntErr) throw ntErr;
+
+      onSuccess();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErrorMsg(msg);
+      onError(msg);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[55] bg-black/60 flex items-center justify-center p-4 print:hidden" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">居宅介護支援事業所に月次実績を送信</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            {client.name} 様 / {yearMonth} / 全 {records.length} 件 / 合計 ¥{total.toLocaleString()}
+          </p>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          {records.length === 0 ? (
+            <p className="text-sm text-amber-600">この月にレンタル中だった用具がありません。</p>
+          ) : (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="text-left px-2 py-1.5">期間</th>
+                    <th className="text-left px-2 py-1.5">用具名</th>
+                    <th className="text-right px-2 py-1.5">月額</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {records.map((r, idx) => (
+                    <tr key={idx}>
+                      <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{r.date_range_start.slice(5)}〜{r.date_range_end.slice(5)}</td>
+                      <td className="px-2 py-1.5 text-gray-800 truncate">{r.equipment_name}</td>
+                      <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">¥{r.monthly_rental_fee.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex justify-center py-6"><Loader2 size={22} className="animate-spin text-emerald-400" /></div>
+          ) : choices.length === 0 ? (
+            <p className="text-sm text-red-500">tenant 内に居宅介護支援事業所が登録されていません</p>
+          ) : (
+            <div>
+              <label className="text-xs text-gray-500 block mb-1.5">送付先</label>
+              {assignedCount === 0 && (
+                <p className="text-xs text-amber-600 mb-2">
+                  この利用者に紐付く居宅介護支援事業所がありません。全候補から手動選択してください。
+                </p>
+              )}
+              {assignedCount > 0 && (
+                <label className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+                  <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-emerald-500" />
+                  <span>全 居宅介護支援事業所 から選ぶ</span>
+                </label>
+              )}
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {visibleChoices.map((c) => (
+                  <label key={c.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${selectedId === c.id ? "border-emerald-400 bg-emerald-50" : "border-gray-200 hover:bg-gray-50"}`}>
+                    <input type="radio" name="target_office_record" value={c.id}
+                      checked={selectedId === c.id}
+                      onChange={() => setSelectedId(c.id)}
+                      className="accent-emerald-500" />
+                    <span className="text-sm text-gray-800 flex-1 truncate">{c.name}</span>
+                    {c.is_assigned && <span className="text-[10px] text-emerald-600 shrink-0 px-1.5 py-0.5 bg-emerald-100 rounded">担当</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {errorMsg && (
+            <div className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {errorMsg}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
+          <button onClick={onClose} disabled={sending}
+            className="text-sm text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-100 disabled:opacity-50">
+            キャンセル
+          </button>
+          <button onClick={handleSend}
+            disabled={loading || sending || !selectedId || records.length === 0}
+            className="text-sm text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 disabled:cursor-not-allowed px-4 py-2 rounded-lg flex items-center gap-1.5">
+            {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            送信確定
           </button>
         </div>
       </div>
