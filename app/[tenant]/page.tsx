@@ -5287,6 +5287,7 @@ function ClientDetail({
   const [assignmentEditingId, setAssignmentEditingId] = useState<string | null>(null);
   const [assignmentEditForm, setAssignmentEditForm] = useState<{ start_date: string; end_date: string }>({ start_date: "", end_date: "" });
   const [assignmentAdding, setAssignmentAdding] = useState<{ office_id: string; start_date: string; end_date: string } | null>(null);
+  const [showAssignmentHistory, setShowAssignmentHistory] = useState(false);
 
   const reloadAssignments = useCallback(async () => {
     try {
@@ -6054,24 +6055,60 @@ function ClientDetail({
             </div>
           </div>
 
-          {/* 利用期間 (client_office_assignments) */}
+          {/* 利用期間 (client_office_assignments) — kaigo-app 風 */}
           <section>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-gray-500">利用期間</h3>
+              <h3 className="text-xs font-semibold text-gray-500">事業所別 利用状況</h3>
+              <button
+                onClick={() => setShowAssignmentHistory((v) => !v)}
+                className="text-[11px] text-gray-500 hover:text-gray-700 underline">
+                {showAssignmentHistory ? "履歴を閉じる" : "履歴を開く"}
+              </button>
+            </div>
+
+            {/* 全 office (福祉用具) 一覧 + toggle */}
+            <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100 mb-3">
+              {assignmentOffices.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-4">事業所が登録されていません</p>
+              ) : assignmentOffices.map((o) => {
+                const activeAssignment = clientAssignments.find((a) => a.office_id === o.id && a.end_date === null);
+                const isActive = !!activeAssignment;
+                return (
+                  <div key={o.id} className="flex items-center justify-between px-3 py-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-sm text-gray-800 truncate">{o.name}</span>
+                      {isActive && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded shrink-0">利用中</span>}
+                      {isActive && activeAssignment.start_date && (
+                        <span className="text-[10px] text-gray-400 shrink-0">{activeAssignment.start_date}〜</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (isActive) {
+                            if (!confirm(`${o.name} の利用を終了しますか？(終了日 = 今日)`)) return;
+                            await closeActiveAssignment(client.id, o.id);
+                          } else {
+                            const inserted = await ensureActiveAssignment(client.id, o.id, tenantId);
+                            if (inserted === null) alert("既に現在利用中の期間があります。");
+                          }
+                          await reloadAssignments();
+                        } catch (e) { alert((isActive ? "利用終了" : "利用開始") + "に失敗: " + (e instanceof Error ? e.message : String(e))); }
+                      }}
+                      className={`text-[11px] px-2.5 py-1 rounded-lg shrink-0 ${isActive ? "bg-red-500 hover:bg-red-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
+                      {isActive ? "利用終了" : "利用開始"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 履歴 (折り畳み) */}
+            {showAssignmentHistory && (
+            <div className="space-y-2">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold text-gray-500">履歴 (期間 詳細編集)</h4>
               <div className="flex gap-1.5">
-                {currentOfficeId && (
-                  <button
-                    onClick={async () => {
-                      try {
-                        const inserted = await ensureActiveAssignment(client.id, currentOfficeId, tenantId);
-                        if (inserted === null) alert("既に現在利用中の期間があります。");
-                        await reloadAssignments();
-                      } catch (e) { alert("利用開始に失敗: " + (e instanceof Error ? e.message : String(e))); }
-                    }}
-                    className="text-[11px] px-2 py-1 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600">
-                    新規利用開始
-                  </button>
-                )}
                 <button
                   onClick={() => {
                     const today = new Date().toISOString().split("T")[0];
@@ -6223,6 +6260,8 @@ function ClientDetail({
                   })}
                 </tbody>
               </table>
+            )}
+            </div>
             )}
           </section>
 
