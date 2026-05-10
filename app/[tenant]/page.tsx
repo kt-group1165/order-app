@@ -17,6 +17,9 @@ import {
   CheckCircle2,
   Loader2,
   AlertCircle,
+  Bell,
+  Check,
+  ArrowLeft,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   Truck,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -64,6 +67,15 @@ import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsag
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
 import { getMaxUserNumber } from "@kt/shared/user-number";
+import {
+  getNotifications,
+  getUnreadCount,
+  getSharedDocument,
+  markRead,
+  markSharedDocumentRead,
+  type NotificationRow,
+  type SharedDocumentRow,
+} from "@/lib/notifications";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
 
@@ -257,7 +269,7 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "settings";
+type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "notifications" | "settings";
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -362,6 +374,7 @@ export default function TenantPage({
       <header className="bg-emerald-600 text-white px-4 py-3 flex items-center gap-2 shrink-0">
         <Package size={20} />
         <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
+        <HeaderNotificationBadge currentOfficeId={currentOfficeId} onClick={() => setActiveTab("notifications")} />
         <span className="text-xs text-emerald-200">用具・発注管理</span>
         <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.10</span>
       </header>
@@ -370,12 +383,13 @@ export default function TenantPage({
       <div className="flex-1 overflow-hidden">
         {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
-        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
+        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={(clientId, docTaskId, expectedDocType) => { setDocsTabTarget(clientId ? { clientId, docTaskId, expectedDocType } : null); setActiveTab("documents"); }} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
+        {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
@@ -2517,7 +2531,7 @@ const KANA_ROWS = [
   { label: "ワ", chars: "ワヲン" },
 ];
 
-function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; initialClientId?: string | null; onClearInitialClient?: () => void }) {
+function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; onClearInitialClient?: () => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -4316,6 +4330,23 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, initialClientId,
           </div>
         )}
         {viewMode === "history" && <div className="flex-1" />}
+        {/* 自事業所/全利用者 toggle (currentOfficeId が選択されてる場合のみ) */}
+        {currentOfficeId && onOfficeViewAllChange && (
+          <div className="flex rounded-xl border border-gray-200 overflow-hidden text-xs font-medium shrink-0">
+            <button
+              onClick={() => onOfficeViewAllChange(false)}
+              className={`px-2.5 py-1.5 transition-colors ${!officeViewAll ? "bg-emerald-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+            >
+              自事業所
+            </button>
+            <button
+              onClick={() => onOfficeViewAllChange(true)}
+              className={`px-2.5 py-1.5 transition-colors ${officeViewAll ? "bg-emerald-500 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+            >
+              全利用者
+            </button>
+          </div>
+        )}
         <div className="flex gap-1 shrink-0">
           <button
             onClick={() => setShowNewClient(true)}
@@ -18867,5 +18898,191 @@ function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: stri
         </div>
       )}
     </div>
+  );
+}
+
+// ─── HeaderNotificationBadge ────────────────────────────────────────
+// 未読 notifications 数を表示する Bell badge。click で notifications タブへ。
+function HeaderNotificationBadge({ currentOfficeId, onClick }: { currentOfficeId: string | null; onClick: () => void }) {
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCount = async () => {
+      if (!currentOfficeId) { if (!cancelled) setUnread(0); return; }
+      const n = await getUnreadCount(currentOfficeId);
+      if (!cancelled) setUnread(n);
+    };
+    void fetchCount();
+    const t = setInterval(fetchCount, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [currentOfficeId]);
+
+  return (
+    <button
+      onClick={onClick}
+      className="relative flex items-center justify-center w-8 h-8 rounded-full hover:bg-emerald-700 transition-colors"
+      title="通知"
+    >
+      <Bell size={18} />
+      {unread > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ─── NotificationsTab ───────────────────────────────────────────────
+// 受信通知一覧 + 受信書類 view (iframe sandbox + 印刷)。
+function NotificationsTab({ currentOfficeId }: { currentOfficeId: string | null }) {
+  const [rows, setRows] = useState<NotificationRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [marking, setMarking] = useState<string | null>(null);
+  const [openDoc, setOpenDoc] = useState<SharedDocumentRow | null>(null);
+  const markedRef = useRef<Set<string>>(new Set());
+
+  const reload = async () => {
+    if (!currentOfficeId) { setRows([]); setLoading(false); return; }
+    const data = await getNotifications(currentOfficeId);
+    setRows(data);
+    setLoading(false);
+  };
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!currentOfficeId) {
+        if (!cancelled) { setRows([]); setLoading(false); }
+        return;
+      }
+      const data = await getNotifications(currentOfficeId);
+      if (!cancelled) { setRows(data); setLoading(false); }
+    };
+    void run();
+    return () => { cancelled = true; };
+  }, [currentOfficeId]);
+
+  const handleMarkRead = async (id: string) => {
+    setMarking(id);
+    await markRead(id);
+    setRows(prev => prev.map(r => r.id === id ? { ...r, read_at: new Date().toISOString() } : r));
+    setMarking(null);
+  };
+
+  const openDocFromRow = async (row: NotificationRow) => {
+    if (!row.ref_id) return;
+    const doc = await getSharedDocument(row.ref_id);
+    if (doc) {
+      setOpenDoc(doc);
+      // 関連 notification + shared_document の read_at を 1 度だけ update
+      if (!markedRef.current.has(doc.id)) {
+        markedRef.current.add(doc.id);
+        if (!doc.read_at) await markSharedDocumentRead(doc.id);
+        if (!row.read_at) await markRead(row.id);
+        await reload();
+      }
+    }
+  };
+
+  const unread = rows.filter(r => !r.read_at);
+  const read = rows.filter(r => r.read_at);
+
+  if (!currentOfficeId) {
+    return <div className="flex items-center justify-center py-20 text-gray-500 text-sm">事業所を選択してください</div>;
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 shrink-0">
+        <Bell size={18} className="text-emerald-600" />
+        <h2 className="font-semibold text-gray-700">通知</h2>
+        {loading && <Loader2 size={14} className="animate-spin text-gray-400" />}
+        <span className="ml-auto text-xs text-gray-500">未読 {unread.length} / 既読 {read.length}</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4 max-w-4xl mx-auto w-full">
+        <section>
+          <h3 className="text-sm font-semibold text-red-700 mb-2">未読 ({unread.length})</h3>
+          {unread.length === 0 ? (
+            <div className="rounded border bg-gray-50 px-4 py-6 text-center text-xs text-gray-500">未読の通知はありません</div>
+          ) : (
+            <ul className="divide-y rounded border bg-white">
+              {unread.map(row => (
+                <NotificationRow key={row.id} row={row} marking={marking === row.id} onOpen={() => openDocFromRow(row)} onMarkRead={() => handleMarkRead(row.id)} />
+              ))}
+            </ul>
+          )}
+        </section>
+        <section>
+          <h3 className="text-sm font-semibold text-gray-600 mb-2">既読 ({read.length})</h3>
+          {read.length === 0 ? (
+            <div className="rounded border bg-gray-50 px-4 py-6 text-center text-xs text-gray-500">既読の通知はありません</div>
+          ) : (
+            <ul className="divide-y rounded border bg-white">
+              {read.map(row => (
+                <NotificationRow key={row.id} row={row} marking={false} onOpen={() => openDocFromRow(row)} />
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {/* 受信書類 view modal */}
+      {openDoc && (
+        <div className="fixed inset-0 bg-black/60 z-[80] flex flex-col">
+          <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 shrink-0">
+            <button onClick={() => setOpenDoc(null)} className="text-gray-500 hover:text-gray-700"><ArrowLeft size={18} /></button>
+            <span className="font-semibold text-sm text-gray-800 flex-1 truncate">{openDoc.title}</span>
+            <span className="text-[11px] text-gray-500">{openDoc.sent_at?.slice(0, 16).replace("T", " ")}</span>
+            <button
+              onClick={() => {
+                const iframe = document.getElementById("shared-doc-iframe") as HTMLIFrameElement | null;
+                if (iframe?.contentWindow) iframe.contentWindow.print();
+                else window.print();
+              }}
+              className="text-xs bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1 rounded flex items-center gap-1"
+            >
+              <Printer size={12} /> 印刷
+            </button>
+          </div>
+          <iframe
+            id="shared-doc-iframe"
+            srcDoc={openDoc.html_content}
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            className="flex-1 border-0 bg-white"
+            title={openDoc.title}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationRow({ row, marking, onOpen, onMarkRead }: { row: NotificationRow; marking: boolean; onOpen: () => void; onMarkRead?: () => void }) {
+  const isDoc = row.type === "document_received" && row.ref_table === "shared_documents" && !!row.ref_id;
+  return (
+    <li className={`flex items-start gap-3 px-4 py-3 ${isDoc ? "cursor-pointer hover:bg-blue-50" : ""}`} onClick={isDoc ? onOpen : undefined}>
+      <div className="mt-0.5 text-gray-400">{isDoc ? <FileText size={18} /> : <Bell size={18} />}</div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-gray-900 truncate">{row.title}</div>
+        {row.body && <div className="mt-0.5 text-xs text-gray-600 line-clamp-2">{row.body}</div>}
+        <div className="mt-1 text-[11px] text-gray-400">
+          {row.created_at?.slice(0, 16).replace("T", " ")}
+          {row.read_at && <span className="ml-2 text-gray-400">既読 {row.read_at.slice(0, 16).replace("T", " ")}</span>}
+        </div>
+      </div>
+      {isDoc && (
+        <button onClick={(e) => { e.stopPropagation(); onOpen(); }} className="flex shrink-0 items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100">
+          内容を見る
+          <ChevronRight size={12} />
+        </button>
+      )}
+      {!row.read_at && onMarkRead && (
+        <button disabled={marking} onClick={(e) => { e.stopPropagation(); onMarkRead(); }} className="flex shrink-0 items-center gap-1 rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+          {marking ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          既読
+        </button>
+      )}
+    </li>
   );
 }
