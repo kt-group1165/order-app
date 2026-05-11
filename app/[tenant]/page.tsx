@@ -7542,6 +7542,12 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
     title?: string;
   } | null>(null);
 
+  // 受信ケアプラン (居宅介護支援 → 自事業所)
+  const [receivedCarePlans, setReceivedCarePlans] = useState<SharedDocumentRow[]>([]);
+  const [receivedCarePlansLoading, setReceivedCarePlansLoading] = useState(false);
+  const [previewSharedDoc, setPreviewSharedDoc] = useState<SharedDocumentRow | null>(null);
+  const [sourceOfficeNameMap, setSourceOfficeNameMap] = useState<Map<string, string>>(new Map());
+
   useEffect(() => {
     // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
     const officeFilter = officeViewAll ? null : currentOfficeId;
@@ -7590,12 +7596,51 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
     });
   }, [tenantId, currentOfficeId, officeViewAll]);
 
+  const loadReceivedCarePlans = useCallback(async (clientId: string) => {
+    if (!currentOfficeId) {
+      setReceivedCarePlans([]);
+      return;
+    }
+    setReceivedCarePlansLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("shared_documents")
+        .select("id, tenant_id, client_id, source_office_id, target_office_id, document_type, title, html_content, payload, source_document_id, sent_at, sent_by, read_at, read_by, created_at")
+        .eq("client_id", clientId)
+        .eq("target_office_id", currentOfficeId)
+        .in("document_type", ["care-plan-1", "care-plan-2", "care-plan-3"])
+        .order("sent_at", { ascending: false });
+      if (error) {
+        setReceivedCarePlans([]);
+        return;
+      }
+      const rows = (data ?? []) as SharedDocumentRow[];
+      setReceivedCarePlans(rows);
+      // 送信元事業所名 fetch
+      const sourceIds = Array.from(new Set(rows.map((r) => r.source_office_id)));
+      if (sourceIds.length > 0) {
+        const { data: offs } = await supabase
+          .from("offices")
+          .select("id, name")
+          .in("id", sourceIds);
+        const map = new Map<string, string>();
+        for (const o of ((offs ?? []) as Array<{ id: string; name: string }>)) {
+          map.set(o.id, o.name);
+        }
+        setSourceOfficeNameMap(map);
+      }
+    } finally {
+      setReceivedCarePlansLoading(false);
+    }
+  }, [currentOfficeId]);
+
   const loadClientData = async (client: Client) => {
     setClientLoading(true);
-    setClientItems([]); setDocuments([]); setPriceHistory([]); setOrderPaymentMap({});
+    setClientItems([]); setDocuments([]); setPriceHistory([]); setOrderPaymentMap({}); setReceivedCarePlans([]);
     const [{ data: ordersData }, docs] = await Promise.all([
       supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
       getClientDocuments(tenantId, client.id),
+      loadReceivedCarePlans(client.id),
     ]);
     setDocuments(docs);
     if (ordersData && ordersData.length > 0) {
@@ -7902,9 +7947,141 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
                     </div>
                   )}
                 </div>
+
+                {/* 受信ケアプラン (居宅介護支援 → 自事業所) — 帳票種別ごとにグループ化 */}
+                {(() => {
+                  // (source_office_id, sent_at ±5 分) でグループ化
+                  const GROUP_WINDOW_MS = 5 * 60 * 1000;
+                  type Group = {
+                    key: string;
+                    sourceOfficeId: string;
+                    sourceOfficeName: string;
+                    sentAt: string;
+                    items: SharedDocumentRow[];
+                  };
+                  const sorted = [...receivedCarePlans].sort((a, b) =>
+                    a.sent_at < b.sent_at ? -1 : 1,
+                  );
+                  const groups: Group[] = [];
+                  for (const r of sorted) {
+                    const t = new Date(r.sent_at).getTime();
+                    const g = groups.find(
+                      (gg) =>
+                        gg.sourceOfficeId === r.source_office_id &&
+                        Math.abs(new Date(gg.sentAt).getTime() - t) <= GROUP_WINDOW_MS,
+                    );
+                    if (g) {
+                      g.items.push(r);
+                    } else {
+                      groups.push({
+                        key: `${r.source_office_id}_${r.sent_at}`,
+                        sourceOfficeId: r.source_office_id,
+                        sourceOfficeName: sourceOfficeNameMap.get(r.source_office_id) ?? "—",
+                        sentAt: r.sent_at,
+                        items: [r],
+                      });
+                    }
+                  }
+                  for (const g of groups) {
+                    g.items.sort((a, b) => (a.document_type < b.document_type ? -1 : 1));
+                  }
+                  groups.sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
+
+                  const CARE_PLAN_LABEL: Record<string, string> = {
+                    "care-plan-1": "第1表",
+                    "care-plan-2": "第2表",
+                    "care-plan-3": "第3表",
+                  };
+
+                  return (
+                    <div className="mt-6">
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">
+                          受信ケアプラン ({groups.length} 件)
+                        </p>
+                        {receivedCarePlansLoading && <Loader2 size={12} className="animate-spin text-gray-400" />}
+                      </div>
+                      {groups.length === 0 ? (
+                        <p className="text-sm text-gray-400 text-center py-6 border border-dashed border-gray-200 rounded-lg">
+                          この利用者宛ての受信ケアプランはありません
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {groups.map((g) => (
+                            <div
+                              key={g.key}
+                              className="bg-white rounded-xl px-3 py-2.5 border border-blue-100 shadow-sm"
+                            >
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <FileText size={16} className="text-blue-500 shrink-0" />
+                                <span className="text-sm font-medium text-gray-800 truncate">
+                                  {g.sourceOfficeName}
+                                </span>
+                                {g.items.map((it) => (
+                                  <button
+                                    key={it.id}
+                                    type="button"
+                                    onClick={() => setPreviewSharedDoc(it)}
+                                    className="inline-flex items-center gap-0.5 rounded bg-blue-100 text-blue-700 px-1.5 py-0.5 text-[10px] font-medium hover:bg-blue-200"
+                                    title={`${CARE_PLAN_LABEL[it.document_type] ?? it.document_type} を表示`}
+                                  >
+                                    {CARE_PLAN_LABEL[it.document_type] ?? it.document_type}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="text-xs text-gray-400 ml-6">
+                                送信: {new Date(g.sentAt).toLocaleString("ja-JP", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                {g.items.length > 1 && <span className="ml-1">・{g.items.length} 帳票一括</span>}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 受信ケアプラン プレビューモーダル */}
+      {previewSharedDoc && (
+        <div className="fixed inset-0 z-[60] bg-black/60 flex flex-col" onClick={() => setPreviewSharedDoc(null)}>
+          <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setPreviewSharedDoc(null)} className="text-gray-500 hover:text-gray-700">✕</button>
+            <span className="font-semibold text-sm text-gray-800 flex-1 truncate">{previewSharedDoc.title}</span>
+            <span className="text-[11px] text-gray-500">
+              {previewSharedDoc.sent_at?.slice(0, 16).replace("T", " ")}
+            </span>
+            <button
+              onClick={() => {
+                const w = window.open("", "_blank");
+                if (w) { w.document.write(previewSharedDoc.html_content); w.document.close(); }
+              }}
+              className="text-xs border border-gray-300 bg-white text-gray-700 px-3 py-1 rounded hover:bg-gray-50"
+            >
+              別タブで開く
+            </button>
+            <button
+              onClick={() => {
+                const iframe = document.getElementById("received-careplan-iframe") as HTMLIFrameElement | null;
+                if (iframe?.contentWindow) iframe.contentWindow.print();
+              }}
+              className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded"
+            >
+              印刷
+            </button>
+          </div>
+          <iframe
+            id="received-careplan-iframe"
+            srcDoc={previewSharedDoc.html_content}
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            className="flex-1 border-0 bg-white"
+            title={previewSharedDoc.title}
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 
