@@ -7508,9 +7508,23 @@ function ClientDetail({
 
 // ─── Documents Tab ───────────────────────────────────────────────────────────
 
+// v2: pending doc_task バナー用 — expected_doc_type を日本語ラベルに変換
+const EXPECTED_DOC_TYPE_LABELS: Record<string, string> = {
+  rental_report: "貸与報告書",
+  care_plan: "個別援助計画書",
+  proposal: "選定提案書",
+  rental_contract: "重要事項説明書 / 契約書",
+  important_matters: "重要事項説明書",
+  change_contract: "変更契約書",
+};
+
 function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelectedClientId, initialDocTaskId, initialExpectedDocType, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; initialSelectedClientId?: string | null; initialDocTaskId?: string | null; initialExpectedDocType?: string | null; onClearInitialClient?: () => void }) {
   // v2: 「書類タスク」から遷移したときの紐付け doc_task.id (saveClientDocument 後に completed 化)
   const [pendingDocTaskId, setPendingDocTaskId] = useState<string | null>(null);
+  // v2: pending task の詳細 (バナー表示用 — trigger_label / due_date など)
+  const [pendingDocTask, setPendingDocTask] = useState<DocTask | null>(null);
+  // v2: pending task の expected_doc_type (state) — バナーラベル表示用
+  const [pendingExpectedDocType, setPendingExpectedDocType] = useState<string | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
@@ -7684,8 +7698,35 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
       console.error("closePendingDocTask error:", e);
     } finally {
       setPendingDocTaskId(null);
+      setPendingDocTask(null);
+      setPendingExpectedDocType(null);
     }
   };
+
+  // v2: pending doc_task の詳細を fetch (バナー表示用)
+  // pendingDocTaskId が null になる場面では呼び出し元 (closePendingDocTaskWith / 解除ボタン)
+  // が pendingDocTask も同時に null 化するため、ここでは fetch のみ責務とする。
+  useEffect(() => {
+    if (!pendingDocTaskId) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("doc_tasks")
+        .select("*")
+        .eq("id", pendingDocTaskId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) {
+        console.error("fetch pendingDocTask error:", error);
+        setPendingDocTask(null);
+        return;
+      }
+      setPendingDocTask((data as DocTask | null) ?? null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingDocTaskId]);
 
   // 書類タスクからの遷移時、対象 client を pre-select + (v2) modal auto-open + doc_task 紐付け
   useEffect(() => {
@@ -7698,6 +7739,7 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
       // v2: 該当 modal を自動 open
       if (initialExpectedDocType) {
         setPendingDocTaskId(initialDocTaskId ?? null);
+        setPendingExpectedDocType(initialExpectedDocType);
         switch (initialExpectedDocType) {
           case "care_plan":
             setCarePlanInitialParams(null);
@@ -7796,6 +7838,43 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
               <div className="flex h-full items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
             ) : (
               <div className="p-4 space-y-4">
+                {/* v2: 書類タスク連携中バナー (pending doc_task がある時のみ) */}
+                {pendingDocTaskId && pendingExpectedDocType && (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-800">
+                    <div className="flex items-start gap-2">
+                      <span className="shrink-0 text-base leading-5">📌</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold">
+                          書類タスク連携中 — 「{EXPECTED_DOC_TYPE_LABELS[pendingExpectedDocType] ?? pendingExpectedDocType}」を作成してください
+                        </p>
+                        {pendingDocTask && (
+                          <p className="text-xs text-blue-700 mt-1 leading-relaxed">
+                            {pendingDocTask.trigger_label && (
+                              <span>触発元: {pendingDocTask.trigger_label}</span>
+                            )}
+                            {pendingDocTask.due_date && (
+                              <span className="ml-2">期限: {pendingDocTask.due_date}</span>
+                            )}
+                            {!pendingDocTask.due_date && pendingDocTask.trigger_date && (
+                              <span className="ml-2">発生日: {pendingDocTask.trigger_date}</span>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingDocTaskId(null);
+                          setPendingDocTask(null);
+                          setPendingExpectedDocType(null);
+                        }}
+                        className="shrink-0 text-xs px-2 py-1 rounded border border-blue-300 bg-white text-blue-700 hover:bg-blue-100 transition-colors"
+                      >
+                        タスクを解除
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* 書類作成ボタン */}
                 <div>
                   <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">書類を作成</p>
