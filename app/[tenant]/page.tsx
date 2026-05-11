@@ -5228,6 +5228,8 @@ function ClientDetail({
   const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
   const [editingInsuranceId, setEditingInsuranceId] = useState<string | null>(null);
   const [insuranceSaving, setInsuranceSaving] = useState(false);
+  // 不完全 (保険者番号 + 被保険者番号 + 認定年月日 がいずれも未設定) の行は default 非表示
+  const [showIncompleteInsurance, setShowIncompleteInsurance] = useState(false);
 
   const emptyInsuranceForm = (): Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> => ({
     effective_date: null, insured_number: null, birth_date: null, care_level: client.care_level ?? null,
@@ -6537,9 +6539,37 @@ function ClientDetail({
             ) : (<>
 
             {/* 履歴一覧テーブル */}
+            {(() => {
+              const incompleteCount = insuranceRecords.filter(
+                (r) => !r.insurer_number && !r.insured_number && !r.certification_date,
+              ).length;
+              const visibleRecords = showIncompleteInsurance
+                ? insuranceRecords
+                : insuranceRecords.filter(
+                    (r) => r.insurer_number || r.insured_number || r.certification_date,
+                  );
+              return (
             <div className="shrink-0 mx-4 mt-3 mb-3 border border-gray-200 rounded-lg overflow-hidden">
               <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
-                <span className="text-xs font-semibold text-gray-700">介護認定 履歴一覧</span>
+                <span className="text-xs font-semibold text-gray-700">
+                  介護認定 履歴一覧
+                  {incompleteCount > 0 && (
+                    <span className="ml-2 text-[10px] text-gray-500">
+                      ({showIncompleteInsurance ? "全件" : `${visibleRecords.length} 件 + 未入力 ${incompleteCount} 件`})
+                    </span>
+                  )}
+                </span>
+                {incompleteCount > 0 && (
+                  <label className="flex items-center gap-1 text-[11px] text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showIncompleteInsurance}
+                      onChange={(e) => setShowIncompleteInsurance(e.target.checked)}
+                      className="accent-blue-500"
+                    />
+                    未入力行も表示
+                  </label>
+                )}
               </div>
               <div className="overflow-x-auto max-h-48 overflow-y-auto">
               <table className="w-full text-xs min-w-[700px]">
@@ -6551,9 +6581,9 @@ function ClientDetail({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
-                  {insuranceRecords.length === 0 ? (
+                  {visibleRecords.length === 0 ? (
                     <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">保険情報がありません</td></tr>
-                  ) : insuranceRecords.map((rec, idx) => {
+                  ) : visibleRecords.map((rec, idx) => {
                     const isSelected = (selectedInsuranceId ? rec.id === selectedInsuranceId : idx === 0) && !insuranceForm;
                     const careColor = rec.care_level?.includes("支援") ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700";
                     return (
@@ -6590,6 +6620,8 @@ function ClientDetail({
               </table>
               </div>
             </div>
+              );
+            })()}
 
             {/* 詳細フォーム */}
             <div className="flex-1 overflow-y-auto">
