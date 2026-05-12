@@ -233,6 +233,35 @@ export type DocTask = {
   merged_into_task_id: string | null;
 };
 
+// 個別援助計画書 要素 (発生事象を時系列で蓄積)
+// 用具追加/解約・保険情報更新/区分変更/居宅変更を 1 行ずつ INSERT し、UI で
+// 複数チェックして 1 計画書にまとめる。doc_tasks とは別系統。
+export type CarePlanElementType =
+  | "new_delivery"        // 新規納品
+  | "additional_delivery" // 追加納品
+  | "pickup"              // 回収 (一部解約)
+  | "plan_renewal"        // プラン更新 (認定期間満了 → 更新)
+  | "plan_change"         // プラン変更 (期間中の区分変更)
+  | "care_office_change"; // その他 (居宅介護支援事業所変更)
+
+export type CarePlanElementStatus = "pending" | "completed";
+
+export type CarePlanElement = {
+  id: string;
+  tenant_id: string;
+  office_id: string;
+  client_id: string;
+  occurred_at: string; // YYYY-MM-DD
+  element_type: CarePlanElementType;
+  ref_table: string;
+  ref_id: string;
+  detail: Record<string, unknown>;
+  status: CarePlanElementStatus;
+  linked_care_plan_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
 // 発注
 export type Order = {
   id: string;

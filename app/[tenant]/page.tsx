@@ -50,7 +50,8 @@ import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateE
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
-import { CarePlanTemplate } from "@/lib/supabase";
+import { getCarePlanElementsByClient, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText } from "@/lib/carePlanElements";
+import { CarePlanTemplate, CarePlanElement } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, getClientAssignmentsForClient, ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
 import {
@@ -13523,7 +13524,8 @@ function CarePlanPages({
   selectedItems, getEq, client, companyInfo,
   creationDate, gender, birthDate, certStartDate,
   consultantName, consultantRelation, consultationDate,
-  monitoringMonths, goalsText, precautionsText, TD, TH,
+  monitoringMonths, goalsText, precautionsText,
+  planTypeFlags, otherText, TD, TH,
 }: {
   selectedItems: OrderItem[];
   getEq: (code: string) => Equipment | undefined;
@@ -13539,6 +13541,8 @@ function CarePlanPages({
   monitoringMonths: string;
   goalsText: string;
   precautionsText: string;
+  planTypeFlags: { 新規納品: boolean; 追加納品: boolean; 回収: boolean; プラン更新: boolean; プラン変更: boolean; その他: boolean };
+  otherText: string;
   TD: React.CSSProperties;
   TH: React.CSSProperties;
 }) {
@@ -13602,6 +13606,27 @@ function CarePlanPages({
           <tr>
             <td style={{ border: "none", fontSize: "8pt" }}>事業所名：{companyInfo.companyName}</td>
             <td style={{ border: "none", textAlign: "right", fontSize: "8pt" }}>事業所番号：{companyInfo.businessNumber}</td>
+          </tr>
+        </tbody>
+      </table>
+      {/* 発生要因チェック (auto fill from selected care_plan_elements) */}
+      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "3px" }}>
+        <tbody>
+          <tr>
+            {(["新規納品", "追加納品", "回収", "プラン更新", "プラン変更"] as const).map((label) => (
+              <td key={label} style={{ ...TD, textAlign: "center", whiteSpace: "nowrap", fontSize: "8pt", padding: "2px 4px" }}>
+                <span style={{ display: "inline-block", width: "10px", textAlign: "center", marginRight: "2px" }}>
+                  {planTypeFlags[label] ? "☑" : "☐"}
+                </span>
+                {label}
+              </td>
+            ))}
+            <td style={{ ...TD, fontSize: "8pt", padding: "2px 4px" }}>
+              <span style={{ display: "inline-block", width: "10px", textAlign: "center", marginRight: "2px" }}>
+                {planTypeFlags.その他 ? "☑" : "☐"}
+              </span>
+              その他（{otherText || "　　"}）
+            </td>
           </tr>
         </tbody>
       </table>
@@ -13877,6 +13902,12 @@ function CarePlanModal({
     return m;
   });
 
+  // 発生要因 (care_plan_elements) - 計画書冒頭チェック 6 種の駆動元
+  const [elements, setElements] = useState<CarePlanElement[]>([]);
+  const [selectedElementIds, setSelectedElementIds] = useState<Set<string>>(
+    () => new Set((initialParams?.selectedElementIds as string[]) ?? []),
+  );
+
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const [gender, setGender] = useState((initialParams?.gender as string) ?? client.gender ?? "");
@@ -13889,6 +13920,50 @@ function CarePlanModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { getCarePlanTemplates(tenantId).then(setTemplates); }, [tenantId]);
+  useEffect(() => { getCarePlanElementsByClient(client.id).then(setElements); }, [client.id]);
+
+  // 選択中の要素から計画書冒頭 6 種チェックの ON 状態を導出 (auto fill)
+  const planTypeFlags = useMemo(() => {
+    const flags = { 新規納品: false, 追加納品: false, 回収: false, プラン更新: false, プラン変更: false, その他: false };
+    for (const e of elements) {
+      if (!selectedElementIds.has(e.id)) continue;
+      if (e.element_type === "new_delivery") flags.新規納品 = true;
+      else if (e.element_type === "additional_delivery") flags.追加納品 = true;
+      else if (e.element_type === "pickup") flags.回収 = true;
+      else if (e.element_type === "plan_renewal") flags.プラン更新 = true;
+      else if (e.element_type === "plan_change") flags.プラン変更 = true;
+      else if (e.element_type === "care_office_change") flags.その他 = true;
+    }
+    return flags;
+  }, [elements, selectedElementIds]);
+
+  const otherText = useMemo(() => {
+    const selectedEls = elements.filter((e) => selectedElementIds.has(e.id));
+    return buildOtherFreeText(selectedEls);
+  }, [elements, selectedElementIds]);
+
+  // 要素 check 時に用具系なら selectedIds / changeTypes を自動同期
+  const toggleElement = (el: CarePlanElement, checked: boolean) => {
+    setSelectedElementIds((prev) => {
+      const n = new Set(prev);
+      if (checked) n.add(el.id); else n.delete(el.id);
+      return n;
+    });
+    // 用具系要素 (ref_table='order_items') は対応 item を auto 選択
+    if (el.ref_table === "order_items") {
+      const label = el.element_type === "new_delivery" ? "新規納品"
+        : el.element_type === "additional_delivery" ? "追加納品"
+        : el.element_type === "pickup" ? "回収" : null;
+      if (label) {
+        if (checked) {
+          setSelectedIds((prev) => new Set(prev).add(el.ref_id));
+          setChangeTypes((p) => ({ ...p, [el.ref_id]: label }));
+        } else {
+          setSelectedIds((prev) => { const n = new Set(prev); n.delete(el.ref_id); return n; });
+        }
+      }
+    }
+  };
 
   const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
   const getEq = (code: string) => equipment.find((e) => e.product_code === code);
@@ -13936,11 +14011,15 @@ function CarePlanModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveClientDocument({
+      const saved = await saveClientDocument({
         tenant_id: tenantId, client_id: client.id, type: "care_plan",
         title: `個別援助計画書 ${creationDate}`,
-        params: { creationDate, selectedIds: [...selectedIds], changeTypes, gender, birthDate, certStartDate, consultantName, consultantRelation, consultationDate, monitoringMonths },
+        params: { creationDate, selectedIds: [...selectedIds], changeTypes, gender, birthDate, certStartDate, consultantName, consultantRelation, consultationDate, monitoringMonths, selectedElementIds: [...selectedElementIds], planTypeFlags, otherText },
       });
+      // 選択した発生要因を completed にして計画書に紐付け (灰色化、再使用不可)
+      if (selectedElementIds.size > 0) {
+        await completeCarePlanElements([...selectedElementIds], saved.id);
+      }
       onSaved?.();
     } finally { setSaving(false); }
   };
@@ -13980,6 +14059,30 @@ function CarePlanModal({
 
         {step === 1 ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
+              {elements.length === 0 ? (
+                <p className="text-sm text-gray-400">発生要因はまだ記録されていません</p>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                  {elements.map((el, idx) => {
+                    const completed = el.status === "completed";
+                    const checked = selectedElementIds.has(el.id);
+                    return (
+                      <label key={el.id} className={`flex items-center gap-2 px-3 py-2 ${completed ? "opacity-40" : "cursor-pointer hover:bg-gray-50"}`}>
+                        <input type="checkbox" checked={checked} disabled={completed}
+                          onChange={(e) => toggleElement(el, e.target.checked)}
+                          className="accent-emerald-500 shrink-0" />
+                        <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
+                        <span className="text-xs text-gray-500 shrink-0">{el.occurred_at}</span>
+                        <span className="flex-1 text-sm text-gray-800 min-w-0 truncate">{describeCarePlanElement(el)}</span>
+                        {completed && <span className="text-[10px] text-gray-400 shrink-0">（済）</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">書類に含める用具を選択</h3>
               {selectableItems.length === 0 ? (
@@ -14078,6 +14181,8 @@ function CarePlanModal({
               monitoringMonths={monitoringMonths}
               goalsText={goalsText}
               precautionsText={precautionsText}
+              planTypeFlags={planTypeFlags}
+              otherText={otherText}
               TD={TD}
               TH={TH}
             />
