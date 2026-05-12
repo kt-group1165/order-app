@@ -50,7 +50,7 @@ import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateE
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
-import { getCarePlanElementsByClient, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText } from "@/lib/carePlanElements";
+import { getCarePlanElementsByClient, getCertRenewalVirtuals, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText, isVirtualElement, parseVirtualInsuranceId } from "@/lib/carePlanElements";
 import { CarePlanTemplate, CarePlanElement } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, getClientAssignmentsForClient, ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
@@ -13920,7 +13920,22 @@ function CarePlanModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { getCarePlanTemplates(tenantId).then(setTemplates); }, [tenantId]);
-  useEffect(() => { getCarePlanElementsByClient(client.id).then(setElements); }, [client.id]);
+  useEffect(() => {
+    const load = async () => {
+      const [els, virts] = await Promise.all([
+        getCarePlanElementsByClient(client.id),
+        client.office_id
+          ? getCertRenewalVirtuals(client.id, tenantId, client.office_id)
+          : Promise.resolve([] as CarePlanElement[]),
+      ]);
+      const merged = [...virts, ...els].sort((a, b) => {
+        if (a.occurred_at !== b.occurred_at) return b.occurred_at.localeCompare(a.occurred_at);
+        return a.created_at.localeCompare(b.created_at);
+      });
+      setElements(merged);
+    };
+    load();
+  }, [client.id, client.office_id, tenantId]);
 
   // 選択中の要素から計画書冒頭 6 種チェックの ON 状態を導出 (auto fill)
   const planTypeFlags = useMemo(() => {
@@ -14016,9 +14031,27 @@ function CarePlanModal({
         title: `個別援助計画書 ${creationDate}`,
         params: { creationDate, selectedIds: [...selectedIds], changeTypes, gender, birthDate, certStartDate, consultantName, consultantRelation, consultationDate, monitoringMonths, selectedElementIds: [...selectedElementIds], planTypeFlags, otherText },
       });
-      // 選択した発生要因を completed にして計画書に紐付け (灰色化、再使用不可)
-      if (selectedElementIds.size > 0) {
-        await completeCarePlanElements([...selectedElementIds], saved.id);
+      // 仮想 cert_renewal は doc_tasks に実体化 → 完了マーク (バナー連携)
+      const allIds = [...selectedElementIds];
+      const virtualIds = allIds.filter(isVirtualElement);
+      const realIds = allIds.filter((id) => !isVirtualElement(id));
+      for (const vid of virtualIds) {
+        const insId = parseVirtualInsuranceId(vid);
+        const ve = elements.find((e) => e.id === vid);
+        if (!insId || !ve || !client.office_id) continue;
+        const task = await insertCertRenewalTask({
+          tenantId,
+          officeId: client.office_id,
+          clientId: client.id,
+          insuranceRecordId: insId,
+          certEndDate: ve.occurred_at,
+          expectedDocType: "care_plan",
+        });
+        if (task) await completeDocTask(task.id, saved.id);
+      }
+      // 実要素 → care_plan_elements を completed にして紐付け (灰色化、再使用不可)
+      if (realIds.length > 0) {
+        await completeCarePlanElements(realIds, saved.id);
       }
       onSaved?.();
     } finally { setSaving(false); }
