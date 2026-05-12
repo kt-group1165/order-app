@@ -13805,7 +13805,7 @@ function CarePlanPages({
                         </tr>
                       );
                     })}
-                    {Array.from({ length: Math.max(0, 6 - pageItems.length) }).map((_, i) => (
+                    {Array.from({ length: Math.max(0, 10 - pageItems.length) }).map((_, i) => (
                       <tr key={`empty-${i}`}>
                         <td style={{ ...TD, height: "26px" }}></td>
                         <td style={{ ...TD, height: "26px" }}></td>
