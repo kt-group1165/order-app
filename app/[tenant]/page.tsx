@@ -19478,18 +19478,36 @@ function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: stri
     (async () => {
       setLoading(true);
       try {
-        // member_offices junction 経由で current office の member_ids を取得
-        let memberIds: string[] | null = null;
+        // member_offices junction 経由で member_ids を取得。
+        //   ・自事業所モード (officeFilter あり) → その office に link する members
+        //   ・全事業所モード (officeFilter なし) → app_type='order-app' の office に link する members
+        //     (旧実装は tenant 全 members を見せていたが、kaigo-app ヘルパー数百名も含んでしまうため修正)
+        let memberIds: string[] = [];
         if (officeFilter) {
           const { data: junction } = await supabase
             .from("member_offices")
             .select("member_id")
             .eq("office_id", officeFilter);
           memberIds = ((junction ?? []) as { member_id: string }[]).map((r) => r.member_id);
+        } else {
+          const { data: orderOffices } = await supabase
+            .from("offices")
+            .select("id")
+            .eq("app_type", "order-app");
+          const orderOfficeIds = ((orderOffices ?? []) as { id: string }[]).map((o) => o.id);
+          if (orderOfficeIds.length > 0) {
+            const { data: junction } = await supabase
+              .from("member_offices")
+              .select("member_id")
+              .in("office_id", orderOfficeIds);
+            memberIds = Array.from(new Set(
+              ((junction ?? []) as { member_id: string }[]).map((r) => r.member_id)
+            ));
+          }
         }
         let q = supabase.from("members").select("*").eq("tenant_id", tenantId);
         if (!includeInactive) q = q.eq("status", "active");
-        if (memberIds) q = q.in("id", memberIds);
+        q = q.in("id", memberIds);
         const { data } = await q.order("furigana", { nullsFirst: false }).order("name");
         if (!cancelled) setMembers((data ?? []) as typeof members);
       } finally {
