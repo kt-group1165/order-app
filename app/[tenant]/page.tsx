@@ -13775,9 +13775,9 @@ function CarePlanPages({
                     <tr>
                       <th style={{ ...TH, width: "24px" }}>No</th>
                       <th style={{ ...TH, padding: "0" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
-                          <span>種目</span>
-                          <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
+                        <div style={{ display: "flex", padding: "2px 6px", borderBottom: "1px dotted #888" }}>
+                          <span style={{ flex: 1 }}>種目</span>
+                          <span style={{ width: "56px", textAlign: "center", borderLeft: "1px dotted #888", paddingLeft: "6px" }}>単位数</span>
                         </div>
                         <div style={{ padding: "2px 6px" }}>機種（型式）</div>
                       </th>
@@ -13795,9 +13795,9 @@ function CarePlanPages({
                         <tr key={item.id}>
                           <td style={{ ...TD, textAlign: "center" }}>{globalOffset + idx + 1}</td>
                           <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
+                            <div style={{ display: "flex", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
                               <span style={{ flex: 1, overflow: "hidden", fontSize: eq?.category === "認知症徘徊感知機器" ? "6pt" : undefined }}>{eq?.category ?? ""}</span>
-                              <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{unitsDisplay}</span>
+                              <span style={{ width: "56px", textAlign: "right", borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>{unitsDisplay}</span>
                             </div>
                             <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>{nameDisplay}</div>
                           </td>
@@ -13809,9 +13809,9 @@ function CarePlanPages({
                       <tr key={`empty-${i}`}>
                         <td style={TD}></td>
                         <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
+                          <div style={{ display: "flex", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
                             <span style={{ flex: 1, overflow: "hidden" }}>&nbsp;</span>
-                            <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>&nbsp;</span>
+                            <span style={{ width: "56px", borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>&nbsp;</span>
                           </div>
                           <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>&nbsp;</div>
                         </td>
