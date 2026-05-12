@@ -13807,9 +13807,12 @@ function CarePlanPages({
                     })}
                     {Array.from({ length: Math.max(0, 10 - pageItems.length) }).map((_, i) => (
                       <tr key={`empty-${i}`}>
-                        <td style={{ ...TD, height: "26px" }}></td>
-                        <td style={{ ...TD, height: "26px" }}></td>
-                        <td style={{ ...TD, height: "26px" }}></td>
+                        <td style={TD}></td>
+                        <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
+                          <div style={{ padding: "2px 6px", borderBottom: "1px dotted #888", height: "14px" }}></div>
+                          <div style={{ padding: "3px 6px", height: "14px" }}></div>
+                        </td>
+                        <td style={TD}></td>
                       </tr>
                     ))}
                   </tbody>
