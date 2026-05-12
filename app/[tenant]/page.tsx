@@ -13809,8 +13809,11 @@ function CarePlanPages({
                       <tr key={`empty-${i}`}>
                         <td style={TD}></td>
                         <td style={{ ...TD, padding: "0", verticalAlign: "top" }}>
-                          <div style={{ padding: "2px 6px", borderBottom: "1px dotted #888", height: "14px" }}></div>
-                          <div style={{ padding: "3px 6px", height: "14px" }}></div>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 6px", borderBottom: "1px dotted #888", fontSize: "7.5pt", color: "#333" }}>
+                            <span style={{ flex: 1, overflow: "hidden" }}>&nbsp;</span>
+                            <span style={{ borderLeft: "1px dotted #888", paddingLeft: "6px", whiteSpace: "nowrap" }}>&nbsp;</span>
+                          </div>
+                          <div style={{ padding: "3px 6px", fontSize: "7pt", whiteSpace: "nowrap", overflow: "hidden" }}>&nbsp;</div>
                         </td>
                         <td style={TD}></td>
                       </tr>
