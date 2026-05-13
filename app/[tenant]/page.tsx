@@ -50,7 +50,7 @@ import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateE
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
-import { getCarePlanElementsByClient, getCertRenewalVirtuals, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText, isVirtualElement, parseVirtualInsuranceId } from "@/lib/carePlanElements";
+import { getCarePlanElementsByClient, getCertRenewalVirtuals, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText, isVirtualElement, parseVirtualInsuranceId, filterElementsForDocType } from "@/lib/carePlanElements";
 import { CarePlanTemplate, CarePlanElement } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, getClientAssignmentsForClient, ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
@@ -14265,6 +14265,17 @@ function ProposalModal({
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
   const [saving, setSaving] = useState(false);
 
+  // 発生要因 (proposal = new_delivery / additional_delivery / plan_change)
+  const [elements, setElements] = useState<CarePlanElement[]>([]);
+  const [selectedElementIds, setSelectedElementIds] = useState<Set<string>>(
+    () => new Set((initialParams?.selectedElementIds as string[]) ?? []),
+  );
+  useEffect(() => {
+    getCarePlanElementsByClient(client.id).then((all) => {
+      setElements(filterElementsForDocType(all, "proposal"));
+    });
+  }, [client.id]);
+
   const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
   const getEq = (code: string) => equipment.find((e) => e.product_code === code);
 
@@ -14287,11 +14298,14 @@ function ProposalModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveClientDocument({
+      const saved = await saveClientDocument({
         tenant_id: tenantId, client_id: client.id, type: "proposal",
         title: `選定提案書 ${creationDate}`,
-        params: { creationDate, selectedIds: [...selectedIds] },
+        params: { creationDate, selectedIds: [...selectedIds], selectedElementIds: [...selectedElementIds] },
       });
+      if (selectedElementIds.size > 0) {
+        await completeCarePlanElements([...selectedElementIds], saved.id);
+      }
       onSaved?.();
     } finally { setSaving(false); }
   };
@@ -14328,6 +14342,36 @@ function ProposalModal({
 
         {step === 1 ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
+              {elements.length === 0 ? (
+                <p className="text-sm text-gray-400">対象となる発生要因はまだ記録されていません</p>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                  {elements.map((el, idx) => {
+                    const completed = el.status === "completed";
+                    const checked = selectedElementIds.has(el.id);
+                    return (
+                      <label key={el.id} className={`flex items-center gap-2 px-3 py-2 ${completed ? "opacity-40" : "cursor-pointer hover:bg-gray-50"}`}>
+                        <input type="checkbox" checked={checked} disabled={completed}
+                          onChange={(e) => {
+                            setSelectedElementIds((prev) => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(el.id); else n.delete(el.id);
+                              return n;
+                            });
+                          }}
+                          className="accent-blue-500 shrink-0" />
+                        <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
+                        <span className="text-xs text-gray-500 shrink-0">{el.occurred_at}</span>
+                        <span className="flex-1 text-sm text-gray-800 min-w-0 truncate">{describeCarePlanElement(el)}</span>
+                        {completed && <span className="text-[10px] text-gray-400 shrink-0">（済）</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">提案する用具を選択</h3>
               {selectableItems.length === 0 ? (
@@ -14505,6 +14549,15 @@ function ContractDocumentsModal({
   const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">("1");
   const [saving, setSaving] = useState(false);
 
+  // 発生要因 (rental_contract = new_delivery のみが対象)
+  const [elements, setElements] = useState<CarePlanElement[]>([]);
+  const [selectedElementIds, setSelectedElementIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    getCarePlanElementsByClient(client.id).then((all) => {
+      setElements(filterElementsForDocType(all, "rental_contract"));
+    });
+  }, [client.id]);
+
   const selectableItems = clientItems.filter((i) =>
     ["ordered", "delivered", "rental_started"].includes(i.status)
   );
@@ -14546,7 +14599,7 @@ function ContractDocumentsModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await Promise.all([
+      const [, contractDoc] = await Promise.all([
         saveClientDocument({
           tenant_id: tenantId, client_id: client.id,
           type: "important_matters",
@@ -14557,9 +14610,13 @@ function ContractDocumentsModal({
           tenant_id: tenantId, client_id: client.id,
           type: "rental_contract",
           title: `福祉用具貸与契約書 ${contractDate}`,
-          params: { contractDate, benefitRate, selectedIds: [...selectedIds] },
+          params: { contractDate, benefitRate, selectedIds: [...selectedIds], selectedElementIds: [...selectedElementIds] },
         }),
       ]);
+      // 選択した発生要因を契約書に紐付けて completed (灰色化、再使用不可)
+      if (selectedElementIds.size > 0) {
+        await completeCarePlanElements([...selectedElementIds], contractDoc.id);
+      }
       onSaved?.();
     } finally {
       setSaving(false);
@@ -14598,6 +14655,36 @@ function ContractDocumentsModal({
 
         {step === 1 ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
+              {elements.length === 0 ? (
+                <p className="text-sm text-gray-400">対象となる発生要因はまだ記録されていません</p>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                  {elements.map((el, idx) => {
+                    const completed = el.status === "completed";
+                    const checked = selectedElementIds.has(el.id);
+                    return (
+                      <label key={el.id} className={`flex items-center gap-2 px-3 py-2 ${completed ? "opacity-40" : "cursor-pointer hover:bg-gray-50"}`}>
+                        <input type="checkbox" checked={checked} disabled={completed}
+                          onChange={(e) => {
+                            setSelectedElementIds((prev) => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(el.id); else n.delete(el.id);
+                              return n;
+                            });
+                          }}
+                          className="accent-blue-500 shrink-0" />
+                        <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
+                        <span className="text-xs text-gray-500 shrink-0">{el.occurred_at}</span>
+                        <span className="flex-1 text-sm text-gray-800 min-w-0 truncate">{describeCarePlanElement(el)}</span>
+                        {completed && <span className="text-[10px] text-gray-400 shrink-0">（済）</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-500 block mb-1">説明日（重要事項）</label>
@@ -15670,6 +15757,17 @@ function ChangeContractModal({
   const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">(initialBenefitRate);
   const [saving, setSaving] = useState(false);
 
+  // 発生要因 (change_contract = additional_delivery / pickup / plan_change)
+  const [elements, setElements] = useState<CarePlanElement[]>([]);
+  const [selectedElementIds, setSelectedElementIds] = useState<Set<string>>(
+    () => new Set((initialParams?.selectedElementIds as string[]) ?? []),
+  );
+  useEffect(() => {
+    getCarePlanElementsByClient(client.id).then((all) => {
+      setElements(filterElementsForDocType(all, "change_contract"));
+    });
+  }, [client.id]);
+
   type Row = {
     itemId: string;
     productCode: string;
@@ -15765,13 +15863,16 @@ function ChangeContractModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveClientDocument({
+      const saved = await saveClientDocument({
         tenant_id: tenantId,
         client_id: client.id,
         type: "change_contract",
         title: `変更契約書 ${contractDate}`,
-        params: { contractDate, currentMonth, nextMonth, benefitRate },
+        params: { contractDate, currentMonth, nextMonth, benefitRate, selectedElementIds: [...selectedElementIds] },
       });
+      if (selectedElementIds.size > 0) {
+        await completeCarePlanElements([...selectedElementIds], saved.id);
+      }
       onSaved?.();
     } finally {
       setSaving(false);
@@ -15819,6 +15920,36 @@ function ChangeContractModal({
         {/* Step 1: 設定 */}
         {step === 1 && (
           <div className="flex-1 overflow-auto p-5 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
+              {elements.length === 0 ? (
+                <p className="text-sm text-gray-400">対象となる発生要因はまだ記録されていません</p>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-100 divide-y divide-gray-100">
+                  {elements.map((el, idx) => {
+                    const completed = el.status === "completed";
+                    const checked = selectedElementIds.has(el.id);
+                    return (
+                      <label key={el.id} className={`flex items-center gap-2 px-3 py-2 ${completed ? "opacity-40" : "cursor-pointer hover:bg-gray-50"}`}>
+                        <input type="checkbox" checked={checked} disabled={completed}
+                          onChange={(e) => {
+                            setSelectedElementIds((prev) => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(el.id); else n.delete(el.id);
+                              return n;
+                            });
+                          }}
+                          className="accent-emerald-500 shrink-0" />
+                        <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
+                        <span className="text-xs text-gray-500 shrink-0">{el.occurred_at}</span>
+                        <span className="flex-1 text-sm text-gray-800 min-w-0 truncate">{describeCarePlanElement(el)}</span>
+                        {completed && <span className="text-[10px] text-gray-400 shrink-0">（済）</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
               💡 変更前後の月を選択すると、レンタル中の用具を自動抽出します。チェックボックスで月ごとの含有を調整できます。
             </div>

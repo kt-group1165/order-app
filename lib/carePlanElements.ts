@@ -1,4 +1,26 @@
-import { supabase, CarePlanElement } from "./supabase";
+import { supabase, CarePlanElement, CarePlanElementType } from "./supabase";
+
+/** 書類種別 → 対象 element_type のマップ (発生要因の絞り込み用)
+ *  個別援助計画書が最大集合、他はそのサブセット。
+ *  - rental_contract (契約書): new_delivery のみ (= 利用者初の契約)
+ *  - change_contract (契約書別紙): 既存契約の変更
+ *  - care_plan (個別援助計画書): 全要因
+ *  - proposal (選定提案書): 解約・認定更新・居宅変更を除く
+ *  - supplier_email (発注書): 別系統 (発注時のみ) */
+export const DOC_TYPE_ELEMENT_TYPES: Record<string, CarePlanElementType[]> = {
+  rental_contract: ["new_delivery"],
+  change_contract: ["additional_delivery", "pickup", "plan_change"],
+  care_plan: ["new_delivery", "additional_delivery", "pickup", "plan_renewal", "plan_change", "care_office_change"],
+  proposal: ["new_delivery", "additional_delivery", "plan_change"],
+};
+
+/** 書類種別に応じて発生要因 list を絞る (UI 表示用) */
+export function filterElementsForDocType(elements: CarePlanElement[], docType: string): CarePlanElement[] {
+  const allowed = DOC_TYPE_ELEMENT_TYPES[docType];
+  if (!allowed) return [];
+  const allowedSet = new Set<CarePlanElementType>(allowed);
+  return elements.filter((e) => allowedSet.has(e.element_type));
+}
 
 /** 仮想 cert_renewal 要素の id prefix (DB 永続化されない一時要素を識別) */
 export const VIRTUAL_CERT_RENEWAL_PREFIX = "virtual:cert_renewal:";
