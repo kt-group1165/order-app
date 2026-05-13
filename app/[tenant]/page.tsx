@@ -14335,7 +14335,7 @@ function ProposalModal({
           <h2 className="font-semibold text-gray-800 flex-1">選定提案書</h2>
           {step === 1 && (
             <button
-              disabled={selectedIds.size === 0}
+              disabled={selectedIds.size === 0 && selectedElementIds.size === 0}
               onClick={() => setStep(2)}
               className="px-4 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40"
             >プレビュー →</button>
@@ -14372,6 +14372,14 @@ function ProposalModal({
                               if (e.target.checked) n.add(el.id); else n.delete(el.id);
                               return n;
                             });
+                            // 用具系要素 → 対応 item を selectedIds にも auto 反映
+                            if (el.ref_table === "order_items") {
+                              if (e.target.checked) {
+                                setSelectedIds((prev) => new Set(prev).add(el.ref_id));
+                              } else {
+                                setSelectedIds((prev) => { const n = new Set(prev); n.delete(el.ref_id); return n; });
+                              }
+                            }
                           }}
                           className="accent-blue-500 shrink-0" />
                         <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
@@ -14658,7 +14666,7 @@ function ContractDocumentsModal({
             </div>
           )}
           {step === 1 && (
-            <button disabled={selectedIds.size === 0} onClick={() => setStep(2)}
+            <button disabled={selectedIds.size === 0 && selectedElementIds.size === 0} onClick={() => setStep(2)}
               className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
               プレビュー →
             </button>
@@ -14685,6 +14693,14 @@ function ContractDocumentsModal({
                               if (e.target.checked) n.add(el.id); else n.delete(el.id);
                               return n;
                             });
+                            // 用具系要素 → 対応 item を selectedIds にも auto 反映
+                            if (el.ref_table === "order_items") {
+                              if (e.target.checked) {
+                                setSelectedIds((prev) => new Set(prev).add(el.ref_id));
+                              } else {
+                                setSelectedIds((prev) => { const n = new Set(prev); n.delete(el.ref_id); return n; });
+                              }
+                            }
                           }}
                           className="accent-blue-500 shrink-0" />
                         <span className="text-xs text-gray-400 w-6 shrink-0">{idx + 1}.</span>
@@ -15922,7 +15938,7 @@ function ChangeContractModal({
             </div>
           )}
           {step === 1 && (
-            <button disabled={rows.length === 0} onClick={() => setStep(2)}
+            <button disabled={rows.length === 0 && selectedElementIds.size === 0} onClick={() => setStep(2)}
               className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
               次へ（プレビュー）
             </button>
