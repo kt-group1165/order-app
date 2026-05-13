@@ -17416,6 +17416,9 @@ const DOC_BADGE_COLOR: Record<string, string> = {
   proposal: "bg-purple-100 text-purple-700",
 };
 
+// 書類種別の固定表示順 (人ごと grouped view で使用)
+const DOC_TYPE_ORDER = ["supplier_email", "rental_contract", "change_contract", "care_plan", "proposal"];
+
 // trigger_type → 表示ラベル (フィルタ用)
 const TRIGGER_LABEL: Record<string, string> = {
   order_placed: "発注",
@@ -17482,6 +17485,9 @@ function DocTasksTab({
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
   const [reload, setReload] = useState(0);
+  // 表示モード: 'client' (人 → 書類 → 発生要因 grouped) / 'flat' (期限順 flat list)
+  const [viewMode, setViewMode] = useState<"client" | "flat">("client");
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
 
   // v3: 受領モーダル / 統合モーダル
   const [receiveTarget, setReceiveTarget] = useState<DocTask | null>(null);
@@ -17671,6 +17677,62 @@ function DocTasksTab({
   // v3: 統合候補 (DB tasks のみ。virtual は対象外)
   const mergeCandidates = useMemo(() => findMergeCandidates(tasks), [tasks]);
 
+  // 統合候補 lookup: clientId|docType → MergeCandidateGroup
+  const mergeByKey = useMemo(() => {
+    const m = new Map<string, MergeCandidateGroup>();
+    for (const g of mergeCandidates) {
+      m.set(`${g.clientId}|${g.expectedDocType}`, g);
+    }
+    return m;
+  }, [mergeCandidates]);
+
+  // 人 → 書類 → 発生要因 の 3 階層 grouped view
+  const groupedByClient = useMemo(() => {
+    type DocGroup = { docType: string; rows: DocTaskRow[]; mergeGroup: MergeCandidateGroup | undefined };
+    type ClientGroup = { clientId: string; client: Client | undefined; docGroups: DocGroup[]; totalCount: number };
+
+    const byClient = new Map<string, Map<string, DocTaskRow[]>>();
+    for (const r of filteredRows) {
+      if (!byClient.has(r.client_id)) byClient.set(r.client_id, new Map());
+      const docMap = byClient.get(r.client_id)!;
+      if (!docMap.has(r.expected_doc_type)) docMap.set(r.expected_doc_type, []);
+      docMap.get(r.expected_doc_type)!.push(r);
+    }
+
+    const out: ClientGroup[] = [];
+    for (const [clientId, docMap] of byClient) {
+      const client = clientById.get(clientId);
+      const docGroups: DocGroup[] = [];
+      // 書類は DOC_TYPE_ORDER で固定順
+      for (const dt of DOC_TYPE_ORDER) {
+        const rows = docMap.get(dt);
+        if (!rows) continue;
+        // 行は trigger_date ASC
+        rows.sort((a, b) => a.trigger_date.localeCompare(b.trigger_date));
+        docGroups.push({ docType: dt, rows, mergeGroup: mergeByKey.get(`${clientId}|${dt}`) });
+      }
+      const totalCount = docGroups.reduce((s, g) => s + g.rows.length, 0);
+      out.push({ clientId, client, docGroups, totalCount });
+    }
+    // 人はフリガナ ASC (なければ name)
+    out.sort((a, b) => {
+      const ka = a.client?.furigana ?? a.client?.name ?? "";
+      const kb = b.client?.furigana ?? b.client?.name ?? "";
+      return ka.localeCompare(kb, "ja");
+    });
+    return out;
+  }, [filteredRows, clientById, mergeByKey]);
+
+  const toggleClient = (clientId: string) => {
+    setExpandedClients((prev) => {
+      const n = new Set(prev);
+      if (n.has(clientId)) n.delete(clientId); else n.add(clientId);
+      return n;
+    });
+  };
+  const expandAll = () => setExpandedClients(new Set(groupedByClient.map((g) => g.clientId)));
+  const collapseAll = () => setExpandedClients(new Set());
+
   const handleOpenDocs = async (row: DocTaskRow) => {
     let docTaskId: string | null = row.isVirtual ? null : row.id;
     if (row.isVirtual && row.insuranceRecordId && row.certEndDate) {
@@ -17803,6 +17865,29 @@ function DocTasksTab({
         ))}
       </div>
 
+      {/* 表示モード切替 */}
+      <div className="px-3 py-2 border-b border-gray-200 flex items-center gap-2 shrink-0">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">表示</span>
+        <button
+          onClick={() => setViewMode("client")}
+          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${viewMode === "client" ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
+        >
+          人ごと
+        </button>
+        <button
+          onClick={() => setViewMode("flat")}
+          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${viewMode === "flat" ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
+        >
+          期限順
+        </button>
+        {viewMode === "client" && (
+          <div className="ml-auto flex gap-2">
+            <button onClick={expandAll} className="text-[11px] text-gray-500 hover:text-gray-700 underline">全展開</button>
+            <button onClick={collapseAll} className="text-[11px] text-gray-500 hover:text-gray-700 underline">全折りたたみ</button>
+          </div>
+        )}
+      </div>
+
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-amber-400" /></div>
       ) : filteredRows.length === 0 ? (
@@ -17811,6 +17896,82 @@ function DocTasksTab({
             <CheckCircle2 size={32} className="text-emerald-400 mx-auto mb-2" />
             <p className="text-sm text-gray-500">{totalCount === 0 ? "該当する書類タスクはありません" : "該当する書類タスクはありません"}</p>
           </div>
+        </div>
+      ) : viewMode === "client" ? (
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+          {groupedByClient.map(({ clientId, client, docGroups, totalCount }) => {
+            const expanded = expandedClients.has(clientId);
+            return (
+              <div key={clientId} className="border border-gray-200 rounded-lg bg-white overflow-hidden">
+                <button
+                  onClick={() => toggleClient(clientId)}
+                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 text-left"
+                >
+                  {expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                  <span className="font-semibold text-gray-800">{client?.name ?? clientId.slice(0, 8)}</span>
+                  {client?.furigana && <span className="text-[10px] text-gray-400">{client.furigana}</span>}
+                  <span className="ml-auto text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                    未作成 {totalCount}
+                  </span>
+                </button>
+                {expanded && (
+                  <div className="border-t border-gray-100">
+                    {docGroups.map(({ docType, rows, mergeGroup }) => (
+                      <div key={docType} className="border-b border-gray-100 last:border-b-0">
+                        <div className="px-3 py-1.5 bg-gray-50 flex items-center gap-2">
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full ${DOC_BADGE_COLOR[docType] ?? "bg-gray-100 text-gray-700"}`}>
+                            {DOC_LABEL[docType] ?? docType}
+                          </span>
+                          <span className="text-[11px] text-gray-500">×{rows.length}</span>
+                          {mergeGroup && (
+                            <button
+                              onClick={() => handleClickMerge(mergeGroup)}
+                              className="ml-auto text-[10px] px-2 py-0.5 rounded border border-amber-300 text-amber-700 bg-white hover:bg-amber-50"
+                            >
+                              統合する
+                            </button>
+                          )}
+                        </div>
+                        <div>
+                          {rows.map((row) => {
+                            const badge = STATUS_BADGE[row.status];
+                            return (
+                              <div key={row.id} className="px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-gray-50 border-t border-gray-50">
+                                <span className="text-[10px] text-gray-500 w-20 shrink-0">{TRIGGER_LABEL[row.trigger_type] ?? row.trigger_type}</span>
+                                <span className="text-[11px] text-gray-700 flex-1 truncate">{row.trigger_label ?? row.trigger_date}</span>
+                                {row.isVirtual && <span className="text-[9px] text-amber-600 bg-amber-50 px-1 rounded shrink-0">仮</span>}
+                                <span className="text-[11px] text-gray-500 shrink-0">{row.due_date ?? "—"}</span>
+                                <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${badge.cls}`}>{badge.label}</span>
+                                {row.status === "pending" && (
+                                  <button
+                                    onClick={() => { void handleOpenDocs(row); }}
+                                    className="text-[11px] px-2 py-0.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 shrink-0"
+                                  >
+                                    書類を作る
+                                  </button>
+                                )}
+                                {row.status === "completed" && (
+                                  <button
+                                    onClick={() => handleClickReceive(row)}
+                                    className="text-[11px] px-2 py-0.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 shrink-0"
+                                  >
+                                    受領
+                                  </button>
+                                )}
+                                {row.status === "received" && (
+                                  <span className="text-[10px] text-gray-400 shrink-0">完了</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-3">
