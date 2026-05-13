@@ -6790,6 +6790,18 @@ function ClientDetail({
                       : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.support_office_date || "—"}</div>}
                   </div>
                   <div className="space-y-1">
+                    <label className="text-[11px] text-gray-500">居宅介護支援事業所</label>
+                    {insuranceForm
+                      ? <select
+                          value={F?.care_office_id ?? ""}
+                          onChange={e => setInsuranceForm(f => f ? { ...f, care_office_id: e.target.value || null } : f)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          <option value="">未選択</option>
+                          {careOfficesList.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </select>
+                      : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.care_office_id ? (careOfficesList.find(o => o.id === selRec.care_office_id)?.name ?? selRec?.care_manager_org ?? "—") : (selRec?.care_manager_org || "—")}</div>}
+                  </div>
+                  <div className="space-y-1">
                     <label className="text-[11px] text-gray-500">担当ケアマネージャー</label>
                     {insuranceForm
                       ? <input type="text" value={fv("care_manager")} onChange={e => sf("care_manager", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
