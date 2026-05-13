@@ -17556,6 +17556,8 @@ const TRIGGER_LABEL: Record<string, string> = {
   rental_started: "レンタル開始",
   partial_termination: "一部解約",
   cert_renewal: "認定更新",
+  plan_change: "プラン変更",
+  care_office_change: "居宅変更",
 };
 
 // cert_renewal で警告を出す日数 (認定終了 N 日前)

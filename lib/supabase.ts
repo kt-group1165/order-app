@@ -204,7 +204,9 @@ export type DocTaskTriggerType =
   | "order_placed"
   | "rental_started"
   | "partial_termination"
-  | "cert_renewal";
+  | "cert_renewal"
+  | "plan_change"
+  | "care_office_change";
 
 export type DocTaskStatus = "pending" | "completed" | "received" | "cancelled";
 
