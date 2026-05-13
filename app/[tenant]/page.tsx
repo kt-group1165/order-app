@@ -14297,10 +14297,11 @@ function ProposalModal({
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>選定提案書</title><style>
-      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0}
-      @page{size:A4 portrait;margin:10mm 12mm}
+      body{font-family:'Meiryo','MS PGothic',sans-serif;font-size:9pt;margin:0;padding:0;color:#000}
+      @page{size:A4 portrait;margin:10mm}
       table{border-collapse:collapse;width:100%}
-      td,th{border:1px solid #555;padding:2px 5px;vertical-align:middle}
+      td,th{border:1px solid #555;padding:2px 4px;vertical-align:middle}
+      #proposal-print-content{width:190mm;padding:0;margin:0 auto;box-shadow:none}
     </style></head><body>${el.innerHTML}</body></html>`);
     w.document.close();
     w.focus();
@@ -14322,8 +14323,8 @@ function ProposalModal({
     } finally { setSaving(false); }
   };
 
-  const TD: React.CSSProperties = { border: "1px solid #555", padding: "3px 6px", verticalAlign: "middle" as const };
-  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "3px 6px", textAlign: "center" as const, whiteSpace: "nowrap" as const, verticalAlign: "middle" as const };
+  const TD: React.CSSProperties = { border: "1px solid #555", padding: "2px 5px", verticalAlign: "middle" as const, fontSize: "8.5pt" };
+  const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "2px 5px", textAlign: "center" as const, whiteSpace: "nowrap" as const, verticalAlign: "middle" as const, fontSize: "8.5pt", fontWeight: "bold" as const };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
@@ -14434,32 +14435,47 @@ function ProposalModal({
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto bg-gray-100 p-4">
-            <div id="proposal-print-content" className="bg-white p-8 max-w-[794px] mx-auto shadow"
-              style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", fontSize: "9pt" }}>
-              <p style={{ fontSize: "14pt", fontWeight: "bold", textAlign: "center", marginBottom: "10px" }}>選定提案書</p>
-              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+            <div id="proposal-print-content" className="bg-white mx-auto shadow"
+              style={{
+                fontFamily: "'Meiryo','MS PGothic',sans-serif",
+                fontSize: "9pt",
+                color: "#000",
+                width: "190mm",
+                minHeight: "277mm",
+                padding: "0",
+                display: "flex",
+                flexDirection: "column" as const,
+              }}>
+              <p style={{ fontSize: "15pt", fontWeight: "bold", textAlign: "center", letterSpacing: "0.3em", margin: "0 0 6px" }}>選定提案書</p>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "4px", fontSize: "9pt" }}>
                 <tbody>
                   <tr>
-                    <td style={{ border: "none", width: "50%" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
-                    <td style={{ border: "none", textAlign: "right" as const }}>担当者：{companyInfo.staffName}　</td>
+                    <td style={{ border: "none", width: "50%", padding: "1px 0" }}>作成日：{creationDate ? toJapaneseEra(new Date(creationDate + "T00:00:00")) : "　　年　月　日"}</td>
+                    <td style={{ border: "none", textAlign: "right" as const, padding: "1px 0" }}>担当者：{companyInfo.staffName}</td>
                   </tr>
                   <tr>
-                    <td style={{ border: "none" }}>事業所名：{companyInfo.companyName}</td>
-                    <td style={{ border: "none", textAlign: "right" as const }}>事業所番号：{companyInfo.businessNumber}</td>
+                    <td style={{ border: "none", padding: "1px 0" }}>事業所名：{companyInfo.companyName}</td>
+                    <td style={{ border: "none", textAlign: "right" as const, padding: "1px 0" }}>事業所番号：{companyInfo.businessNumber}</td>
                   </tr>
                 </tbody>
               </table>
-              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px", tableLayout: "fixed" as const }}>
+                <colgroup>
+                  <col style={{ width: "22%" }} />
+                  <col style={{ width: "30%" }} />
+                  <col style={{ width: "18%" }} />
+                  <col style={{ width: "30%" }} />
+                </colgroup>
                 <tbody>
                   <tr>
-                    <th style={{ ...TH, width: "80px" }}>利用者氏名</th>
+                    <th style={TH}>利用者氏名</th>
                     <td style={TD}>{client.name}　様</td>
-                    <th style={{ ...TH, width: "60px" }}>フリガナ</th>
+                    <th style={TH}>フリガナ</th>
                     <td style={TD}>{client.furigana ?? ""}</td>
                   </tr>
                   <tr>
                     <th style={TH}>介護度</th>
-                    <td style={{ ...TD, width: "80px" }}>{client.care_level ?? ""}</td>
+                    <td style={TD}>{client.care_level ?? ""}</td>
                     <th style={TH}>担当者</th>
                     <td style={TD}>{companyInfo.staffName}</td>
                   </tr>
@@ -14473,12 +14489,19 @@ function ProposalModal({
                   </tr>
                 </tbody>
               </table>
-              <p style={{ fontWeight: "bold", margin: "8px 0 4px" }}>【貸与を提案する福祉用具】</p>
-              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px" }}>
+              <p style={{ fontWeight: "bold", margin: "4px 0 3px", fontSize: "9.5pt" }}>【貸与を提案する福祉用具】</p>
+              <table style={{ borderCollapse: "collapse" as const, width: "100%", marginBottom: "6px", tableLayout: "fixed" as const }}>
+                <colgroup>
+                  <col style={{ width: "26px" }} />
+                  <col style={{ width: "78px" }} />
+                  <col style={{ width: "33%" }} />
+                  <col />
+                  <col style={{ width: "44px" }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    {["No", "種目名・貸与価格", "商品名", "提案する理由", "採　否"].map((h, i) => (
-                      <th key={h} style={{ ...TH, width: i === 0 ? "24px" : i === 1 ? "90px" : i === 4 ? "48px" : undefined }}>{h}</th>
+                    {["No", "種目名・貸与価格", "商品名", "提案する理由", "採　否"].map((h) => (
+                      <th key={h} style={TH}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -14492,22 +14515,22 @@ function ProposalModal({
                       <Fragment key={item.id}>
                         <tr>
                           <td style={{ ...TD, textAlign: "center" as const }} rowSpan={rowspan}>{idx + 1}</td>
-                          <td style={{ ...TD, verticalAlign: "top" as const }} rowSpan={rowspan}>
+                          <td style={{ ...TD, verticalAlign: "top" as const, fontSize: "8pt" }} rowSpan={rowspan}>
                             <p style={{ margin: 0 }}>{eq?.category ?? ""}</p>
-                            {price && <p style={{ margin: "2px 0 0", fontSize: "7.5pt", color: "#555" }}>¥{price.toLocaleString()}/月</p>}
+                            {price && <p style={{ margin: "1px 0 0", fontSize: "7.5pt", color: "#555" }}>¥{price.toLocaleString()}/月</p>}
                           </td>
-                          <td style={{ ...TD, fontWeight: "bold" }}>◎ {eq?.name ?? item.product_code}</td>
-                          <td style={TD}>{eq?.proposal_reason ?? eq?.selection_reason ?? ""}</td>
-                          <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
+                          <td style={{ ...TD, fontWeight: "bold", wordBreak: "break-all" as const }}>◎ {eq?.name ?? item.product_code}</td>
+                          <td style={{ ...TD, fontSize: "8pt", wordBreak: "break-all" as const }}>{eq?.proposal_reason ?? eq?.selection_reason ?? ""}</td>
+                          <td style={{ ...TD, textAlign: "center" as const, fontSize: "8pt" }}>採　否</td>
                         </tr>
                         {compCodes.map((compCode) => {
                           const compEq = equipment.find((e) => e.product_code === compCode);
                           if (!compEq) return null;
                           return (
                             <tr key={compCode}>
-                              <td style={TD}>{compEq.name}</td>
-                              <td style={TD}>{compEq.selection_reason ?? ""}</td>
-                              <td style={{ ...TD, textAlign: "center" as const }}>採　否</td>
+                              <td style={{ ...TD, wordBreak: "break-all" as const }}>{compEq.name}</td>
+                              <td style={{ ...TD, fontSize: "8pt", wordBreak: "break-all" as const }}>{compEq.selection_reason ?? ""}</td>
+                              <td style={{ ...TD, textAlign: "center" as const, fontSize: "8pt" }}>採　否</td>
                             </tr>
                           );
                         })}
@@ -14520,8 +14543,9 @@ function ProposalModal({
                       const compCodes = (eq?.comparison_product_codes ?? []).filter((c) => equipment.find((e) => e.product_code === c));
                       return acc + 1 + compCodes.length;
                     }, 0);
+                    // 8 行まで空行で埋め、紙面のバランスを取る
                     return Array.from({ length: Math.max(0, 8 - totalRows) }).map((_, i) => (
-                      <tr key={`empty-${i}`} style={{ height: "24px" }}>
+                      <tr key={`empty-${i}`} style={{ height: "26px" }}>
                         <td style={{ ...TD, textAlign: "center" as const }}>&nbsp;</td>
                         <td style={TD}>&nbsp;</td>
                         <td style={TD}>&nbsp;</td>
@@ -14532,8 +14556,12 @@ function ProposalModal({
                   })()}
                 </tbody>
               </table>
-              <div style={{ textAlign: "right" as const, fontSize: "8.5pt", marginTop: "12px", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
-                {companyInfo.companyName}　{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}
+              <p style={{ margin: "8px 0 0", fontSize: "9pt" }}>以上、福祉用具選定提案書に基づき、商品のご提案を致しました。</p>
+              <div style={{ marginTop: "auto" }}>
+                <div style={{ fontSize: "8.5pt", marginTop: "12px", borderTop: "1px solid #999", paddingTop: "5px", lineHeight: 1.5 }}>
+                  <div>法人名称：{companyInfo.companyName}</div>
+                  <div>住　　所：{companyInfo.companyAddress}　TEL：{companyInfo.tel}　FAX：{companyInfo.fax}</div>
+                </div>
               </div>
             </div>
           </div>
