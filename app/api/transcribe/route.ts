@@ -40,10 +40,37 @@ export async function POST(req: NextRequest) {
 
     if (tenantId) {
       const supabase = await createClient();
-      const [clientsRes, equipmentRes] = await Promise.all([
-        supabase.from("clients").select("name, furigana").eq("tenant_id", tenantId),
-        supabase.from("equipment_master").select("name, furigana, category").eq("tenant_id", tenantId),
+      // clients (~1.8k) + equipment_master (~9k) を全件取得。
+      // 1000 行 limit 回避のため pagination loop で取り切る。
+      async function fetchAllRows<T>(
+        table: string,
+        cols: string,
+      ): Promise<T[]> {
+        const PAGE = 1000;
+        const acc: T[] = [];
+        let from = 0;
+        while (true) {
+          const { data, error } = await supabase
+            .from(table)
+            .select(cols)
+            .eq("tenant_id", tenantId)
+            .range(from, from + PAGE - 1);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          acc.push(...(data as unknown as T[]));
+          if (data.length < PAGE) break;
+          from += PAGE;
+        }
+        return acc;
+      }
+      type ClientRow = { name: string | null; furigana: string | null };
+      type EquipRow = { name: string | null; furigana: string | null; category: string | null };
+      const [clientsRows, equipmentRows] = await Promise.all([
+        fetchAllRows<ClientRow>("clients", "name, furigana"),
+        fetchAllRows<EquipRow>("equipment_master", "name, furigana, category"),
       ]);
+      const clientsRes = { data: clientsRows };
+      const equipmentRes = { data: equipmentRows };
 
       // Google PhraseSet は最大1200件のため優先度順で追加しキャップする
       const MAX_PHRASES = 1200;
