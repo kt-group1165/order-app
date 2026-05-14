@@ -45,21 +45,59 @@ export async function getDocTasks(
 }
 
 /** doc_task を completed にして linked_document_id をセット。
- *  (trigger 由来 doc_task のみ。仮想 cert_renewal task は client 側で INSERT 後に呼ぶ) */
+ *  (trigger 由来 doc_task のみ。仮想 cert_renewal task は client 側で INSERT 後に呼ぶ)
+ *
+ *  契約書 (rental_contract) ⇔ 追加契約書 (change_contract) は同一 trigger では
+ *  二者択一の関係 (どちらか作成すればもう一方は不要)。一方を completed にすると
+ *  対になる pending task を auto-cancel する。
+ */
+const PAIRED_DOC_TYPES: Record<string, string> = {
+  rental_contract: "change_contract",
+  change_contract: "rental_contract",
+};
+
 export async function completeDocTask(
   taskId: string,
   linkedDocumentId: string,
 ): Promise<void> {
+  // 1. 完了対象 task の trigger / doc_type を取得 (排他処理用)
+  const { data: task, error: fetchErr } = await supabase
+    .from("doc_tasks")
+    .select("trigger_type, trigger_ref_id, expected_doc_type")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (fetchErr) throw fetchErr;
+
+  // 2. 当該 task を completed に
+  const now = new Date().toISOString();
   const { error } = await supabase
     .from("doc_tasks")
     .update({
       status: "completed",
       linked_document_id: linkedDocumentId,
-      completed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      completed_at: now,
+      updated_at: now,
     })
     .eq("id", taskId);
   if (error) throw error;
+
+  // 3. 排他: 同一 trigger の対 doc_type の pending task を cancelled に
+  if (task && task.trigger_type && task.trigger_ref_id) {
+    const pairedType = PAIRED_DOC_TYPES[task.expected_doc_type];
+    if (pairedType) {
+      await supabase
+        .from("doc_tasks")
+        .update({
+          status: "cancelled",
+          cancelled_at: now,
+          updated_at: now,
+        })
+        .eq("trigger_type", task.trigger_type)
+        .eq("trigger_ref_id", task.trigger_ref_id)
+        .eq("expected_doc_type", pairedType)
+        .eq("status", "pending");
+    }
+  }
 }
 
 /** v3: completed の task を received にする。
