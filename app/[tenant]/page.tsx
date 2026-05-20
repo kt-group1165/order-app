@@ -64,6 +64,7 @@ import {
 } from "@/lib/billing";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
+import UserBillingTab from "./UserBillingTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
@@ -9085,9 +9086,16 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     return (
       <div className="flex flex-col h-full bg-white text-sm">
         <BillingSubTabNav active={subTab} onChange={setSubTab} />
-        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-          利用請求 — Phase 3 で実装予定
-        </div>
+        <UserBillingTab
+          tenantId={tenantId}
+          currentOfficeId={currentOfficeId}
+          clients={clients}
+          orderItems={orderItems}
+          orders={orders}
+          equipment={equipment}
+          insuranceRecords={insuranceRecords}
+          dataLoading={dataLoading}
+        />
       </div>
     );
   }
