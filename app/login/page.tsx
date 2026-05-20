@@ -3,8 +3,8 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Package } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
-import { isValidLoginId, loginIdToSyntheticEmail } from "@/lib/login_id";
+import { isValidLoginId } from "@/lib/login_id";
+import { ensureDeviceId, detectDeviceLabel } from "@/lib/device_id";
 
 export default function LoginPage() {
   return (
@@ -19,36 +19,86 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/";
-  const supabase = createClient();
 
-  function resolveEmail(value: string): string | null {
+  function validateIdentifier(value: string): boolean {
     const trimmed = value.trim();
-    if (!trimmed) return null;
-    if (trimmed.includes("@")) return trimmed; // 実 email
-    if (isValidLoginId(trimmed)) return loginIdToSyntheticEmail(trimmed);
-    return null;
+    if (!trimmed) return false;
+    if (trimmed.includes("@")) return true; // 実 email
+    return isValidLoginId(trimmed);
   }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    const email = resolveEmail(identifier);
-    if (!email) {
+    setInfo(null);
+    if (!validateIdentifier(identifier)) {
       setError("ログイン ID または メールアドレスの形式が正しくありません");
       return;
     }
     setLoading(true);
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) {
-      setError("ログインに失敗しました: " + signInError.message);
+    // Phase 11c: device_id cookie を確保 (submit 時に解決すれば effect 不要)
+    const deviceId = ensureDeviceId();
+    const deviceLabel = detectDeviceLabel();
+    if (!deviceId) {
+      setError("デバイス識別子の取得に失敗しました。ブラウザの cookie 設定をご確認ください。");
       setLoading(false);
       return;
     }
-    router.push(nextPath);
-    router.refresh();
+    let res: Response;
+    try {
+      res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: identifier.trim(),
+          password,
+          device_id: deviceId,
+          device_label: deviceLabel,
+        }),
+      });
+    } catch {
+      setError("ネットワークエラーが発生しました。接続を確認してください。");
+      setLoading(false);
+      return;
+    }
+
+    let data: { error?: string; message?: string; status?: string; ok?: boolean } = {};
+    try {
+      data = await res.json();
+    } catch {
+      // body 無しでも続行
+    }
+
+    if (res.status === 200 && data.ok) {
+      router.push(nextPath);
+      router.refresh();
+      return;
+    }
+    if (res.status === 202) {
+      // 新端末 or 承認待ち
+      setInfo(
+        data.message ??
+          "新しい端末からのログインです。管理者の承認をお待ちください。"
+      );
+      setLoading(false);
+      return;
+    }
+    if (res.status === 401) {
+      setError("ログインに失敗しました: 認証情報が正しくありません");
+      setLoading(false);
+      return;
+    }
+    if (res.status === 403) {
+      setError(data.message ?? "この端末ではログインできません。管理者に連絡してください。");
+      setLoading(false);
+      return;
+    }
+    setError(data.message ?? "ログインに失敗しました (" + res.status + ")");
+    setLoading(false);
   };
 
   return (
@@ -95,6 +145,11 @@ function LoginForm() {
           {error && (
             <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-md px-3 py-2">
               {error}
+            </p>
+          )}
+          {info && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+              {info}
             </p>
           )}
           <button
