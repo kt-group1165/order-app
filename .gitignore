@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# PII を含む CSV (国保請求 export / 利用者一覧 等) は repo に入れない
+*.CSV
+*.csv

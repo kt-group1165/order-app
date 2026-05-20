@@ -284,9 +284,13 @@ export default function UserBillingTab({
 
   const sortedRows = useMemo(
     () =>
-      filteredRows.slice().sort((a, b) =>
-        (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja")
-      ),
+      filteredRows.slice().sort((a, b) => {
+        // 施設は末尾に、個人利用者を先頭に
+        const fa = a.client.is_facility ? 1 : 0;
+        const fb = b.client.is_facility ? 1 : 0;
+        if (fa !== fb) return fa - fb;
+        return (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja");
+      }),
     [filteredRows]
   );
 
