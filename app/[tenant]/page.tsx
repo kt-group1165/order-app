@@ -8304,9 +8304,290 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
 
 // ─── Billing Tab ─────────────────────────────────────────────────────────────
 
+type BillingSubTab = "monthly" | "insurance" | "user" | "sales";
+
+const BILLING_SUB_TABS: { id: BillingSubTab; label: string }[] = [
+  { id: "monthly",   label: "月次情報" },
+  { id: "insurance", label: "介護請求" },
+  { id: "user",      label: "利用請求" },
+  { id: "sales",     label: "売上帳票" },
+];
+
+function BillingSubTabNav({ active, onChange }: { active: BillingSubTab; onChange: (id: BillingSubTab) => void }) {
+  return (
+    <div className="border-b border-gray-200 bg-white px-3 py-2 shrink-0 flex items-center gap-2">
+      {BILLING_SUB_TABS.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => onChange(t.id)}
+          className={`px-3 py-1 rounded-lg text-xs font-medium ${
+            active === t.id
+              ? "bg-indigo-500 text-white"
+              : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const MONTHLY_INFO_KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
+const MONTHLY_INFO_KANA_MAP: Record<string, string[]> = {
+  "あ":["ア","イ","ウ","エ","オ"],"か":["カ","キ","ク","ケ","コ","ガ","ギ","グ","ゲ","ゴ"],
+  "さ":["サ","シ","ス","セ","ソ","ザ","ジ","ズ","ゼ","ゾ"],"た":["タ","チ","ツ","テ","ト","ダ","ヂ","ヅ","デ","ド"],
+  "な":["ナ","ニ","ヌ","ネ","ノ"],"は":["ハ","ヒ","フ","ヘ","ホ","バ","ビ","ブ","ベ","ボ","パ","ピ","プ","ペ","ポ"],
+  "ま":["マ","ミ","ム","メ","モ"],"や":["ヤ","ユ","ヨ"],
+  "ら":["ラ","リ","ル","レ","ロ"],"わ":["ワ","ヲ","ン"],
+};
+const MONTHLY_INFO_ALL_KANA = Object.values(MONTHLY_INFO_KANA_MAP).flat();
+const monthlyInfoToKana = (s: string) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+
+function MonthlyInfoTab({
+  tenantId,
+  currentOfficeId,
+  clients,
+  insuranceRecords,
+  orderItems,
+  orders,
+  equipment,
+  hospitalizations,
+  careOffices,
+  dataLoading,
+}: {
+  tenantId: string;
+  currentOfficeId: string | null;
+  clients: Client[];
+  insuranceRecords: ClientInsuranceRecord[];
+  orderItems: OrderItem[];
+  orders: Order[];
+  equipment: Equipment[];
+  hospitalizations: ClientHospitalization[];
+  careOffices: CareOffice[];
+  dataLoading: boolean;
+}) {
+  const [billingMonth, setBillingMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [unitOverrides, setUnitOverrides] = useState<Map<string, number>>(new Map());
+  const [kanaFilter, setKanaFilter] = useState<string | null>(null);
+
+  useEffect(() => {
+    getUnitOverrides(tenantId, billingMonth)
+      .then((units) => {
+        const m = new Map<string, number>();
+        units.forEach((u) => m.set(u.order_item_id, u.units_override));
+        setUnitOverrides(m);
+      })
+      .catch(console.error);
+  }, [tenantId, billingMonth]);
+
+  const [y, m] = billingMonth.split("-").map(Number);
+  const prevMonth = () => { const d = new Date(y, m - 2, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+  const nextMonth = () => { const d = new Date(y, m, 1);     setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+
+  // 当月に対象月が掛かる insurance_record を引く (effective_date <= 月末 && (cert_end >= 月初 || null))
+  const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
+    const monthStart = `${billingMonth}-01`;
+    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const recs = insuranceRecords
+      .filter((r) => r.client_id === clientId)
+      .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
+    return (
+      recs.find((r) => {
+        const start = r.certification_start_date ?? r.effective_date;
+        const end = r.certification_end_date;
+        if (start && start > monthEnd) return false;
+        if (end && end < monthStart) return false;
+        return true;
+      }) ?? null
+    );
+  };
+
+  // 当月の単位数集計 (簡易版: 入院半月判定を含む)
+  const computeMonthlyUnits = (clientId: string): number => {
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0, 23, 59, 59);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+    const clientOrderIds = new Set(orders.filter((o) => o.client_id === clientId).map((o) => o.id));
+    const clientHosp = hospitalizations.filter((h) => h.client_id === clientId);
+
+    let total = 0;
+    for (const item of orderItems) {
+      if (!clientOrderIds.has(item.order_id)) continue;
+      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+      if (pt !== "介護") continue;
+      if (!item.rental_start_date) continue;
+      const start = parseLocalDate(item.rental_start_date);
+      if (start > monthEnd) continue;
+      if (item.status === "terminated" && item.rental_end_date) {
+        const end = parseLocalDate(item.rental_end_date);
+        if (end < monthStart) continue;
+      }
+      if (item.status !== "rental_started" && item.status !== "terminated") continue;
+
+      // override 優先、無ければ rental_price/10
+      let units: number;
+      if (unitOverrides.has(item.id)) {
+        units = unitOverrides.get(item.id)!;
+      } else {
+        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+        const rentalStart = parseLocalDate(item.rental_start_date);
+        const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
+        let billingDays = 0, firstHalf = false, secondHalf = false;
+        for (let d = 1; d <= daysInMonth; d++) {
+          const date = new Date(y, m - 1, d);
+          if (date < rentalStart || date > rentalEnd) continue;
+          const inHosp = clientHosp.some((h) => {
+            const admit = parseLocalDate(h.admission_date);
+            const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
+            return date >= admit && date <= discharge;
+          });
+          if (!inHosp) {
+            billingDays++;
+            if (d <= 15) firstHalf = true; else secondHalf = true;
+          }
+        }
+        if (billingDays === 0) units = 0;
+        else if (firstHalf && !secondHalf) units = Math.round(base / 2);
+        else if (secondHalf && !firstHalf) units = Math.round(base / 2);
+        else units = base;
+      }
+      total += units * item.quantity;
+    }
+    return total;
+  };
+
+  // 当月にアクティブな利用者 (介護保険のレンタル item が 1 件以上ある利用者) のみ
+  const monthlyRows = useMemo(() => {
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0, 23, 59, 59);
+    const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+    const clientIdsWithActive = new Set<string>();
+    for (const item of orderItems) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order?.client_id) continue;
+      if (currentOfficeId && order.office_id && order.office_id !== currentOfficeId) continue;
+      const pt = item.payment_type ?? order.payment_type ?? "介護";
+      if (pt !== "介護") continue;
+      if (!item.rental_start_date) continue;
+      const start = parseLocalDate(item.rental_start_date);
+      if (start > monthEnd) continue;
+      if (item.status === "terminated" && item.rental_end_date) {
+        const end = parseLocalDate(item.rental_end_date);
+        if (end < monthStart) continue;
+      }
+      if (item.status !== "rental_started" && item.status !== "terminated") continue;
+      clientIdsWithActive.add(order.client_id);
+    }
+    return clients
+      .filter((c) => clientIdsWithActive.has(c.id))
+      .map((client) => {
+        const ins = getActiveInsuranceRecord(client.id);
+        const careOfficeId = client.care_office_id ?? ins?.care_office_id ?? null;
+        const careOffice = careOfficeId ? careOffices.find((co) => co.id === careOfficeId) ?? null : null;
+        const units = computeMonthlyUnits(client.id);
+        return { client, ins, careOffice, units };
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- ins/careOffice/units 集計は state 依存だが意図的に billingMonth + unitOverrides 切替時にだけ recompute
+  }, [clients, orderItems, orders, billingMonth, unitOverrides, currentOfficeId, careOffices, insuranceRecords, hospitalizations, equipment]);
+
+  // かな行フィルター
+  const filteredRows = useMemo(() => {
+    if (!kanaFilter) return monthlyRows;
+    return monthlyRows.filter(({ client }) => {
+      const first = monthlyInfoToKana((client.furigana ?? client.name).charAt(0));
+      return kanaFilter === "他" ? !MONTHLY_INFO_ALL_KANA.includes(first) : (MONTHLY_INFO_KANA_MAP[kanaFilter] ?? []).includes(first);
+    });
+  }, [monthlyRows, kanaFilter]);
+
+  const sortedRows = useMemo(
+    () => filteredRows.slice().sort((a, b) => (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja")),
+    [filteredRows]
+  );
+
+  if (dataLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 size={22} className="animate-spin text-indigo-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 min-h-0">
+      {/* 左: かな行フィルター */}
+      <div className="w-10 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col items-center py-1 gap-0.5 overflow-y-auto">
+        <button
+          onClick={() => setKanaFilter(null)}
+          className={`w-8 py-1 rounded text-sm font-bold transition-colors ${kanaFilter === null ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+        >全</button>
+        {MONTHLY_INFO_KANA_ROWS.map((k) => (
+          <button
+            key={k}
+            onClick={() => setKanaFilter(kanaFilter === k ? null : k)}
+            className={`w-8 py-1 rounded text-sm font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}
+          >{k}</button>
+        ))}
+      </div>
+
+      {/* 中央: ツールバー + テーブル */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2">
+          <button onClick={prevMonth} className="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-xs">◀</button>
+          <span className="text-sm font-semibold text-gray-700">{y}年 {m}月</span>
+          <button onClick={nextMonth} className="px-2 py-1 rounded bg-white border border-gray-300 hover:bg-gray-50 text-xs">▶</button>
+          <span className="text-xs text-gray-500 ml-2">{sortedRows.length} 件</span>
+        </div>
+        <div className="flex-1 overflow-auto">
+          <table className="min-w-full text-xs border-collapse">
+            <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
+              <tr>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">保険変更</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">保険者</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">被保険者番号</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">利用者名</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">利用者番号</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">作成区分</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">支援事業所番号</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-left">居宅介護支援事業所名</th>
+                <th className="px-2 py-1.5 border border-gray-300 text-right">区分支給限度基準内単位数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map(({ client, ins, careOffice, units }) => (
+                <tr key={client.id} className="hover:bg-blue-50">
+                  <td className="px-2 py-1 border border-gray-200 text-center text-gray-400">-</td>
+                  <td className="px-2 py-1 border border-gray-200">{ins?.insurer_name ?? client.care_manager_org ?? "-"}</td>
+                  <td className="px-2 py-1 border border-gray-200 font-mono">{ins?.insured_number ?? client.insured_number ?? "-"}</td>
+                  <td className="px-2 py-1 border border-gray-200">{client.name}</td>
+                  <td className="px-2 py-1 border border-gray-200 font-mono">{client.user_number ?? "-"}</td>
+                  <td className="px-2 py-1 border border-gray-200">居宅介護支援事業者作成</td>
+                  <td className="px-2 py-1 border border-gray-200 font-mono">{careOffice?.office_number ?? "-"}</td>
+                  <td className="px-2 py-1 border border-gray-200 truncate max-w-[200px]" title={careOffice?.name ?? ""}>{careOffice?.name ?? client.care_manager_org ?? "-"}</td>
+                  <td className="px-2 py-1 border border-gray-200 text-right font-mono">{units.toLocaleString()}</td>
+                </tr>
+              ))}
+              {sortedRows.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-3 py-8 text-center text-gray-400 text-sm">対象月にレンタル利用のある利用者がいません</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
-  // サブタブ（請求明細 / 売上帳票）
-  const [subTab, setSubTab] = useState<"billing" | "sales">("billing");
+  // サブタブ: 月次情報 / 介護請求 / 利用請求 / 売上帳票
+  const [subTab, setSubTab] = useState<BillingSubTab>("monthly");
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -8316,6 +8597,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
+  const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [invoiceClient, setInvoiceClient] = useState<Client | null>(null);
 
@@ -8367,7 +8649,8 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       getOffices(tenantId),
       fetchAllPaged<ClientInsuranceRecord>("client_insurance_records"),
       fetchAllPaged<ClientHospitalization>("client_hospitalizations"),
-    ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw]) => {
+      getCareOffices(tenantId),
+    ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw, coffs]) => {
       setClients(c);
       setEquipment(eq);
       setOrderItems(items);
@@ -8376,6 +8659,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       setOffices(offs);
       setInsuranceRecords(insRaw as ClientInsuranceRecord[]);
       setHospitalizations(hospRaw as ClientHospitalization[]);
+      setCareOffices(coffs as CareOffice[]);
       // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
       const codes = [...new Set(items.map((i: OrderItem) => i.product_code))];
       if (codes.length > 0) {
@@ -8744,11 +9028,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   if (subTab === "sales") {
     return (
       <div className="flex flex-col h-full bg-white text-sm">
-        {/* サブタブ切替 */}
-        <div className="border-b border-gray-200 bg-white px-3 py-2 shrink-0 flex items-center gap-2">
-          <button onClick={() => setSubTab("billing")} className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200">請求明細</button>
-          <button onClick={() => setSubTab("sales")} className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-500 text-white">売上帳票</button>
-        </div>
+        <BillingSubTabNav active={subTab} onChange={setSubTab} />
         <SalesReportTab
           tenantId={tenantId}
           clients={clients}
@@ -8761,13 +9041,40 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     );
   }
 
+  if (subTab === "monthly") {
+    return (
+      <div className="flex flex-col h-full bg-white text-sm">
+        <BillingSubTabNav active={subTab} onChange={setSubTab} />
+        <MonthlyInfoTab
+          tenantId={tenantId}
+          currentOfficeId={currentOfficeId}
+          clients={clients}
+          insuranceRecords={insuranceRecords}
+          orderItems={orderItems}
+          orders={orders}
+          equipment={equipment}
+          hospitalizations={hospitalizations}
+          careOffices={careOffices}
+          dataLoading={dataLoading}
+        />
+      </div>
+    );
+  }
+
+  if (subTab === "user") {
+    return (
+      <div className="flex flex-col h-full bg-white text-sm">
+        <BillingSubTabNav active={subTab} onChange={setSubTab} />
+        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+          利用請求 — Phase 3 で実装予定
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-white text-sm">
-      {/* サブタブ切替 */}
-      <div className="border-b border-gray-200 bg-white px-3 py-2 shrink-0 flex items-center gap-2">
-        <button onClick={() => setSubTab("billing")} className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-500 text-white">請求明細</button>
-        <button onClick={() => setSubTab("sales")} className="px-3 py-1 rounded-lg text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200">売上帳票</button>
-      </div>
+      <BillingSubTabNav active={subTab} onChange={setSubTab} />
       {/* ── ツールバー ── */}
       <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
