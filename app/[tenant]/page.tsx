@@ -55,12 +55,12 @@ import { CarePlanTemplate, CarePlanElement } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getOffices, getOfficePrices, createOffice, updateOffice, deleteOffice, upsertOfficePrice, deleteOfficePrice, bulkUpsertOfficePrices, getClientOfficeAssignments, assignClientToOffice, removeClientFromOffice, getClientAssignmentsForClient, ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment, type Office, type EquipmentOfficePrice, type ClientOfficeAssignment } from "@/lib/offices";
 import {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   getLateFlags, setLateFlag, removeLateFlag,
   getUnitOverrides, setUnitOverride, removeUnitOverride,
   getRebillFlags, setRebillFlag, removeRebillFlag,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
-  type BillingLateFlag, type BillingUnitOverride, type BillingRebillFlag,
+  type BillingUnitOverride,
+  type BillingLateFlag, type BillingRebillFlag,
 } from "@/lib/billing";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
@@ -8675,6 +8675,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
   const [unitOverrides, setUnitOverridesState] = useState<Map<string, number>>(new Map()); // key: order_item_id
   const [rebillFlags, setRebillFlagsState] = useState<Map<string, BillingRebillFlag>>(new Map()); // key: "clientId-month"
+  const [lateFlags, setLateFlagsState] = useState<Map<string, BillingLateFlag>>(new Map()); // key: clientId (= flag.month は提出月)
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
@@ -8746,15 +8747,33 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     Promise.all([
       getUnitOverrides(tenantId, billingMonth),
       getRebillFlags(tenantId),
-    ]).then(([units, rebill]) => {
+      getLateFlags(tenantId, billingMonth),
+    ]).then(([units, rebill, late]) => {
       const um = new Map<string, number>();
       units.forEach((u) => um.set(u.order_item_id, u.units_override));
       setUnitOverridesState(um);
       const rm = new Map<string, BillingRebillFlag>();
       rebill.forEach((r) => rm.set(`${r.client_id}-${r.month}`, r));
       setRebillFlagsState(rm);
+      const lm = new Map<string, BillingLateFlag>();
+      late.forEach((l) => lm.set(l.client_id, l));
+      setLateFlagsState(lm);
     }).catch(console.error).finally(() => setLoading(false));
   }, [tenantId, billingMonth]);
+
+  // 月遅れフラグのトグル (手動 mark)
+  const toggleLateFlag = async (clientId: string) => {
+    const existing = lateFlags.get(clientId);
+    if (existing) {
+      await removeLateFlag(tenantId, clientId, billingMonth);
+      setLateFlagsState((prev) => { const m = new Map(prev); m.delete(clientId); return m; });
+    } else {
+      await setLateFlag(tenantId, clientId, billingMonth);
+      setLateFlagsState((prev) => new Map(prev).set(clientId, {
+        id: "", tenant_id: tenantId, client_id: clientId, month: billingMonth, created_at: ""
+      }));
+    }
+  };
 
   // チェックした利用者を過誤/返戻で確定
   const handleConfirm = async (type: "返戻" | "過誤") => {
@@ -8847,7 +8866,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       return;
     }
     const lines: string[] = [];
-    const billingGroups = clientGroups.filter((g) => !autoLateClients.has(g.client.id));
+    const lateClientIdsCsv = new Set<string>([
+      ...autoLateClients,
+      ...Array.from(lateFlags.keys()),
+    ]);
+    const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
 
     // コントロールレコード
     lines.push([
@@ -8986,9 +9009,6 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [gridSelectedClient, setGridSelectedClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [gridKanaFilter, setGridKanaFilter] = useState<string | null>(null);
   const [isGridPending, startGridTransition] = useTransition();
-  const billingTarget = clientGroups.filter(g => !autoLateClients.has(g.client.id));
-  const totalUnitsAll = billingTarget.reduce((s, { client, items }) => s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
-
   const KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
   const KANA_MAP: Record<string, string[]> = {
     "あ":["ア","イ","ウ","エ","オ"],"か":["カ","キ","ク","ケ","コ","ガ","ギ","グ","ゲ","ゴ"],
@@ -9178,9 +9198,9 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
           {/* ── メインテーブル ── */}
           <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
-            {/* ヘッダー行 */}
-            <div className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-300 bg-gray-100 text-sm font-semibold text-gray-600 shrink-0">
-              <div className="px-2 py-2 flex items-center justify-center">
+            {/* ヘッダー行: 対象 / 申請中 / 状態 / 提出月 / 請求月 / サービス事業所 / 被保険者番号 / 利用者名 / 月遅 / 返戻 / 過誤 */}
+            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 shrink-0">
+              <div className="px-1 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
                     selectedClientIds.size === clientGroups.length && clientGroups.length > 0
@@ -9196,11 +9216,13 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                   )}
                 </button>
               </div>
+              <div className="px-2 py-2 border-l border-gray-200 text-center">申請中</div>
               <div className="px-2 py-2 border-l border-gray-200">状態</div>
-              <div className="px-2 py-2 border-l border-gray-200">提供月</div>
+              <div className="px-2 py-2 border-l border-gray-200">提出月</div>
               <div className="px-2 py-2 border-l border-gray-200">請求月</div>
+              <div className="px-2 py-2 border-l border-gray-200">サービス事業所</div>
+              <div className="px-2 py-2 border-l border-gray-200">被保険者番号</div>
               <div className="px-2 py-2 border-l border-gray-200">利用者名</div>
-              <div className="px-2 py-2 border-l border-gray-200 text-right">単位数</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">月遅</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">返戻</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">過誤</div>
@@ -9213,47 +9235,71 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
               ) : allRows.map((row, idx) => {
                 if (row.type === "rebill") {
                   const [ry, rm] = row.month.split("-").map(Number);
-                  const units = row.items.reduce((s, item) => s + getUnits(item, row.client.id) * item.quantity, 0);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-100 bg-amber-50 text-sm">
-                      <div className="px-2 py-2" />
+                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
+                      <div className="px-1 py-2" />
+                      <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
                       <div className="px-2 py-2 border-l border-gray-100 text-gray-500">R{ry-2018}/{rm}</div>
                       <div className="px-2 py-2 border-l border-gray-100 text-gray-500">R{y-2018}/{m}</div>
-                      <div className="px-2 py-2 border-l border-gray-100 text-gray-700 font-medium">{row.client.name}</div>
-                      <div className="px-2 py-2 border-l border-gray-100 text-right font-mono">{units.toLocaleString()}</div>
-                      <div className="py-2 border-l border-gray-100 text-center" />
-                      <div className="py-2 border-l border-gray-100 text-center">
+                      <div className="px-2 py-2 border-l border-gray-100 text-gray-500 truncate">—</div>
+                      <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-500">{row.client.user_number ?? "—"}</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-gray-700 font-medium truncate">{row.client.name}</div>
+                      <div className="px-2 py-2 border-l border-gray-100 text-center" />
+                      <div className="px-2 py-2 border-l border-gray-100 text-center">
                         {row.flag.flag_type === "返戻" && (
                           <button onClick={() => toggleRebillFlag(row.client.id, row.month, "返戻")}
-                            className="text-red-500 underline text-xs">返戻</button>
+                            className="text-red-500 underline text-[11px]">返戻</button>
                         )}
                       </div>
-                      <div className="py-2 border-l border-gray-100 text-center">
+                      <div className="px-2 py-2 border-l border-gray-100 text-center">
                         {row.flag.flag_type === "過誤" && (
                           <button onClick={() => toggleRebillFlag(row.client.id, row.month, "過誤")}
-                            className="text-red-500 underline text-xs">過誤</button>
+                            className="text-red-500 underline text-[11px]">過誤</button>
                         )}
                       </div>
                     </div>
                   );
                 }
                 const { client, items } = row;
-                const isLate = autoLateClients.has(client.id);
+                const isAutoLate = autoLateClients.has(client.id);
+                const lateFlag = lateFlags.get(client.id);
+                const isLate = isAutoLate || !!lateFlag;
                 const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
                 const isSelected = selectedClientIds.has(client.id);
                 const isDetail = detailClient?.client.id === client.id;
-                const totalUnits = items.reduce((s, item) => s + getUnits(item, client.id) * item.quantity, 0);
+                // 申請中バッジ
+                const monthStart = `${billingMonth}-01`;
+                const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+                const insRecs = insuranceRecords
+                  .filter(r => r.client_id === client.id)
+                  .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
+                const insRec = insRecs.find(r => {
+                  const start = r.certification_start_date ?? r.effective_date;
+                  const end = r.certification_end_date;
+                  if (start && start > monthEnd) return false;
+                  if (end && end < monthStart) return false;
+                  return true;
+                });
+                const isApplying = insRec?.certification_status === "申請中";
+                // サービス事業所名 (居宅介護支援事業所)
+                const careOfficeId = client.care_office_id ?? insRec?.care_office_id ?? null;
+                const careOfficeName = careOfficeId
+                  ? careOffices.find(co => co.id === careOfficeId)?.name ?? ""
+                  : client.care_manager_org ?? "";
+                // 提出月 = lateFlag.month があればそれ、無ければ billingMonth
+                const submitMonth = lateFlag?.month ?? billingMonth;
+                const [sy, sm] = submitMonth.split("-").map(Number);
                 return (
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[36px_80px_64px_64px_1fr_90px_52px_52px_52px] border-b border-gray-100 text-sm cursor-pointer transition-colors ${
+                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
-                    <div className="px-2 py-2.5 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                    <div className="px-1 py-2 flex items-center justify-center" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => setSelectedClientIds(prev => {
                           const s = new Set(prev); if (s.has(client.id)) s.delete(client.id); else s.add(client.id); return s;
@@ -9265,12 +9311,19 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                         {isSelected && <span className="text-white text-[8px] font-bold leading-none">✓</span>}
                       </button>
                     </div>
-                    <div className="px-2 py-2.5 border-l border-gray-100">
-                      <span className="text-blue-700 font-semibold">国保対象</span>
+                    <div className="px-1 py-2 border-l border-gray-100 text-center">
+                      {isApplying && (
+                        <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">申請中</span>
+                      )}
                     </div>
-                    <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
-                    <div className="px-2 py-2.5 border-l border-gray-100 text-gray-600">R{y-2018}/{m}</div>
-                    <div className="px-2 py-2.5 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-2 min-w-0">
+                    <div className="px-2 py-2 border-l border-gray-100">
+                      {!isLate && <span className="text-red-600 font-semibold">国保対象</span>}
+                    </div>
+                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{sy-2018}/{sm}</div>
+                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{y-2018}/{m}</div>
+                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700 truncate" title={careOfficeName}>{careOfficeName || "—"}</div>
+                    <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-700">{client.user_number ?? "—"}</div>
+                    <div className="px-2 py-2 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-1.5 min-w-0">
                       <span className="truncate">{client.name}</span>
                       <button
                         onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
@@ -9279,50 +9332,117 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                       <button
                         onClick={e => { e.stopPropagation(); setInvoiceClient(client); }}
                         className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
-                      >📄 請求書発行</button>
+                      >請求書</button>
                     </div>
-                    <div className="px-2 py-2.5 border-l border-gray-100 text-right font-mono">
-                      {isLate ? <span className="text-gray-300">—</span> : totalUnits.toLocaleString()}
+                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleLateFlag(client.id); }}>
+                      {isLate && (
+                        <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">月遅</span>
+                      )}
                     </div>
-                    <div className="py-2.5 border-l border-gray-100 text-center text-orange-500 font-semibold text-xs">
-                      {isLate ? "月遅" : ""}
+                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+                      <select
+                        value={flag?.flag_type === "返戻" ? "返戻" : ""}
+                        onChange={e => {
+                          if (e.target.value === "返戻") {
+                            void setRebillFlag(tenantId, client.id, billingMonth, "返戻").then(() => {
+                              setRebillFlagsState(prev => new Map(prev).set(`${client.id}-${billingMonth}`, {
+                                id: "", tenant_id: tenantId, client_id: client.id, month: billingMonth, flag_type: "返戻", created_at: ""
+                              }));
+                            });
+                          } else if (flag?.flag_type === "返戻") {
+                            void removeRebillFlag(tenantId, client.id, billingMonth).then(() => {
+                              setRebillFlagsState(prev => { const mm = new Map(prev); mm.delete(`${client.id}-${billingMonth}`); return mm; });
+                            });
+                          }
+                        }}
+                        className={`w-full text-[11px] border rounded px-1 py-0.5 bg-white ${flag?.flag_type === "返戻" ? "border-red-400 text-red-600 font-semibold" : "border-gray-300 text-gray-500"}`}
+                      >
+                        <option value=""></option>
+                        <option value="返戻">返戻</option>
+                      </select>
                     </div>
-                    <div className="py-2.5 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "返戻"); }}>
-                      <span className={`cursor-pointer select-none font-bold text-base leading-none ${flag?.flag_type === "返戻" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>✓</span>
-                    </div>
-                    <div className="py-2.5 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
-                      <span className={`cursor-pointer select-none font-bold text-base leading-none ${flag?.flag_type === "過誤" ? "text-red-500" : "text-gray-200 hover:text-red-300"}`}>✓</span>
+                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
+                      <span
+                        className={`inline-flex w-5 h-5 rounded-full border-2 items-center justify-center text-[10px] font-bold cursor-pointer transition-colors ${
+                          flag?.flag_type === "過誤" ? "border-red-500 bg-red-500 text-white" : "border-gray-300 text-transparent hover:border-red-300"
+                        }`}
+                        title="過誤"
+                      >○</span>
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* ── フッター合計 ── */}
-            <div className="border-t border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-6 text-xs text-gray-700">
-              <span>合計件数 <strong>{clientGroups.length}</strong></span>
-              <span>合計単位数 <strong>{totalUnitsAll.toLocaleString()}</strong></span>
-              <span>国保件数 <strong>{billingTarget.length}</strong></span>
-              <span>国保対象単位数 <strong>{totalUnitsAll.toLocaleString()}</strong></span>
-            </div>
+            {/* ── フッター合計 (サンプル画像の box レイアウト) ── */}
+            {(() => {
+              // 集計対象: 月遅れ除外
+              const lateClientIds = new Set<string>([
+                ...autoLateClients,
+                ...Array.from(lateFlags.keys()),
+              ]);
+              const billingGroupsForTotal = clientGroups.filter(g => !lateClientIds.has(g.client.id));
+              const totalCount = clientGroups.length;
+              const totalUnits = clientGroups.reduce((s, { client, items }) =>
+                s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
+              const kokuhoCount = billingGroupsForTotal.length;
+              const kokuhoUnits = billingGroupsForTotal.reduce((s, { client, items }) =>
+                s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
+              // 単位単価は地域加算で違うが、概算 10 円/単位 (国保連伝送と同じ)
+              const UNIT_PRICE = 10;
+              const insuranceUnitAmount = kokuhoUnits * UNIT_PRICE;
+              // 給付率の平均 (各 client の benefit_rate を加重平均)
+              let insuranceClaim = 0;
+              let copayClaim = 0;
+              for (const { client, items } of billingGroupsForTotal) {
+                const subUnits = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
+                const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
+                const subAmount = subUnits * UNIT_PRICE;
+                const subCopay = Math.round(subAmount * (100 - benefitRate) / 100);
+                insuranceClaim += subAmount - subCopay;
+                copayClaim += subCopay;
+              }
+              return (
+                <div className="border-t border-gray-300 bg-gray-50 px-3 py-2 shrink-0 text-[11px] text-gray-700">
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-1.5">
+                    <span>合計件数 <strong className="font-mono">{totalCount.toLocaleString()}</strong></span>
+                    <span>合計単位数 <strong className="font-mono">{totalUnits.toLocaleString()}</strong></span>
+                    <span>国保件数 <strong className="font-mono">{kokuhoCount.toLocaleString()}</strong></span>
+                    <span>国保対象単位数 <strong className="font-mono">{kokuhoUnits.toLocaleString()}</strong></span>
+                  </div>
+                  <div className="border border-gray-300 rounded bg-white px-2 py-1.5 grid grid-cols-3 gap-x-4 gap-y-1">
+                    <span>特定介護請求額 <strong className="font-mono">—</strong></span>
+                    <span>軽減額 <strong className="font-mono">—</strong></span>
+                    <span>保険単位額 <strong className="font-mono">{insuranceUnitAmount.toLocaleString()}</strong></span>
+                    <span>公費単位数 <strong className="font-mono">—</strong></span>
+                    <span>保険請求額 <strong className="font-mono">{insuranceClaim.toLocaleString()}</strong></span>
+                    <span>公費請求額 <strong className="font-mono">—</strong></span>
+                    <span>利用者負担額 <strong className="font-mono text-red-600">{copayClaim.toLocaleString()}</strong></span>
+                    <span>公費分本人負担 <strong className="font-mono">—</strong></span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* ── 右：明細情報 ── */}
-          <div className="w-64 shrink-0 flex flex-col bg-white">
+          <div className="w-80 shrink-0 flex flex-col bg-white">
             <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 text-xs font-bold text-gray-700 flex items-center gap-2">
               <span>明細情報</span>
-              {detailClient && <span className="font-normal text-gray-500">{detailClient.client.name}</span>}
+              {detailClient && <span className="font-normal text-gray-500 truncate">{detailClient.client.name}</span>}
             </div>
             {detailClient ? (
               <>
-                <div className="flex-1 overflow-y-auto">
-                  <table className="w-full text-xs border-collapse">
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-[11px] border-collapse">
                     <thead className="bg-gray-100 border-b border-gray-300 sticky top-0">
                       <tr>
-                        <th className="text-left px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200">サービス内容</th>
-                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-14">単価</th>
-                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-10">回数</th>
-                        <th className="text-right px-2 py-1.5 font-semibold text-gray-600 w-14">単位数</th>
+                        <th className="text-left px-1.5 py-1.5 font-semibold text-gray-600 border-r border-gray-200">サービス内容</th>
+                        <th className="text-right px-1.5 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-12">単位数</th>
+                        <th className="text-right px-1.5 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-10">単価</th>
+                        <th className="text-right px-1.5 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-10">回数</th>
+                        <th className="text-right px-1.5 py-1.5 font-semibold text-gray-600 border-r border-gray-200 w-14">単位数小計</th>
+                        <th className="text-left px-1.5 py-1.5 font-semibold text-gray-600 w-20">摘要</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -9330,12 +9450,15 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                         const eq = equipment.find(e => e.product_code === item.product_code);
                         const unitPrice = getUnits(item, detailClient.client.id);
                         const units = unitPrice * item.quantity;
+                        const taisCode = eq?.tais_code ?? "";
                         return (
                           <tr key={item.id} className={`border-b border-gray-100 ${i % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
-                            <td className="px-2 py-1.5 text-gray-700 leading-tight border-r border-gray-100">{eq?.name ?? item.product_code}</td>
-                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 border-r border-gray-100">{unitPrice}</td>
-                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 border-r border-gray-100">{item.quantity}</td>
-                            <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-800">{units}</td>
+                            <td className="px-1.5 py-1 text-gray-700 leading-tight border-r border-gray-100">{eq?.name ?? item.product_code}</td>
+                            <td className="px-1.5 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{unitPrice}</td>
+                            <td className="px-1.5 py-1 text-right font-mono text-gray-700 border-r border-gray-100">10</td>
+                            <td className="px-1.5 py-1 text-right font-mono text-gray-700 border-r border-gray-100">{item.quantity}</td>
+                            <td className="px-1.5 py-1 text-right font-mono font-semibold text-gray-800 border-r border-gray-100">{units.toLocaleString()}</td>
+                            <td className="px-1.5 py-1 text-gray-500 text-[10px] font-mono truncate" title={taisCode}>{taisCode || "—"}</td>
                           </tr>
                         );
                       })}
@@ -9345,13 +9468,14 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                 <div className="border-t border-gray-300 bg-gray-50 shrink-0">
                   {(() => {
                     const totalU = detailClient.items.reduce((s, item) => s + getUnits(item, detailClient.client.id) * item.quantity, 0);
-                    const insuredAmount = totalU * 10;
+                    const UNIT_PRICE = 10;
+                    const insuredAmount = totalU * UNIT_PRICE;
                     const benefitRate = parseInt(detailClient.client.benefit_rate ?? "90", 10);
                     const copayRate = 100 - benefitRate;
                     const copayAmount = Math.round(insuredAmount * copayRate / 100);
                     const benefitAmount = insuredAmount - copayAmount;
                     return (
-                      <table className="w-full text-xs border-collapse">
+                      <table className="w-full text-[11px] border-collapse">
                         <tbody>
                           <tr className="border-t border-gray-200">
                             <td className="px-2 py-1 text-gray-600 border-r border-gray-200 bg-gray-100 font-medium">保険単位数</td>
@@ -9379,7 +9503,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-xs text-gray-400">
-                利用者を選択してください
+                行を選択してください
               </div>
             )}
           </div>
