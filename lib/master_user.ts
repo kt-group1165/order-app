@@ -13,13 +13,17 @@
 //   - 端末信頼のみ bypass される (= 不正端末からでも入れる) ので、運用上は
 //     開発者本人の email のみ登録する想定
 
-/** env から master user email list を取得 (lowercase 正規化済) */
+/** ハードコード: 常に trust check bypass する test 用 account */
+const ALWAYS_TRUSTED_EMAILS = ["test@kt-group.co.jp"] as const;
+
+/** env から master user email list を取得 (lowercase 正規化済) + hardcoded test account */
 export function getMasterUserEmails(): string[] {
   const raw = process.env.MASTER_USER_EMAILS ?? "";
-  return raw
+  const envList = raw
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
+  return [...ALWAYS_TRUSTED_EMAILS, ...envList];
 }
 
 /** email が master user か判定 (大文字小文字無視) */
