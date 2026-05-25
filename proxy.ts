@@ -39,7 +39,8 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  if (!user && !pathname.startsWith("/login")) {
+  // /login と /api/login は未認証で通す (login flow の起点)
+  if (!user && !pathname.startsWith("/login") && pathname !== "/api/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     if (pathname !== "/") url.searchParams.set("next", pathname + request.nextUrl.search);
