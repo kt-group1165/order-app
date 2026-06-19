@@ -19,7 +19,9 @@ export default function HomePage() {
   useEffect(() => {
     getOffices(KT_GROUP_TENANT)
       .then(setOffices)
-      .catch(() => {})
+      .catch((err) => {
+        console.warn("getOffices failed:", err);
+      })
       .finally(() => setLoading(false));
   }, []);
 

@@ -2101,7 +2101,9 @@ function EquipmentDetail({
           if (price > 0) {
             await upsertOfficePrice(tenantId, saved.product_code, office.id, price);
           } else {
-            await deleteOfficePrice(tenantId, saved.product_code, office.id).catch(() => {});
+            await deleteOfficePrice(tenantId, saved.product_code, office.id).catch((err) => {
+              console.warn("deleteOfficePrice failed:", err);
+            });
           }
         })
       );
@@ -5512,9 +5514,19 @@ function ClientDetail({
     setInsuranceSaving(true);
     try {
       if (editingInsuranceId) {
-        await supabase.from("client_insurance_records").update(insuranceForm).eq("id", editingInsuranceId);
+        const { error } = await supabase.from("client_insurance_records").update(insuranceForm).eq("id", editingInsuranceId);
+        if (error) {
+          console.warn("client_insurance_records update failed:", error.message);
+          alert(`保険情報の更新に失敗しました: ${error.message}`);
+          return;
+        }
       } else {
-        await supabase.from("client_insurance_records").insert({ ...insuranceForm, tenant_id: tenantId, client_id: client.id });
+        const { error } = await supabase.from("client_insurance_records").insert({ ...insuranceForm, tenant_id: tenantId, client_id: client.id });
+        if (error) {
+          console.warn("client_insurance_records insert failed:", error.message);
+          alert(`保険情報の登録に失敗しました: ${error.message}`);
+          return;
+        }
       }
       setInsuranceForm(null);
       setEditingInsuranceId(null);
@@ -5535,9 +5547,19 @@ function ClientDetail({
     setRentalHistorySaving(true);
     try {
       if (editingRentalHistoryId) {
-        await supabase.from("client_rental_history").update(rentalHistoryForm).eq("id", editingRentalHistoryId);
+        const { error } = await supabase.from("client_rental_history").update(rentalHistoryForm).eq("id", editingRentalHistoryId);
+        if (error) {
+          console.warn("client_rental_history update failed:", error.message);
+          alert(`レンタル履歴の更新に失敗しました: ${error.message}`);
+          return;
+        }
       } else {
-        await supabase.from("client_rental_history").insert({ ...rentalHistoryForm, tenant_id: tenantId, client_id: client.id, source: "manual" });
+        const { error } = await supabase.from("client_rental_history").insert({ ...rentalHistoryForm, tenant_id: tenantId, client_id: client.id, source: "manual" });
+        if (error) {
+          console.warn("client_rental_history insert failed:", error.message);
+          alert(`レンタル履歴の登録に失敗しました: ${error.message}`);
+          return;
+        }
       }
       setRentalHistoryForm(null);
       setEditingRentalHistoryId(null);
@@ -8670,7 +8692,9 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
       const codes = [...new Set(items.map((i: OrderItem) => i.product_code))];
       if (codes.length > 0) {
-        getPriceHistory(tenantId, codes).then(setPriceHistoryAll).catch(() => {});
+        getPriceHistory(tenantId, codes).then(setPriceHistoryAll).catch((err) => {
+          console.warn("getPriceHistory failed:", err);
+        });
       }
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId, currentOfficeId]);
@@ -11829,7 +11853,9 @@ function OrderEmailPreviewModal({
           type: "supplier_email",
           title: `${emailLabel}（${subject}）`,
           params: { emailType: "new_order", orderId: order.id, supplierName: supplierObj.name, subject, body: emailBody },
-        }).catch(() => {});
+        }).catch((err) => {
+          console.warn("saveClientDocument (new_order) failed:", err);
+        });
       }
     } catch (e: unknown) {
       setErrors((prev) => new Map(prev).set(groupKey, e instanceof Error ? e.message : "送信に失敗しました"));
@@ -11877,7 +11903,9 @@ function OrderEmailPreviewModal({
           type: "supplier_email",
           title: `${typeLabel}（${scSubject}）`,
           params: { emailType, orderId: order.id, subject: scSubject, body: scEmailBody },
-        }).catch(() => {});
+        }).catch((err) => {
+          console.warn("saveClientDocument (status_change) failed:", err);
+        });
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "送信に失敗しました");
@@ -17475,7 +17503,9 @@ function RentalReportModal({
   const [selectedFaxNumber, setSelectedFaxNumber] = useState("");
 
   useEffect(() => {
-    getCareOffices(tenantId).then(setCareOffices).catch(() => {});
+    getCareOffices(tenantId).then(setCareOffices).catch((err) => {
+      console.warn("getCareOffices failed:", err);
+    });
   }, [tenantId]);
 
   // 利用者のケアマネ事務所に紐づくFAX番号を自動選択
@@ -20427,34 +20457,68 @@ function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: stri
         //   ・自事業所モード (officeFilter あり) → その office に link する members
         //   ・全事業所モード (officeFilter なし) → app_type='order-app' の office に link する members
         //     (旧実装は tenant 全 members を見せていたが、kaigo-app ヘルパー数百名も含んでしまうため修正)
+        // member_offices junction は default 1000 件 limit があるため明示的にページング
+        const fetchJunctionMemberIds = async (officeIds: string[]): Promise<string[]> => {
+          if (officeIds.length === 0) return [];
+          const PAGE = 1000;
+          const ids: string[] = [];
+          let from = 0;
+          while (true) {
+            const { data, error } = await supabase
+              .from("member_offices")
+              .select("member_id")
+              .in("office_id", officeIds)
+              .range(from, from + PAGE - 1);
+            if (error) {
+              console.warn("member_offices fetch failed:", error.message);
+              break;
+            }
+            if (!data || data.length === 0) break;
+            ids.push(...((data as { member_id: string }[]).map((r) => r.member_id)));
+            if (data.length < PAGE) break;
+            from += PAGE;
+          }
+          return ids;
+        };
         let memberIds: string[] = [];
         if (officeFilter) {
-          const { data: junction } = await supabase
-            .from("member_offices")
-            .select("member_id")
-            .eq("office_id", officeFilter);
-          memberIds = ((junction ?? []) as { member_id: string }[]).map((r) => r.member_id);
+          memberIds = Array.from(new Set(await fetchJunctionMemberIds([officeFilter])));
         } else {
-          const { data: orderOffices } = await supabase
+          const { data: orderOffices, error: offErr } = await supabase
             .from("offices")
             .select("id")
             .eq("app_type", "order-app");
+          if (offErr) console.warn("offices fetch failed:", offErr.message);
           const orderOfficeIds = ((orderOffices ?? []) as { id: string }[]).map((o) => o.id);
-          if (orderOfficeIds.length > 0) {
-            const { data: junction } = await supabase
-              .from("member_offices")
-              .select("member_id")
-              .in("office_id", orderOfficeIds);
-            memberIds = Array.from(new Set(
-              ((junction ?? []) as { member_id: string }[]).map((r) => r.member_id)
-            ));
-          }
+          memberIds = Array.from(new Set(await fetchJunctionMemberIds(orderOfficeIds)));
         }
-        let q = supabase.from("members").select("*").eq("tenant_id", tenantId);
-        if (!includeInactive) q = q.eq("status", "active");
-        q = q.in("id", memberIds);
-        const { data } = await q.order("furigana", { nullsFirst: false }).order("name");
-        if (!cancelled) setMembers((data ?? []) as typeof members);
+        // members .in("id", ...) も IN 句が肥大化しすぎないようチャンク分割 (URL 長対策)
+        if (memberIds.length === 0) {
+          if (!cancelled) setMembers([]);
+        } else {
+          const CHUNK = 500;
+          const collected: typeof members = [];
+          for (let i = 0; i < memberIds.length; i += CHUNK) {
+            const slice = memberIds.slice(i, i + CHUNK);
+            let q = supabase.from("members").select("*").eq("tenant_id", tenantId).in("id", slice);
+            if (!includeInactive) q = q.eq("status", "active");
+            const { data, error } = await q;
+            if (error) {
+              console.warn("members fetch failed:", error.message);
+              continue;
+            }
+            collected.push(...((data ?? []) as typeof members));
+          }
+          collected.sort((a, b) => {
+            const ra = a as { furigana?: string | null; name?: string | null };
+            const rb = b as { furigana?: string | null; name?: string | null };
+            const fa = ra.furigana ?? "￿"; // null は末尾扱い
+            const fb = rb.furigana ?? "￿";
+            if (fa !== fb) return fa.localeCompare(fb, "ja");
+            return (ra.name ?? "").localeCompare(rb.name ?? "", "ja");
+          });
+          if (!cancelled) setMembers(collected);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
