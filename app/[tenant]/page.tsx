@@ -1924,13 +1924,13 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
 
 // ─── Equipment Detail ────────────────────────────────────────────────────────
 
-// 用具詳細の表示用: ラベル+値の1行 (白カード内の定義リスト用、背景なし)
+// 用具詳細の表示用: 左=項目 / 右=値 の1行 (divide-y カード内の定義リスト)
 function DetailRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   if (value == null || value === "") return null;
   return (
-    <div>
-      <p className="text-[11px] text-gray-400 mb-0.5">{label}</p>
-      <p className="text-sm text-gray-800 break-words whitespace-pre-wrap">{value}</p>
+    <div className="flex justify-between items-baseline gap-6 px-5 py-3">
+      <span className="text-xs text-gray-400 shrink-0">{label}</span>
+      <span className="text-sm text-gray-800 text-right break-words whitespace-pre-wrap">{value}</span>
     </div>
   );
 }
@@ -2363,34 +2363,27 @@ function EquipmentDetail({
           /* 表示モード */
           <>
             <div className="max-w-2xl mx-auto w-full">
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 sm:p-6 space-y-5">
-                {/* 基本情報 */}
-                <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                  <DetailRow label="商品コード" value={item?.product_code} />
-                  <DetailRow label="TAISコード" value={item?.tais_code} />
-                  <DetailRow label="フリガナ" value={item?.furigana} />
-                  <DetailRow label="カテゴリ" value={item?.category} />
-                  <DetailRow label="レンタル価格" value={item?.rental_price != null ? `¥${item.rental_price.toLocaleString()}/月` : null} />
-                  <DetailRow label="全国平均価格" value={item?.national_avg_price != null ? `¥${item.national_avg_price.toLocaleString()}` : null} />
-                  <DetailRow label="限度額" value={item?.price_limit != null ? `¥${item.price_limit.toLocaleString()}` : null} />
-                </div>
-                {(item?.selection_reason || item?.proposal_reason) && (
-                  <div className="space-y-4 border-t border-gray-100 pt-4">
-                    <DetailRow label="選定理由" value={item?.selection_reason} />
-                    <DetailRow label="提案理由" value={item?.proposal_reason} />
-                  </div>
-                )}
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm divide-y divide-gray-100">
+                <DetailRow label="商品コード" value={item?.product_code} />
+                <DetailRow label="TAISコード" value={item?.tais_code} />
+                <DetailRow label="フリガナ" value={item?.furigana} />
+                <DetailRow label="カテゴリ" value={item?.category} />
+                <DetailRow label="レンタル価格" value={item?.rental_price != null ? `¥${item.rental_price.toLocaleString()}/月` : null} />
+                <DetailRow label="全国平均価格" value={item?.national_avg_price != null ? `¥${item.national_avg_price.toLocaleString()}` : null} />
+                <DetailRow label="限度額" value={item?.price_limit != null ? `¥${item.price_limit.toLocaleString()}` : null} />
+                <DetailRow label="選定理由" value={item?.selection_reason} />
+                <DetailRow label="提案理由" value={item?.proposal_reason} />
                 {/* 事業所別レンタル価格 */}
                 {offices.length > 0 && myOfficePrices.length > 0 && (
-                  <div className="border-t border-gray-100 pt-4">
-                    <p className="text-[11px] text-gray-400 mb-2">事業所別レンタル価格</p>
+                  <div className="px-5 py-3">
+                    <p className="text-xs text-gray-400 mb-1.5">事業所別レンタル価格</p>
                     <div className="space-y-1.5">
                       {offices.map((office) => {
                         const op = myOfficePrices.find((p) => p.office_id === office.id);
                         if (!op) return null;
                         return (
-                          <div key={office.id} className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">{office.name}</span>
+                          <div key={office.id} className="flex justify-between items-baseline gap-6">
+                            <span className="text-sm text-gray-500">{office.name}</span>
                             <span className="text-sm font-medium text-emerald-700">¥{op.rental_price.toLocaleString()}/月</span>
                           </div>
                         );
@@ -2400,16 +2393,16 @@ function EquipmentDetail({
                 )}
                 {/* 卸別仕入価格（現行） */}
                 {purchasePrices.length > 0 && (
-                  <div className="border-t border-gray-100 pt-4">
-                    <p className="text-[11px] text-gray-400 mb-2">卸別仕入価格（現行）</p>
+                  <div className="px-5 py-3">
+                    <p className="text-xs text-gray-400 mb-1.5">卸別仕入価格（現行）</p>
                     <div className="space-y-1.5">
                       {purchasePrices.map((p) => {
                         const sup = suppliers.find((s) => s.id === p.supplier_id);
                         const margin = item?.rental_price != null ? item.rental_price - p.purchase_price : null;
                         return (
-                          <div key={p.id} className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">{sup?.name ?? "（不明な卸）"}</span>
-                            <span className="flex items-center gap-2">
+                          <div key={p.id} className="flex justify-between items-baseline gap-6">
+                            <span className="text-sm text-gray-500">{sup?.name ?? "（不明な卸）"}</span>
+                            <span className="flex items-baseline gap-2">
                               <span className="text-sm font-medium text-gray-800">¥{p.purchase_price.toLocaleString()}</span>
                               {margin != null && (
                                 <span className={`text-[11px] ${margin >= 0 ? "text-emerald-600" : "text-red-500"}`}>粗利 ¥{margin.toLocaleString()}</span>
@@ -2421,12 +2414,7 @@ function EquipmentDetail({
                     </div>
                   </div>
                 )}
-                {item && (
-                  <div className="border-t border-gray-100 pt-3 flex justify-between items-center">
-                    <span className="text-[11px] text-gray-400">更新日</span>
-                    <span className="text-xs text-gray-600">{new Date(item.updated_at).toLocaleDateString("ja-JP")}</span>
-                  </div>
-                )}
+                <DetailRow label="更新日" value={item ? new Date(item.updated_at).toLocaleDateString("ja-JP") : null} />
               </div>
             </div>
           </>
