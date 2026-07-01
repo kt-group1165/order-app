@@ -2362,13 +2362,16 @@ function EquipmentDetail({
         ) : (
           /* 表示モード */
           <>
-            <Field label="商品コード" value={item?.product_code} />
-            <Field label="フリガナ" value={item?.furigana} />
-            <Field label="TAISコード" value={item?.tais_code} />
-            <Field label="カテゴリ" value={item?.category} />
-            <Field label="レンタル価格" value={item?.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : null} />
-            <Field label="全国平均価格" value={item?.national_avg_price ? `¥${item.national_avg_price.toLocaleString()}` : null} />
-            <Field label="限度額" value={item?.price_limit ? `¥${item.price_limit.toLocaleString()}` : null} />
+            <div className="max-w-3xl mx-auto w-full space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="商品コード" value={item?.product_code} />
+              <Field label="フリガナ" value={item?.furigana} />
+              <Field label="TAISコード" value={item?.tais_code} />
+              <Field label="カテゴリ" value={item?.category} />
+              <Field label="レンタル価格" value={item?.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : null} />
+              <Field label="全国平均価格" value={item?.national_avg_price ? `¥${item.national_avg_price.toLocaleString()}` : null} />
+              <Field label="限度額" value={item?.price_limit ? `¥${item.price_limit.toLocaleString()}` : null} />
+            </div>
             <Field label="選定理由" value={item?.selection_reason} />
             <Field label="提案理由" value={item?.proposal_reason} />
             {/* 事業所別レンタル価格（表示） */}
@@ -2418,6 +2421,7 @@ function EquipmentDetail({
                 <p className="text-sm text-gray-800">{new Date(item.updated_at).toLocaleDateString("ja-JP")}</p>
               </div>
             )}
+            </div>
           </>
         )}
       </div>
