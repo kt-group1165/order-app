@@ -1479,10 +1479,8 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [deleting, setDeleting] = useState(false);
   const [offices, setOffices] = useState<Office[]>([]);
   const [officePrices, setOfficePrices] = useState<EquipmentOfficePrice[]>([]);
-  const [showOfficePriceImport, setShowOfficePriceImport] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierPrices, setSupplierPrices] = useState<EquipmentPrice[]>([]);
-  const [showSupplierPriceImport, setShowSupplierPriceImport] = useState(false);
 
   const handleDeleteAll = async () => {
     if (deleteConfirm === "idle") { setDeleteConfirm("confirm1"); return; }
@@ -1585,19 +1583,36 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   }, [equipment]);
 
   const handleExportCSV = () => {
-    const headers = ["用具名", "フリガナ", "TAISコード", "カテゴリ", "レンタル価格", "全国平均価格", "限度額", "商品コード", "選定理由", "提案理由"];
-    const rows = localEquipment.map(e => [
-      e.name,
-      e.furigana ?? "",
-      e.tais_code ?? "",
-      e.category ?? "",
-      e.rental_price?.toString() ?? "",
-      e.national_avg_price?.toString() ?? "",
-      e.price_limit?.toString() ?? "",
-      e.product_code,
-      e.selection_reason ?? "",
-      e.proposal_reason ?? "",
-    ]);
+    // 基本情報 + 事業所別レンタル価格(事業所:名) + 卸別仕入価格(仕入:名) を1つに統合
+    const baseHeaders = ["用具名", "フリガナ", "TAISコード", "カテゴリ", "レンタル価格", "全国平均価格", "限度額", "商品コード", "選定理由", "提案理由"];
+    const headers = [
+      ...baseHeaders,
+      ...offices.map((o) => `事業所:${o.name}`),
+      ...suppliers.map((s) => `仕入:${s.name}`),
+    ];
+    const rows = localEquipment.map((e) => {
+      const base = [
+        e.name,
+        e.furigana ?? "",
+        e.tais_code ?? "",
+        e.category ?? "",
+        e.rental_price?.toString() ?? "",
+        e.national_avg_price?.toString() ?? "",
+        e.price_limit?.toString() ?? "",
+        e.product_code,
+        e.selection_reason ?? "",
+        e.proposal_reason ?? "",
+      ];
+      const officeCells = offices.map((o) => {
+        const op = officePrices.find((p) => p.product_code === e.product_code && p.office_id === o.id);
+        return op ? String(op.rental_price) : "";
+      });
+      const supplierCells = suppliers.map((s) => {
+        const pp = supplierPrices.find((p) => p.product_code === e.product_code && p.supplier_id === s.id);
+        return pp ? String(pp.purchase_price) : "";
+      });
+      return [...base, ...officeCells, ...supplierCells];
+    });
     const csv = [headers, ...rows]
       .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
       .join("\n");
@@ -1606,50 +1621,6 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
     const a = document.createElement("a");
     a.href = url;
     a.download = "用具マスタ.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportOfficePricesCSV = () => {
-    if (offices.length === 0) { alert("事業所が登録されていません。設定タブで事業所を登録してください。"); return; }
-    const headers = ["商品コード", "用具名", ...offices.map((o) => o.name)];
-    const rows = localEquipment.map((eq) => {
-      const priceCells = offices.map((o) => {
-        const op = officePrices.find((p) => p.product_code === eq.product_code && p.office_id === o.id);
-        return op ? String(op.rental_price) : "";
-      });
-      return [eq.product_code, eq.name, ...priceCells];
-    });
-    const csv = [headers, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "事業所別レンタル価格.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportSupplierPricesCSV = () => {
-    if (suppliers.length === 0) { alert("卸（仕入先）が登録されていません。"); return; }
-    const headers = ["商品コード", "用具名", ...suppliers.map((s) => s.name)];
-    const rows = localEquipment.map((eq) => {
-      const priceCells = suppliers.map((s) => {
-        const pp = supplierPrices.find((p) => p.product_code === eq.product_code && p.supplier_id === s.id);
-        return pp ? String(pp.purchase_price) : "";
-      });
-      return [eq.product_code, eq.name, ...priceCells];
-    });
-    const csv = [headers, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "卸別仕入価格.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1776,37 +1747,10 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         <button
           onClick={handleExportCSV}
           className="shrink-0 flex items-center gap-1 bg-gray-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+          title="基本情報 + 事業所別レンタル価格 + 卸別仕入価格 を1つのCSVで出力"
         >
           <Download size={14} />
           CSV出力
-        </button>
-        <button
-          onClick={handleExportOfficePricesCSV}
-          className="shrink-0 flex items-center gap-1 bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
-        >
-          <Download size={14} />
-          事業所別価格
-        </button>
-        <button
-          onClick={() => setShowOfficePriceImport(true)}
-          className="shrink-0 flex items-center gap-1 bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
-        >
-          <Upload size={14} />
-          取込
-        </button>
-        <button
-          onClick={handleExportSupplierPricesCSV}
-          className="shrink-0 flex items-center gap-1 bg-teal-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
-        >
-          <Download size={14} />
-          卸別仕入価格
-        </button>
-        <button
-          onClick={() => setShowSupplierPriceImport(true)}
-          className="shrink-0 flex items-center gap-1 bg-teal-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
-        >
-          <Upload size={14} />
-          取込
         </button>
         {/* フリガナ未登録件数があれば一括生成ボタンを表示 */}
         {(() => {
@@ -1965,31 +1909,13 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
       {showImport && (
         <ImportModal
           tenantId={tenantId}
+          offices={offices}
+          suppliers={suppliers}
           onClose={() => setShowImport(false)}
           onDone={() => {
             setShowImport(false);
             load();
           }}
-        />
-      )}
-
-      {showOfficePriceImport && (
-        <OfficePriceImportModal
-          tenantId={tenantId}
-          offices={offices}
-          equipment={localEquipment}
-          onClose={() => setShowOfficePriceImport(false)}
-          onDone={() => { setShowOfficePriceImport(false); load(); }}
-        />
-      )}
-
-      {showSupplierPriceImport && (
-        <SupplierPriceImportModal
-          tenantId={tenantId}
-          suppliers={suppliers}
-          equipment={localEquipment}
-          onClose={() => setShowSupplierPriceImport(false)}
-          onDone={() => { setShowSupplierPriceImport(false); load(); }}
         />
       )}
     </div>
@@ -2523,17 +2449,26 @@ function EquipmentDetail({
 
 function ImportModal({
   tenantId,
+  offices,
+  suppliers,
   onClose,
   onDone,
 }: {
   tenantId: string;
+  offices: Office[];
+  suppliers: Supplier[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const [csvText, setCsvText] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [priceResult, setPriceResult] = useState<{ officeCount: number; supplierCount: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [effectiveMonth, setEffectiveMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   const handleImport = async () => {
     if (!csvText.trim()) {
@@ -2543,15 +2478,82 @@ function ImportModal({
     setLoading(true);
     setError("");
     try {
-      const rows = parseEquipmentCSV(csvText);
+      const text = csvText.replace(/^﻿/, "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length === 0) {
+        setError("有効なデータが見つかりませんでした。CSVの形式を確認してください。");
+        return;
+      }
+      const parseRow = (line: string) =>
+        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
+      const headers = parseRow(lines[0]);
+      const officeMap = new Map(offices.map((o) => [o.name, o.id]));
+      const supplierMap = new Map(suppliers.map((s) => [s.name, s.id]));
+      const officeCols: { idx: number; officeId: string }[] = [];
+      const supplierCols: { idx: number; supplierId: string }[] = [];
+      const baseColIdx: number[] = [];
+      headers.forEach((h, i) => {
+        if (h.startsWith("事業所:")) {
+          const id = officeMap.get(h.slice(4));
+          if (id) officeCols.push({ idx: i, officeId: id });
+        } else if (h.startsWith("仕入:")) {
+          const id = supplierMap.get(h.slice(3));
+          if (id) supplierCols.push({ idx: i, supplierId: id });
+        } else {
+          baseColIdx.push(i);
+        }
+      });
+      const codeIdx = headers.findIndex((h) => {
+        const l = h.toLowerCase();
+        return l.includes("商品コード") || l.includes("product_code");
+      });
+
+      // 基本情報: 事業所/仕入列を除いた CSV を再構成して既存パーサへ渡す
+      const baseCsv = lines
+        .map((line) => {
+          const cols = parseRow(line);
+          return baseColIdx.map((i) => `"${String(cols[i] ?? "").replace(/"/g, '""')}"`).join(",");
+        })
+        .join("\n");
+      const rows = parseEquipmentCSV(baseCsv);
       if (rows.length === 0) {
         setError("有効なデータが見つかりませんでした。CSVの形式を確認してください。");
         return;
       }
       const res = await importEquipment(tenantId, rows);
+
+      // 事業所別レンタル価格 / 卸別仕入価格 も同時取込
+      let officeCount = 0;
+      let supplierCount = 0;
+      if (codeIdx >= 0 && (officeCols.length > 0 || supplierCols.length > 0)) {
+        const officeRows: { tenant_id: string; product_code: string; office_id: string; rental_price: number }[] = [];
+        const supplierRows: { tenant_id: string; product_code: string; supplier_id: string; purchase_price: number; valid_from: string }[] = [];
+        const validFrom = `${effectiveMonth}-01`;
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseRow(lines[i]);
+          const productCode = cols[codeIdx]?.trim();
+          if (!productCode) continue;
+          for (const oc of officeCols) {
+            const v = cols[oc.idx]?.trim();
+            if (!v) continue;
+            const price = parseInt(v.replace(/,/g, ""));
+            if (isNaN(price) || price <= 0) continue;
+            officeRows.push({ tenant_id: tenantId, product_code: productCode, office_id: oc.officeId, rental_price: price });
+          }
+          for (const sc of supplierCols) {
+            const v = cols[sc.idx]?.trim();
+            if (!v) continue;
+            const price = parseInt(v.replace(/,/g, ""));
+            if (isNaN(price) || price <= 0) continue;
+            supplierRows.push({ tenant_id: tenantId, product_code: productCode, supplier_id: sc.supplierId, purchase_price: price, valid_from: validFrom });
+          }
+        }
+        if (officeRows.length > 0) { await bulkUpsertOfficePrices(officeRows); officeCount = officeRows.length; }
+        if (supplierRows.length > 0) { await bulkUpsertPurchasePrices(supplierRows); supplierCount = supplierRows.length; }
+      }
+      setPriceResult({ officeCount, supplierCount });
       setResult(res);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
-    } catch (e) {
+    } catch {
       setError("インポート中にエラーが発生しました");
     } finally {
       setLoading(false);
@@ -2587,9 +2589,23 @@ function ImportModal({
             <>
               <div className="bg-emerald-50 rounded-xl p-3 text-xs text-emerald-700 space-y-1">
                 <p className="font-semibold">CSVの列（1行目がヘッダー）</p>
-                <p>用具名（必須）、TAISコード、カテゴリ、レンタル価格、全国平均価格、限度額</p>
-                <p>既存のTAISコードまたは用具名が一致する場合は上書き更新されます</p>
+                <p>用具名（必須）、TAISコード、カテゴリ、レンタル価格、全国平均価格、限度額、商品コード</p>
+                <p>「事業所:〇〇」列=事業所別レンタル価格 / 「仕入:〇〇」列=卸別仕入価格 も同時取込</p>
+                <p>既存のTAISコード・用具名・商品コードが一致する場合は上書き更新されます</p>
+                <p className="text-emerald-500">※「CSV出力」で全列入りテンプレートを取得できます</p>
               </div>
+
+              {suppliers.length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">仕入価格の適用開始月（「仕入:」列がある場合）</label>
+                  <input
+                    type="month"
+                    value={effectiveMonth}
+                    onChange={(e) => setEffectiveMonth(e.target.value)}
+                    className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">
@@ -2647,6 +2663,12 @@ function ImportModal({
                   <p className="text-xs text-blue-600">更新</p>
                 </div>
               </div>
+
+              {priceResult && (priceResult.officeCount > 0 || priceResult.supplierCount > 0) && (
+                <div className="bg-teal-50 rounded-xl p-3 text-xs text-teal-700">
+                  事業所別レンタル価格 {priceResult.officeCount}件 / 卸別仕入価格 {priceResult.supplierCount}件 を更新しました
+                </div>
+              )}
 
               {result.changes.length > 0 && (
                 <div>
@@ -13438,308 +13460,6 @@ function OfficeManagementSection({ tenantId }: { tenantId: string }) {
             </div>
           </>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Office Price Import Modal ────────────────────────────────────────────────
-
-function OfficePriceImportModal({
-  tenantId,
-  offices,
-  equipment,
-  onClose,
-  onDone,
-}: {
-  tenantId: string;
-  offices: Office[];
-  equipment: Equipment[];
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [csvText, setCsvText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
-
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => { setCsvText(ev.target?.result as string ?? ""); };
-    reader.readAsText(file, "UTF-8");
-  };
-
-  const handleImport = async () => {
-    if (!csvText.trim()) { alert("CSVを入力またはファイルを選択してください"); return; }
-    setLoading(true);
-    setResult(null);
-    try {
-      // BOMを除去してパース
-      const text = csvText.replace(/^\uFEFF/, "");
-      const lines = text.split(/\r?\n/).filter((l) => l.trim());
-      if (lines.length < 2) { alert("データ行がありません"); return; }
-
-      // ヘッダー行解析
-      const parseRow = (line: string) =>
-        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
-      const headers = parseRow(lines[0]);
-      // 0: 商品コード, 1: 用具名, 2+: 事業所名
-      const officeHeaders = headers.slice(2);
-      const officeMap = new Map(offices.map((o) => [o.name, o.id]));
-
-      let imported = 0;
-      let skipped = 0;
-      const errors: string[] = [];
-      const prices: { tenant_id: string; product_code: string; office_id: string; rental_price: number }[] = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const cols = parseRow(lines[i]);
-        const productCode = cols[0]?.trim();
-        if (!productCode) { skipped++; continue; }
-        const eq = equipment.find((e) => e.product_code === productCode);
-        if (!eq) { skipped++; errors.push(`行${i + 1}: 商品コード「${productCode}」が見つかりません`); continue; }
-
-        officeHeaders.forEach((officeName, j) => {
-          const officeId = officeMap.get(officeName);
-          if (!officeId) return;
-          const priceStr = cols[j + 2]?.trim();
-          if (!priceStr) return;
-          const price = parseInt(priceStr.replace(/,/g, ""));
-          if (isNaN(price) || price <= 0) return;
-          prices.push({ tenant_id: tenantId, product_code: productCode, office_id: officeId, rental_price: price });
-          imported++;
-        });
-      }
-
-      if (prices.length > 0) {
-        await bulkUpsertOfficePrices(prices);
-      }
-      setResult({ imported, skipped, errors: errors.slice(0, 10) });
-    } catch (err) {
-      alert("インポートに失敗しました: " + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-      <div className="bg-white rounded-t-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-800">事業所別価格 取込</h3>
-          <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
-        </div>
-        <div className="p-4 space-y-4">
-          <div className="bg-indigo-50 rounded-xl p-3 text-xs text-indigo-700 space-y-1">
-            <p className="font-semibold">CSV形式：</p>
-            <p>商品コード,用具名,{offices.map((o) => o.name).join(",") || "事業所A,事業所B"}</p>
-            <p>CODE001,電動ベッド,15000,14000</p>
-            <p className="text-indigo-500">※「事業所別価格 出力」ボタンでテンプレートを取得できます</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">ファイル選択</label>
-            <input type="file" accept=".csv" onChange={handleFile} className="text-sm" />
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">またはCSVをペースト</label>
-            <textarea
-              value={csvText}
-              onChange={(e) => setCsvText(e.target.value)}
-              rows={6}
-              placeholder="CSVの内容をここにペースト..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-indigo-400 resize-none"
-            />
-          </div>
-
-          {result && (
-            <div className="bg-emerald-50 rounded-xl p-3 text-xs space-y-1">
-              <p className="font-semibold text-emerald-700">✓ 完了：{result.imported}件 取込、{result.skipped}件 スキップ</p>
-              {result.errors.map((e, i) => <p key={i} className="text-red-500">{e}</p>)}
-            </div>
-          )}
-        </div>
-        <div className="px-4 pb-6 pt-2 flex gap-2 border-t border-gray-100">
-          {result ? (
-            <button onClick={onDone} className="flex-1 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
-              完了
-            </button>
-          ) : (
-            <>
-              <button onClick={onClose} className="flex-1 py-3 border border-gray-200 text-sm text-gray-600 rounded-xl">
-                キャンセル
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={loading || !csvText.trim()}
-                className="flex-1 py-3 bg-indigo-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                取込実行
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Supplier Price Import Modal（卸別仕入価格 CSV 取込・月次） ────────────────
-
-function SupplierPriceImportModal({
-  tenantId,
-  suppliers,
-  equipment,
-  onClose,
-  onDone,
-}: {
-  tenantId: string;
-  suppliers: Supplier[];
-  equipment: Equipment[];
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [csvText, setCsvText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [effectiveMonth, setEffectiveMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
-  const [result, setResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
-
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => { setCsvText(ev.target?.result as string ?? ""); };
-    reader.readAsText(file, "UTF-8");
-  };
-
-  const handleImport = async () => {
-    if (!csvText.trim()) { alert("CSVを入力またはファイルを選択してください"); return; }
-    setLoading(true);
-    setResult(null);
-    try {
-      const text = csvText.replace(/^﻿/, "");
-      const lines = text.split(/\r?\n/).filter((l) => l.trim());
-      if (lines.length < 2) { alert("データ行がありません"); return; }
-
-      const parseRow = (line: string) =>
-        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
-      const headers = parseRow(lines[0]);
-      // 0: 商品コード, 1: 用具名, 2+: 卸名
-      const supplierHeaders = headers.slice(2);
-      const supplierMap = new Map(suppliers.map((s) => [s.name, s.id]));
-      const validFrom = `${effectiveMonth}-01`;
-
-      let imported = 0;
-      let skipped = 0;
-      const errors: string[] = [];
-      const rows: { tenant_id: string; product_code: string; supplier_id: string; purchase_price: number; valid_from: string }[] = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const cols = parseRow(lines[i]);
-        const productCode = cols[0]?.trim();
-        if (!productCode) { skipped++; continue; }
-        const eq = equipment.find((e) => e.product_code === productCode);
-        if (!eq) { skipped++; errors.push(`行${i + 1}: 商品コード「${productCode}」が見つかりません`); continue; }
-
-        supplierHeaders.forEach((supplierName, j) => {
-          const supplierId = supplierMap.get(supplierName);
-          if (!supplierId) return;
-          const priceStr = cols[j + 2]?.trim();
-          if (!priceStr) return;
-          const price = parseInt(priceStr.replace(/,/g, ""));
-          if (isNaN(price) || price <= 0) return;
-          rows.push({ tenant_id: tenantId, product_code: productCode, supplier_id: supplierId, purchase_price: price, valid_from: validFrom });
-          imported++;
-        });
-      }
-
-      if (rows.length > 0) {
-        await bulkUpsertPurchasePrices(rows);
-      }
-      setResult({ imported, skipped, errors: errors.slice(0, 10) });
-    } catch (err) {
-      alert("インポートに失敗しました: " + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-      <div className="bg-white rounded-t-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-800">卸別仕入価格 取込</h3>
-          <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
-        </div>
-        <div className="p-4 space-y-4">
-          <div className="bg-teal-50 rounded-xl p-3 text-xs text-teal-700 space-y-1">
-            <p className="font-semibold">CSV形式：</p>
-            <p>商品コード,用具名,{suppliers.map((s) => s.name).join(",") || "卸A,卸B"}</p>
-            <p>CODE001,電動ベッド,9000,8800</p>
-            <p className="text-teal-600">※「卸別仕入価格 出力」ボタンでテンプレートを取得できます</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">仕入価格の適用開始月</label>
-            <input
-              type="month"
-              value={effectiveMonth}
-              onChange={(e) => setEffectiveMonth(e.target.value)}
-              className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-teal-400"
-            />
-            <p className="text-[11px] text-gray-400 mt-1">この月から有効な仕入価格として登録されます（過去の発注には影響しません）</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">ファイル選択</label>
-            <input type="file" accept=".csv" onChange={handleFile} className="text-sm" />
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">またはCSVをペースト</label>
-            <textarea
-              value={csvText}
-              onChange={(e) => setCsvText(e.target.value)}
-              rows={6}
-              placeholder="CSVの内容をここにペースト..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-teal-400 resize-none"
-            />
-          </div>
-
-          {result && (
-            <div className="bg-emerald-50 rounded-xl p-3 text-xs space-y-1">
-              <p className="font-semibold text-emerald-700">✓ 完了：{result.imported}件 取込、{result.skipped}件 スキップ</p>
-              {result.errors.map((e, i) => <p key={i} className="text-red-500">{e}</p>)}
-            </div>
-          )}
-        </div>
-        <div className="px-4 pb-6 pt-2 flex gap-2 border-t border-gray-100">
-          {result ? (
-            <button onClick={onDone} className="flex-1 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
-              完了
-            </button>
-          ) : (
-            <>
-              <button onClick={onClose} className="flex-1 py-3 border border-gray-200 text-sm text-gray-600 rounded-xl">
-                キャンセル
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={loading || !csvText.trim()}
-                className="flex-1 py-3 bg-teal-600 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                取込実行
-              </button>
-            </>
-          )}
-        </div>
       </div>
     </div>
   );
