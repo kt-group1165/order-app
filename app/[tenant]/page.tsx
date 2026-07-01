@@ -2330,9 +2330,12 @@ function EquipmentDetail({
               </div>
             )}
             {/* 卸別仕入価格（月次改定） */}
-            {suppliers.length > 0 && (
-              <div>
-                <label className="text-xs font-medium text-gray-600 block mb-2">卸別仕入価格（円）</label>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">卸別仕入価格（円）</label>
+              {suppliers.length === 0 ? (
+                <p className="text-[11px] text-gray-400 border border-dashed border-gray-200 rounded-xl px-3 py-2">卸（仕入先）が未登録です。発注時に使う卸を登録すると、ここで卸ごとの仕入価格を月次で管理できます。</p>
+              ) : (
+                <>
                 <div className="border border-gray-200 rounded-xl overflow-hidden">
                   {suppliers.map((sup, idx) => {
                     const cur = purchasePrices.find((p) => p.supplier_id === sup.id)?.purchase_price ?? null;
@@ -2367,8 +2370,9 @@ function EquipmentDetail({
                   />
                   <p className="text-[11px] text-gray-400 mt-1">変更した卸のみ、この月から有効な価格として履歴に追加されます（過去の発注には影響しません）</p>
                 </div>
-              </div>
-            )}
+                </>
+              )}
+            </div>
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
                 <AlertCircle size={14} />
