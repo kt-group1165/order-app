@@ -46,7 +46,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail, mergeOrders, unmergeOrder } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, type ImportResult } from "@/lib/equipment";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -1480,6 +1480,9 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [offices, setOffices] = useState<Office[]>([]);
   const [officePrices, setOfficePrices] = useState<EquipmentOfficePrice[]>([]);
   const [showOfficePriceImport, setShowOfficePriceImport] = useState(false);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierPrices, setSupplierPrices] = useState<EquipmentPrice[]>([]);
+  const [showSupplierPriceImport, setShowSupplierPriceImport] = useState(false);
 
   const handleDeleteAll = async () => {
     if (deleteConfirm === "idle") { setDeleteConfirm("confirm1"); return; }
@@ -1553,14 +1556,18 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [eq, ofs, ops] = await Promise.all([
+      const [eq, ofs, ops, sups, spp] = await Promise.all([
         getEquipment(tenantId),
         getOffices(tenantId).catch(() => [] as Office[]),
         getOfficePrices(tenantId).catch(() => [] as EquipmentOfficePrice[]),
+        getSuppliers().catch(() => [] as Supplier[]),
+        getAllActivePurchasePrices(tenantId).catch(() => [] as EquipmentPrice[]),
       ]);
       setEquipment(eq);
       setOffices(ofs);
       setOfficePrices(ops);
+      setSuppliers(sups);
+      setSupplierPrices(spp);
     } finally {
       setLoading(false);
     }
@@ -1621,6 +1628,28 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
     const a = document.createElement("a");
     a.href = url;
     a.download = "事業所別レンタル価格.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportSupplierPricesCSV = () => {
+    if (suppliers.length === 0) { alert("卸（仕入先）が登録されていません。"); return; }
+    const headers = ["商品コード", "用具名", ...suppliers.map((s) => s.name)];
+    const rows = localEquipment.map((eq) => {
+      const priceCells = suppliers.map((s) => {
+        const pp = supplierPrices.find((p) => p.product_code === eq.product_code && p.supplier_id === s.id);
+        return pp ? String(pp.purchase_price) : "";
+      });
+      return [eq.product_code, eq.name, ...priceCells];
+    });
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "卸別仕入価格.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1761,6 +1790,20 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         <button
           onClick={() => setShowOfficePriceImport(true)}
           className="shrink-0 flex items-center gap-1 bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+        >
+          <Upload size={14} />
+          取込
+        </button>
+        <button
+          onClick={handleExportSupplierPricesCSV}
+          className="shrink-0 flex items-center gap-1 bg-teal-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+        >
+          <Download size={14} />
+          卸別仕入価格
+        </button>
+        <button
+          onClick={() => setShowSupplierPriceImport(true)}
+          className="shrink-0 flex items-center gap-1 bg-teal-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
         >
           <Upload size={14} />
           取込
@@ -1937,6 +1980,16 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           equipment={localEquipment}
           onClose={() => setShowOfficePriceImport(false)}
           onDone={() => { setShowOfficePriceImport(false); load(); }}
+        />
+      )}
+
+      {showSupplierPriceImport && (
+        <SupplierPriceImportModal
+          tenantId={tenantId}
+          suppliers={suppliers}
+          equipment={localEquipment}
+          onClose={() => setShowSupplierPriceImport(false)}
+          onDone={() => { setShowSupplierPriceImport(false); load(); }}
         />
       )}
     </div>
@@ -13522,6 +13575,164 @@ function OfficePriceImportModal({
                 onClick={handleImport}
                 disabled={loading || !csvText.trim()}
                 className="flex-1 py-3 bg-indigo-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                取込実行
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Supplier Price Import Modal（卸別仕入価格 CSV 取込・月次） ────────────────
+
+function SupplierPriceImportModal({
+  tenantId,
+  suppliers,
+  equipment,
+  onClose,
+  onDone,
+}: {
+  tenantId: string;
+  suppliers: Supplier[];
+  equipment: Equipment[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [csvText, setCsvText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [effectiveMonth, setEffectiveMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [result, setResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => { setCsvText(ev.target?.result as string ?? ""); };
+    reader.readAsText(file, "UTF-8");
+  };
+
+  const handleImport = async () => {
+    if (!csvText.trim()) { alert("CSVを入力またはファイルを選択してください"); return; }
+    setLoading(true);
+    setResult(null);
+    try {
+      const text = csvText.replace(/^﻿/, "");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) { alert("データ行がありません"); return; }
+
+      const parseRow = (line: string) =>
+        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
+      const headers = parseRow(lines[0]);
+      // 0: 商品コード, 1: 用具名, 2+: 卸名
+      const supplierHeaders = headers.slice(2);
+      const supplierMap = new Map(suppliers.map((s) => [s.name, s.id]));
+      const validFrom = `${effectiveMonth}-01`;
+
+      let imported = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      const rows: { tenant_id: string; product_code: string; supplier_id: string; purchase_price: number; valid_from: string }[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseRow(lines[i]);
+        const productCode = cols[0]?.trim();
+        if (!productCode) { skipped++; continue; }
+        const eq = equipment.find((e) => e.product_code === productCode);
+        if (!eq) { skipped++; errors.push(`行${i + 1}: 商品コード「${productCode}」が見つかりません`); continue; }
+
+        supplierHeaders.forEach((supplierName, j) => {
+          const supplierId = supplierMap.get(supplierName);
+          if (!supplierId) return;
+          const priceStr = cols[j + 2]?.trim();
+          if (!priceStr) return;
+          const price = parseInt(priceStr.replace(/,/g, ""));
+          if (isNaN(price) || price <= 0) return;
+          rows.push({ tenant_id: tenantId, product_code: productCode, supplier_id: supplierId, purchase_price: price, valid_from: validFrom });
+          imported++;
+        });
+      }
+
+      if (rows.length > 0) {
+        await bulkUpsertPurchasePrices(rows);
+      }
+      setResult({ imported, skipped, errors: errors.slice(0, 10) });
+    } catch (err) {
+      alert("インポートに失敗しました: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
+      <div className="bg-white rounded-t-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">卸別仕入価格 取込</h3>
+          <button onClick={onClose}><X size={20} className="text-gray-400" /></button>
+        </div>
+        <div className="p-4 space-y-4">
+          <div className="bg-teal-50 rounded-xl p-3 text-xs text-teal-700 space-y-1">
+            <p className="font-semibold">CSV形式：</p>
+            <p>商品コード,用具名,{suppliers.map((s) => s.name).join(",") || "卸A,卸B"}</p>
+            <p>CODE001,電動ベッド,9000,8800</p>
+            <p className="text-teal-600">※「卸別仕入価格 出力」ボタンでテンプレートを取得できます</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">仕入価格の適用開始月</label>
+            <input
+              type="month"
+              value={effectiveMonth}
+              onChange={(e) => setEffectiveMonth(e.target.value)}
+              className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-teal-400"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">この月から有効な仕入価格として登録されます（過去の発注には影響しません）</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">ファイル選択</label>
+            <input type="file" accept=".csv" onChange={handleFile} className="text-sm" />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">またはCSVをペースト</label>
+            <textarea
+              value={csvText}
+              onChange={(e) => setCsvText(e.target.value)}
+              rows={6}
+              placeholder="CSVの内容をここにペースト..."
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-teal-400 resize-none"
+            />
+          </div>
+
+          {result && (
+            <div className="bg-emerald-50 rounded-xl p-3 text-xs space-y-1">
+              <p className="font-semibold text-emerald-700">✓ 完了：{result.imported}件 取込、{result.skipped}件 スキップ</p>
+              {result.errors.map((e, i) => <p key={i} className="text-red-500">{e}</p>)}
+            </div>
+          )}
+        </div>
+        <div className="px-4 pb-6 pt-2 flex gap-2 border-t border-gray-100">
+          {result ? (
+            <button onClick={onDone} className="flex-1 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
+              完了
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} className="flex-1 py-3 border border-gray-200 text-sm text-gray-600 rounded-xl">
+                キャンセル
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={loading || !csvText.trim()}
+                className="flex-1 py-3 bg-teal-600 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2"
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                 取込実行

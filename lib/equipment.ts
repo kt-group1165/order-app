@@ -336,6 +336,42 @@ export async function setSupplierActive(
   if (upErr) throw upErr;
 }
 
+/**
+ * テナント全用具の現行有効仕入価格を卸別に1件ずつ返す（CSV 一括出力用）。
+ * is_active=true を取得し、(product_code, supplier_id) ごとに valid_from 最新のみ採用。
+ */
+export async function getAllActivePurchasePrices(tenantId: string): Promise<EquipmentPrice[]> {
+  const { data, error } = await supabase
+    .from("equipment_prices")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("is_active", true)
+    .order("valid_from", { ascending: false });
+  if (error) throw error;
+  const seen = new Map<string, EquipmentPrice>();
+  for (const row of data ?? []) {
+    const key = `${row.product_code} ${row.supplier_id}`;
+    if (!seen.has(key)) seen.set(key, row);
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * 卸別仕入価格を一括 upsert（CSV 取込用）。
+ * 各行 valid_from は指定月初。unique(tenant, product, supplier, valid_from) で
+ * 同月は上書き・別月は履歴追加。過去の発注には影響しない。
+ */
+export async function bulkUpsertPurchasePrices(
+  rows: { tenant_id: string; product_code: string; supplier_id: string; purchase_price: number; valid_from: string }[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  const payload = rows.map((r) => ({ ...r, is_active: true, updated_at: new Date().toISOString() }));
+  const { error } = await supabase
+    .from("equipment_prices")
+    .upsert(payload, { onConflict: "tenant_id,product_code,supplier_id,valid_from" });
+  if (error) throw error;
+}
+
 export type EquipmentImportRow = {
   product_code?: string;
   tais_code?: string;
