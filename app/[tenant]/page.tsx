@@ -42,11 +42,11 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail, mergeOrders, unmergeOrder } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, type ImportResult } from "@/lib/equipment";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -2045,6 +2045,35 @@ function EquipmentDetail({
   const todayYM = new Date().toISOString().slice(0, 7); // "YYYY-MM"
   const [priceEffectiveMonth, setPriceEffectiveMonth] = useState(todayYM);
 
+  // 卸別仕入価格（月次改定）
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  // この用具の「現行」有効仕入価格（卸ごと1件）
+  const [purchasePrices, setPurchasePrices] = useState<EquipmentPrice[]>([]);
+  const [purchasePriceMap, setPurchasePriceMap] = useState<Record<string, string>>({});
+  const [ppEffectiveMonth, setPpEffectiveMonth] = useState(todayYM);
+  // 卸マスタを読み込む
+  useEffect(() => {
+    let active = true;
+    getSuppliers().then((s) => { if (active) setSuppliers(s); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  // この用具の現行仕入価格を読み込む
+  useEffect(() => {
+    if (!item) return; // 新規は現行仕入価格なし（初期値 [] のまま）
+    let active = true;
+    getActiveEquipmentPrices(tenantId, item.product_code)
+      .then((ps) => { if (active) setPurchasePrices(ps); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [tenantId, item]);
+  // 編集開始 or 価格更新時に入力欄へ同期
+  useEffect(() => {
+    const m: Record<string, string> = {};
+    purchasePrices.forEach((p) => { m[p.supplier_id] = String(p.purchase_price); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount init / 現行値の同期)
+    setPurchasePriceMap(m);
+  }, [isEditing, purchasePrices]);
+
   // 用具名から AI でフリガナ自動生成
   const handleGenerateFurigana = async () => {
     if (!name.trim()) return;
@@ -2107,6 +2136,26 @@ function EquipmentDetail({
           }
         })
       );
+      // 卸別仕入価格を保存（変更があった卸だけ、ppEffectiveMonth から有効な履歴行を追加）
+      await Promise.all(
+        suppliers.map(async (sup) => {
+          const raw = purchasePriceMap[sup.id] ?? "";
+          if (!raw.trim()) return; // 空欄 = 変更なし扱い（取扱終了トグルは別途）
+          const val = parseInt(raw.trim());
+          if (!Number.isFinite(val) || val <= 0) return;
+          const current = purchasePrices.find((p) => p.supplier_id === sup.id)?.purchase_price ?? null;
+          if (current === val) return; // 変更なしはスキップ（履歴を汚さない）
+          await revisePurchasePrice({
+            tenantId,
+            productCode: saved.product_code,
+            supplierId: sup.id,
+            purchasePrice: val,
+            effectiveMonth: ppEffectiveMonth,
+          });
+        })
+      );
+      // 現行仕入価格を再取得
+      getActiveEquipmentPrices(tenantId, saved.product_code).then(setPurchasePrices).catch(() => {});
       onReloadOfficePrices();
       onSave(saved);
       setIsEditing(false);
@@ -2130,6 +2179,11 @@ function EquipmentDetail({
     setSelectionReason(item!.selection_reason ?? "");
     setProposalReason(item!.proposal_reason ?? "");
     setPriceEffectiveMonth(new Date().toISOString().slice(0, 7));
+    // 卸別仕入価格の入力を現行値に戻す
+    const pm: Record<string, string> = {};
+    purchasePrices.forEach((p) => { pm[p.supplier_id] = String(p.purchase_price); });
+    setPurchasePriceMap(pm);
+    setPpEffectiveMonth(new Date().toISOString().slice(0, 7));
     setIsEditing(false);
     setError("");
   };
@@ -2275,6 +2329,46 @@ function EquipmentDetail({
                 </div>
               </div>
             )}
+            {/* 卸別仕入価格（月次改定） */}
+            {suppliers.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-2">卸別仕入価格（円）</label>
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  {suppliers.map((sup, idx) => {
+                    const cur = purchasePrices.find((p) => p.supplier_id === sup.id)?.purchase_price ?? null;
+                    const rp = rentalPrice ? parseFloat(rentalPrice) : null;
+                    const inputVal = purchasePriceMap[sup.id] ?? "";
+                    const pv = inputVal.trim() ? parseInt(inputVal.trim()) : null;
+                    const margin = rp != null && pv != null ? rp - pv : null;
+                    return (
+                      <div key={sup.id} className={`flex items-center gap-2 px-3 py-2 ${idx > 0 ? "border-t border-gray-100" : ""}`}>
+                        <span className="text-sm text-gray-700 flex-1 truncate">{sup.name}</span>
+                        {margin != null && (
+                          <span className={`text-[11px] ${margin >= 0 ? "text-emerald-600" : "text-red-500"}`}>粗利 ¥{margin.toLocaleString()}</span>
+                        )}
+                        <input
+                          type="number"
+                          value={inputVal}
+                          onChange={(e) => setPurchasePriceMap((prev) => ({ ...prev, [sup.id]: e.target.value }))}
+                          placeholder={cur != null ? String(cur) : "例：9000"}
+                          className="w-28 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right outline-none focus:border-emerald-400"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2">
+                  <label className="text-xs font-medium text-gray-600 block mb-1">仕入価格の適用開始月</label>
+                  <input
+                    type="month"
+                    value={ppEffectiveMonth}
+                    onChange={(e) => setPpEffectiveMonth(e.target.value)}
+                    className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">変更した卸のみ、この月から有効な価格として履歴に追加されます（過去の発注には影響しません）</p>
+                </div>
+              </div>
+            )}
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
                 <AlertCircle size={14} />
@@ -2306,6 +2400,29 @@ function EquipmentDetail({
                       <div key={office.id} className="flex justify-between items-center">
                         <span className="text-xs text-gray-600">{office.name}</span>
                         <span className="text-sm font-medium text-emerald-700">¥{op.rental_price.toLocaleString()}/月</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {/* 卸別仕入価格（表示・現行） */}
+            {purchasePrices.length > 0 && (
+              <div className="bg-gray-50 rounded-xl p-3">
+                <p className="text-xs text-gray-400 mb-2">卸別仕入価格（現行）</p>
+                <div className="space-y-1">
+                  {purchasePrices.map((p) => {
+                    const sup = suppliers.find((s) => s.id === p.supplier_id);
+                    const margin = item?.rental_price != null ? item.rental_price - p.purchase_price : null;
+                    return (
+                      <div key={p.id} className="flex justify-between items-center">
+                        <span className="text-xs text-gray-600">{sup?.name ?? "（不明な卸）"}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-800">¥{p.purchase_price.toLocaleString()}</span>
+                          {margin != null && (
+                            <span className={`text-[11px] ${margin >= 0 ? "text-emerald-600" : "text-red-500"}`}>粗利 ¥{margin.toLocaleString()}</span>
+                          )}
+                        </span>
                       </div>
                     );
                   })}
@@ -9747,7 +9864,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           order,
           equipmentName,
           rentalPrice: getMonthlyPrice(item.product_code),
-          purchasePrice: getPurchasePrice(item.product_code, item.supplier_id),
+          purchasePrice: item.purchase_price ?? getPurchasePrice(item.product_code, item.supplier_id),
         });
       }
 
@@ -9781,7 +9898,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           order,
           equipmentName,
           rentalPrice: getMonthlyPrice(item.product_code),
-          purchasePrice: getPurchasePrice(item.product_code, item.supplier_id),
+          purchasePrice: item.purchase_price ?? getPurchasePrice(item.product_code, item.supplier_id),
         });
       }
     }
@@ -9789,6 +9906,61 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     // 売上日昇順
     return result.sort((a, b) => a.salesDate.localeCompare(b.salesDate));
   }, [orderItems, orders, clients, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
+
+  // 月次損益（発生ベース・介護保険レンタル）
+  //   売上 = その月に稼働中のレンタル月額の合計（半月按分: 開始16日以降/終了15日以前は半月）
+  //   経費 = その月にレンタル開始した item の仕入原価合計（order_items.purchase_price スナップ優先、無ければカタログ）
+  //   利益 = 売上 − 経費。現金（買掛支払）とは別軸の客観的な月次損益。
+  const pnl = useMemo(() => {
+    const monthStart = `${month}-01`;
+    const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10);
+    // その月有効な月額レンタル（rental 履歴優先）
+    const monthlyRentalOf = (productCode: string): number => {
+      const hist = priceHistory
+        .filter((p) => p.product_code === productCode && p.valid_from <= monthEnd)
+        .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
+      if (hist.length > 0) return hist[0].rental_price;
+      return equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
+    };
+    // カタログ仕入（スナップショットが無い旧データ用フォールバック）
+    const catalogPurchaseOf = (productCode: string, supplierId: string | null): number => {
+      if (!supplierId) return 0;
+      return purchasePrices.find((p) => p.product_code === productCode && p.supplier_id === supplierId)?.purchase_price ?? 0;
+    };
+    let revenue = 0;
+    let expense = 0;
+    let activeCount = 0;
+    let startedCount = 0;
+    for (const item of orderItems) {
+      const order = orders.find((o) => o.id === item.order_id);
+      if (!order) continue;
+      if (currentOfficeId && order.office_id && order.office_id !== currentOfficeId) continue;
+      const pt = item.payment_type ?? order.payment_type;
+      if (pt !== "介護") continue;
+      if (!item.rental_start_date) continue;
+      if (item.status === "cancelled") continue;
+      // ── 売上: 当月稼働中か（開始<=月末 かつ 月初より前に終了していない）──
+      const startedByMonthEnd = item.rental_start_date <= monthEnd;
+      const endedBeforeMonth = item.status === "terminated" && item.rental_end_date != null && item.rental_end_date < monthStart;
+      if (startedByMonthEnd && !endedBeforeMonth) {
+        const full = monthlyRentalOf(item.product_code);
+        const startDay = item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd
+          ? parseInt(item.rental_start_date.split("-")[2]) : null;
+        const endDay = item.status === "terminated" && item.rental_end_date != null
+          && item.rental_end_date >= monthStart && item.rental_end_date <= monthEnd
+          ? parseInt(item.rental_end_date.split("-")[2]) : null;
+        const half = (startDay != null && startDay >= 16) || (endDay != null && endDay <= 15);
+        revenue += Math.round(full * (half ? 0.5 : 1));
+        activeCount++;
+      }
+      // ── 経費: その月にレンタル開始した分の仕入原価（スナップ優先）──
+      if (item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd) {
+        expense += item.purchase_price ?? catalogPurchaseOf(item.product_code, item.supplier_id);
+        startedCount++;
+      }
+    }
+    return { revenue, expense, profit: revenue - expense, activeCount, startedCount };
+  }, [orderItems, orders, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
 
   // 書類チェック関数
   const hasDoc = (clientId: string, docType: string) =>
@@ -9883,6 +10055,17 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           </button>
         </div>
       </div>
+
+      {/* 月次損益（発生ベース） */}
+      {!loading && (
+        <div className="border-b border-gray-300 bg-slate-50 px-3 py-2 shrink-0 flex items-center gap-4 flex-wrap text-xs">
+          <span className="font-semibold text-gray-700">月次損益（発生ベース）</span>
+          <span className="text-gray-600">売上 <span className="font-semibold text-gray-900">¥{pnl.revenue.toLocaleString()}</span> <span className="text-gray-400">(稼働{pnl.activeCount}件)</span></span>
+          <span className="text-gray-600">経費 <span className="font-semibold text-gray-900">¥{pnl.expense.toLocaleString()}</span> <span className="text-gray-400">(当月開始{pnl.startedCount}件)</span></span>
+          <span className="text-gray-600">利益 <span className={`font-bold ${pnl.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>¥{pnl.profit.toLocaleString()}</span></span>
+          <span className="text-[10px] text-gray-400 ml-auto">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
+        </div>
+      )}
 
       {/* テーブル */}
       {loading ? (

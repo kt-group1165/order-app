@@ -125,6 +125,8 @@ export type Equipment = {
   // 用具名のカタカナ読み（音声発注のカナマッチング用）
   furigana: string | null;
   category: string | null;
+  // 単体商品 or セット(A+B=C)。'set' の構成は equipment_set_items で定義
+  kind: "single" | "set";
   rental_price: number | null;
   national_avg_price: number | null;
   price_limit: number | null;
@@ -145,23 +147,40 @@ export type Supplier = {
   created_at: string;
 };
 
-// 仕入れ価格
+// 仕入れ価格 (卸別 offering: 同一商品×複数卸、時期別履歴)
 export type EquipmentPrice = {
   id: string;
   tenant_id: string;
   product_code: string;
   supplier_id: string;
   purchase_price: number;
+  // 卸側の実型番 (発注書に載る)
+  supplier_product_code: string | null;
+  // 仕入価格の有効開始日 (履歴化)。DATE "YYYY-MM-DD"
+  valid_from: string;
+  // 取扱終了した卸を無効化
+  is_active: boolean;
   updated_at: string;
 };
 
-// 価格改定履歴
+// 価格改定履歴 (レンタル価格)
 export type EquipmentPriceHistory = {
   id: string;
   tenant_id: string;
   product_code: string;
   rental_price: number;
   valid_from: string; // DATE "YYYY-MM-DD"
+  created_at: string;
+};
+
+// セット構成 (BOM): C = A + B。親=set_product_code, 子=component_product_code
+export type EquipmentSetItem = {
+  id: string;
+  tenant_id: string;
+  set_product_code: string; // 親 (equipment_master.kind='set')
+  component_product_code: string; // 子
+  quantity: number;
+  sort_order: number | null;
   created_at: string;
 };
 
@@ -337,6 +356,8 @@ export type OrderItem = {
   notes: string | null;
   tokka_group: string | null;
   tokka_group_price: number | null;
+  // 請求単位: NULL=各明細を単体TAISで請求 / セット親product_code=束ねてそのTAISで請求
+  tokka_bill_product_code: string | null;
   created_at: string;
   updated_at: string;
 };

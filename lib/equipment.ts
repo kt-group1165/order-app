@@ -1,4 +1,4 @@
-import { supabase, Equipment, Supplier, EquipmentPrice, EquipmentPriceHistory } from "./supabase";
+import { supabase, Equipment, Supplier, EquipmentPrice, EquipmentPriceHistory, EquipmentSetItem } from "./supabase";
 import { cached, invalidateCache } from "./cache";
 
 export async function getEquipment(tenantId: string, bypassCache = false): Promise<Equipment[]> {
@@ -142,6 +142,198 @@ export async function getEquipmentPrices(
     .eq("product_code", productCode);
   if (error) throw error;
   return data ?? [];
+}
+
+/**
+ * 現行有効な仕入価格を卸別に1件ずつ返す。
+ * is_active=true の全 offering を取得し、supplier_id ごとに valid_from が
+ * 最新の1行だけに JS 側で絞る (Supabase の distinct on は使わない)。
+ */
+export async function getActiveEquipmentPrices(
+  tenantId: string,
+  productCode: string
+): Promise<EquipmentPrice[]> {
+  const { data, error } = await supabase
+    .from("equipment_prices")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("product_code", productCode)
+    .eq("is_active", true)
+    .order("valid_from", { ascending: false });
+  if (error) throw error;
+
+  // supplier_id ごとに valid_from 降順の初出 (= 最新) のみ採用
+  const bySupplier = new Map<string, EquipmentPrice>();
+  for (const row of data ?? []) {
+    if (!bySupplier.has(row.supplier_id)) {
+      bySupplier.set(row.supplier_id, row);
+    }
+  }
+  return Array.from(bySupplier.values());
+}
+
+// ─── セット構成 (equipment_set_items / BOM) ──────────────────────────────────
+
+/** 親 code のセット構成 (子構成) を sort_order 昇順で取得 */
+export async function getEquipmentSetItems(
+  tenantId: string,
+  setProductCode: string
+): Promise<EquipmentSetItem[]> {
+  const { data, error } = await supabase
+    .from("equipment_set_items")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("set_product_code", setProductCode)
+    .order("sort_order", { ascending: true, nullsFirst: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * セット構成を置換保存する。
+ * 既存の構成を delete → 新構成を bulk insert (置換方式)。
+ */
+export async function saveEquipmentSetItems(
+  tenantId: string,
+  setProductCode: string,
+  components: { component_product_code: string; quantity: number; sort_order?: number }[]
+): Promise<void> {
+  // 既存構成を削除
+  const { error: delError } = await supabase
+    .from("equipment_set_items")
+    .delete()
+    .eq("tenant_id", tenantId)
+    .eq("set_product_code", setProductCode);
+  if (delError) throw delError;
+
+  if (components.length === 0) return;
+
+  const rows = components.map((c, i) => ({
+    tenant_id: tenantId,
+    set_product_code: setProductCode,
+    component_product_code: c.component_product_code,
+    quantity: c.quantity,
+    sort_order: c.sort_order ?? i,
+  }));
+
+  const { error: insError } = await supabase
+    .from("equipment_set_items")
+    .insert(rows);
+  if (insError) throw insError;
+}
+
+/** 粗利 (レンタル価格 − 仕入価格) を返す純関数。DB は触らない。 */
+export function calcUnitMargin(
+  rentalPrice: number | null,
+  purchasePrice: number | null
+): number {
+  return (rentalPrice ?? 0) - (purchasePrice ?? 0);
+}
+
+// ─── 仕入価格の改定 (卸別・月次履歴) ──────────────────────────────────────────
+// 運用原則:
+//  - 改定は append (新しい月の行を足す)。過去行は UPDATE しない。
+//  - 「その月の仕入値」= valid_from <= 月初 の最新行 (rental 履歴と同じ思想)。
+//  - 確定済みの数値 (発注済) は order_items.purchase_price の snapshot が正。
+//    equipment_prices は「発注時に埋める既定値」と「月次カタログ参照」に徹する。
+//    → 改定・訂正しても確定値には一切波及しない。
+
+/** 複数用具の仕入価格 (全履歴行) をまとめて取得。月次 lookup 用。 */
+export async function getPurchasePrices(
+  tenantId: string,
+  productCodes: string[]
+): Promise<EquipmentPrice[]> {
+  if (productCodes.length === 0) return [];
+  const { data, error } = await supabase
+    .from("equipment_prices")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .in("product_code", productCodes)
+    .order("valid_from", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * 指定月 (yearMonth="YYYY-MM") 時点の、ある用具×ある卸の有効仕入価格。
+ * 改定は月初 (YYYY-MM-01) 単位の前提。該当なしは null。
+ * prices は getPurchasePrices / getEquipmentPrices で取得した行群を渡す。
+ */
+export function getPurchasePriceForMonth(
+  prices: EquipmentPrice[],
+  productCode: string,
+  supplierId: string,
+  yearMonth: string
+): number | null {
+  const monthStart = `${yearMonth}-01`;
+  const records = prices
+    .filter(
+      (p) =>
+        p.product_code === productCode &&
+        p.supplier_id === supplierId &&
+        p.valid_from <= monthStart
+    )
+    .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
+  return records[0]?.purchase_price ?? null;
+}
+
+/**
+ * 仕入価格を改定する (卸別・月次)。
+ * effectiveMonth ("YYYY-MM") の月初を valid_from として upsert:
+ *  - 新しい月を指定 → 新行 (履歴が積まれ、過去に非波及)
+ *  - 同じ月を再指定 → その月の行を上書き (訂正)
+ * unique(tenant_id, product_code, supplier_id, valid_from) を onConflict に使う。
+ */
+export async function revisePurchasePrice(params: {
+  tenantId: string;
+  productCode: string;
+  supplierId: string;
+  purchasePrice: number;
+  effectiveMonth: string; // "YYYY-MM"
+  supplierProductCode?: string | null;
+}): Promise<void> {
+  const validFrom = `${params.effectiveMonth}-01`;
+  const { error } = await supabase.from("equipment_prices").upsert(
+    {
+      tenant_id: params.tenantId,
+      product_code: params.productCode,
+      supplier_id: params.supplierId,
+      purchase_price: params.purchasePrice,
+      valid_from: validFrom,
+      supplier_product_code: params.supplierProductCode ?? null,
+      is_active: true,
+    },
+    { onConflict: "tenant_id,product_code,supplier_id,valid_from" }
+  );
+  if (error) throw error;
+}
+
+/**
+ * 卸の取扱終了 / 再開を切り替える。
+ * 該当用具×卸の最新月行の is_active を更新 (履歴は残す)。
+ */
+export async function setSupplierActive(
+  tenantId: string,
+  productCode: string,
+  supplierId: string,
+  isActive: boolean
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("equipment_prices")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("product_code", productCode)
+    .eq("supplier_id", supplierId)
+    .order("valid_from", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const target = data?.[0];
+  if (!target) return;
+  const { error: upErr } = await supabase
+    .from("equipment_prices")
+    .update({ is_active: isActive })
+    .eq("id", target.id);
+  if (upErr) throw upErr;
 }
 
 export type EquipmentImportRow = {
