@@ -672,7 +672,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     歩行器: "bg-purple-100 text-purple-700",
     ベッド: "bg-amber-100 text-amber-700",
     特殊寝台: "bg-amber-100 text-amber-700",
-    手すり: "bg-green-100 text-green-700",
+    手すり: "bg-pink-100 text-pink-700",
     スロープ: "bg-orange-100 text-orange-700",
   };
   const catColorOrders = (cat: string | null) =>
