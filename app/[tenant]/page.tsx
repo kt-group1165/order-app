@@ -273,6 +273,14 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+// DB の日付文字列 ("1946/4/25" 等) を <input type="date"> 用 "YYYY-MM-DD" に正規化
+const toDateInput = (s: string | null | undefined): string => {
+  if (!s) return "";
+  const m = s.trim().match(/^(\d{4})[/\-年](\d{1,2})[/\-月](\d{1,2})/);
+  if (!m) return "";
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+};
+
 type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "notifications" | "settings";
 
 // ホーム(メニュー一覧)画面
@@ -15396,8 +15404,8 @@ function CarePlanModal({
   const [creationDate, setCreationDate] = useState((initialParams?.creationDate as string) ?? todayStr);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const [gender, setGender] = useState((initialParams?.gender as string) ?? client.gender ?? "");
-  const [birthDate, setBirthDate] = useState((initialParams?.birthDate as string) ?? "");
-  const [certStartDate, setCertStartDate] = useState((initialParams?.certStartDate as string) ?? "");
+  const [birthDate, setBirthDate] = useState((initialParams?.birthDate as string) ?? toDateInput(client.birth_date));
+  const [certStartDate, setCertStartDate] = useState((initialParams?.certStartDate as string) ?? toDateInput(client.certification_start_date));
   const [consultantName, setConsultantName] = useState((initialParams?.consultantName as string) ?? "");
   const [consultantRelation, setConsultantRelation] = useState((initialParams?.consultantRelation as string) ?? "");
   const [consultationDate, setConsultationDate] = useState((initialParams?.consultationDate as string) ?? todayStr);
