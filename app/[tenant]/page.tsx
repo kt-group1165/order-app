@@ -446,10 +446,10 @@ export default function TenantPage({
           [
             { id: "orders", icon: ClipboardList, label: "発注管理" },
             { id: "documents", icon: FileText, label: "書類" },
+            { id: "doc-tasks", icon: FileWarning, label: "書類タスク" },
             { id: "clients", icon: Users, label: "利用者別" },
             { id: "staff", icon: Users, label: "職員" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
-            { id: "doc-tasks", icon: FileWarning, label: "書類タスク" },
             { id: "billing", icon: CreditCard, label: "請求" },
             { id: "equipment", icon: Package, label: "用具マスタ" },
             { id: "settings", icon: Settings, label: "設定" },
@@ -8095,7 +8095,10 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
     "ま":["マ","ミ","ム","メ","モ"],"や":["ヤ","ユ","ヨ"],
     "ら":["ラ","リ","ル","レ","ロ"],"わ":["ワ","ヲ","ン"],
   };
-  const toKana = (s: string) => s.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const toKana = (s: string) => s
+    .normalize("NFC")
+    .replace(/[\uff66-\uff9f]/g, (c) => HW_KANA[c] ?? c)                                        // \u534a\u89d2\u30ab\u30ca\u2192\u5168\u89d2\u30ab\u30ca
+    .replace(/[\u3041-\u3096]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));  // \u3072\u3089\u304c\u306a\u2192\u30ab\u30bf\u30ab\u30ca
   const allKana = Object.values(KANA_MAP).flat();
   const filteredClients = (kanaFilter
     ? clients.filter(c => {
@@ -9342,7 +9345,10 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     "ら":["ラ","リ","ル","レ","ロ"],"わ":["ワ","ヲ","ン"],
   };
   // ひらがな→カタカナ正規化
-  const toKana = (s: string) => s.replace(/[\u3041-\u3096]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const toKana = (s: string) => s
+    .normalize("NFC")
+    .replace(/[\uff66-\uff9f]/g, (c) => HW_KANA[c] ?? c)                                        // \u534a\u89d2\u30ab\u30ca\u2192\u5168\u89d2\u30ab\u30ca
+    .replace(/[\u3041-\u3096]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));  // \u3072\u3089\u304c\u306a\u2192\u30ab\u30bf\u30ab\u30ca
   const allKana = Object.values(KANA_MAP).flat();
 
   const filteredGroups = kanaFilter
