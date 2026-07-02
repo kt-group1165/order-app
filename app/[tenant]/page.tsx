@@ -22112,6 +22112,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
                   className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 flex items-center justify-between cursor-pointer hover:border-emerald-300 transition-colors">
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="text-sm font-medium text-gray-800 truncate">{n.client_name || "(利用者名なし)"}<span className="font-normal text-gray-400 ml-0.5">様</span></span>
+                    {n.office_label && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 shrink-0">{n.office_label}</span>}
                     {n.meeting_date && <span className="text-xs text-gray-500 shrink-0">開催日: {n.meeting_date}</span>}
                     {n.created_date && <span className="text-xs text-gray-400 shrink-0">作成: {n.created_date}</span>}
                   </div>

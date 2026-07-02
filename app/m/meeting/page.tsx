@@ -17,6 +17,15 @@ const DEFAULTS = {
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
+// 事業所 slug → 表示名 (id の解決・検証はサーバー側 /api/meeting-submit が行う)
+const OFFICE_LABELS: Record<string, string> = {
+  "caresupo": "ケア・サポート千葉",
+  "hana-mutsumi": "Ｈａｎａムツミ福祉用具",
+  "takashina": "千葉ムツミ福祉用具高品",
+  "hanamigawa": "Ｈａｎａ福祉用具花見川",
+  "links": "リンクス福祉用具",
+};
+
 type SavedNote = {
   id: string;
   client_name: string;
@@ -36,6 +45,7 @@ type SavedNote = {
 
 export default function MobileMeetingPage() {
   const [key, setKey] = useState<string | null>(null);
+  const [office, setOffice] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<"form" | "list">("form");
   const [notes, setNotes] = useState<SavedNote[] | null>(null);
@@ -65,6 +75,7 @@ export default function MobileMeetingPage() {
     const params = new URLSearchParams(window.location.search);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time init: URL クエリ読み取り)
     setKey(params.get("key"));
+    setOffice(params.get("office"));
     setReady(true);
   }, []);
 
@@ -89,7 +100,7 @@ export default function MobileMeetingPage() {
     setListError("");
     setNotes(null);
     try {
-      const res = await fetch(`/api/meeting-submit?key=${encodeURIComponent(k)}`);
+      const res = await fetch(`/api/meeting-submit?key=${encodeURIComponent(k)}${office ? `&office=${encodeURIComponent(office)}` : ""}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setListError(data.error ?? "取得に失敗しました");
@@ -119,6 +130,7 @@ export default function MobileMeetingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           key,
+          office,
           client_name: clientName,
           creator_name: creatorName,
           created_date: createdDate,
@@ -175,7 +187,12 @@ export default function MobileMeetingPage() {
   // ヘッダー (入力/一覧 切替)
   const header = (
     <header className="bg-emerald-600 text-white px-4 py-3 sticky top-0 z-10 flex items-center justify-between">
-      <h1 className="text-sm font-semibold">担当者会議録（第4表）</h1>
+      <div className="min-w-0">
+        <h1 className="text-sm font-semibold">担当者会議録（第4表）</h1>
+        {office && OFFICE_LABELS[office] && (
+          <p className="text-[11px] text-emerald-100 truncate">{OFFICE_LABELS[office]}</p>
+        )}
+      </div>
       <div className="flex gap-1 bg-emerald-700/60 rounded-lg p-0.5">
         <button
           onClick={() => setView("form")}

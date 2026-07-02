@@ -12,6 +12,8 @@ export type ServiceMeetingNote = {
   id?: string;
   tenant_id: string;
   client_id?: string | null;         // 将来の利用者連動用 (現状 NULL)
+  office_id?: string | null;         // 事業所 (スマホ事業所別URL 由来。本体連結キー)
+  office_label?: string | null;      // 事業所名スナップショット (表示用)
   client_name: string;
   creator_name?: string | null;      // 居宅サービス計画作成者氏名(担当者)
   created_date?: string | null;      // 作成年月日 (YYYY-MM-DD)
