@@ -1005,7 +1005,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
               return (
               <div key={group.clientId ?? "__none__"}>
                 {/* 利用者ヘッダー */}
-                <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-2 flex items-center gap-2 sticky top-0 z-10">
+                <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-2 flex items-center gap-2">
                   <span className="text-sm font-bold text-emerald-800">{group.name}</span>
                   {group.furigana && (
                     <span className="text-xs text-emerald-500">{group.furigana}</span>
@@ -11047,6 +11047,8 @@ type NewOrderItem = {
   quantity: number;
   tokka_group: string | null;
   tokka_group_price: string;
+  /** セット親の product_code (構成品展開行のみ)。同 tokka_group を親 TAIS で束ねて請求 */
+  tokka_bill_product_code?: string | null;
 };
 
 const TOKKA_GROUP_LETTERS = ["A", "B", "C", "D", "E", "F"];
@@ -11243,6 +11245,9 @@ function NewOrderModal({
   const [equipModalCategory, setEquipModalCategory] = useState<string | null>(null);
   const [equipModalSelected, setEquipModalSelected] = useState<{ equipment: Equipment; quantity: number }[]>([]);
   const [activeModalKind, setActiveModalKind] = useState<PaymentKind>("介護");
+  // セット商品 (kind='set') 追加時の「セットのまま / 構成品に展開」選択キュー
+  const [pendingSets, setPendingSets] = useState<{ equipment: Equipment; quantity: number; kind: PaymentKind }[]>([]);
+  const [pendingSetLoading, setPendingSetLoading] = useState(false);
 
   // 新規フィールド
   const [selectedKinds, setSelectedKinds] = useState<Set<PaymentKind>>(new Set(["介護"]));
@@ -11333,6 +11338,77 @@ function NewOrderModal({
         tokka_group_price: "",
       },
     ]);
+  };
+
+  // セット商品をセットのまま 1 行追加 (= C 単体請求、tokka_bill_product_code なし)
+  const addSetAsSingleRow = (eq: Equipment, quantity: number, kind: PaymentKind) => {
+    setItems((prev) => {
+      if (prev.some((i) => i.equipment.product_code === eq.product_code)) return prev;
+      const group = kind === "特価自費" ? autoTokkaGroup(eq, prev.filter((i) => i.payment_type === "特価自費")) : null;
+      return [
+        ...prev,
+        {
+          equipment: eq,
+          rental_price: eq.rental_price != null ? String(eq.rental_price) : "",
+          notes: "",
+          payment_type: kind,
+          supplier_id: supplierId || null,
+          quantity,
+          tokka_group: group,
+          tokka_group_price: "",
+        },
+      ];
+    });
+  };
+
+  // セット商品を構成品に展開して追加 (= 各構成品を明細化し、親 C の TAIS で束ねて請求)
+  const expandSetToComponents = async (eq: Equipment, kind: PaymentKind) => {
+    setPendingSetLoading(true);
+    try {
+      const bom = await getEquipmentSetItems(tenantId, eq.product_code);
+      if (bom.length === 0) {
+        alert(`「${eq.name}」の構成品が未登録です。セットのまま追加します。`);
+        addSetAsSingleRow(eq, 1, kind);
+        return;
+      }
+      const group = `set-${eq.product_code}-${Date.now()}`;
+      const setPrice = eq.rental_price != null ? String(eq.rental_price) : "";
+      const missing: string[] = [];
+      const rows: NewOrderItem[] = [];
+      for (const bi of bom) {
+        const comp = equipment.find((e2) => e2.product_code === bi.component_product_code);
+        if (!comp) {
+          missing.push(bi.component_product_code);
+          continue;
+        }
+        rows.push({
+          equipment: comp,
+          rental_price: comp.rental_price != null ? String(comp.rental_price) : "",
+          notes: "",
+          payment_type: kind,
+          supplier_id: supplierId || null,
+          quantity: bi.quantity,
+          tokka_group: group,
+          tokka_group_price: setPrice,
+          tokka_bill_product_code: eq.product_code,
+        });
+      }
+      if (rows.length === 0) {
+        alert(`「${eq.name}」の構成品が用具マスタに見つかりません。セットのまま追加します。`);
+        addSetAsSingleRow(eq, 1, kind);
+        return;
+      }
+      if (missing.length > 0) {
+        alert(`用具マスタに無い構成品をスキップしました: ${missing.join("、")}`);
+      }
+      setItems((prev) => [...prev, ...rows]);
+    } catch (e) {
+      console.error("セット構成の取得に失敗:", e);
+      alert("セット構成の取得に失敗しました。セットのまま追加します。");
+      addSetAsSingleRow(eq, 1, kind);
+    } finally {
+      setPendingSetLoading(false);
+    }
   };
 
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
@@ -11427,6 +11503,7 @@ function NewOrderModal({
           quantity: item.quantity,
           tokkaGroup: item.tokka_group ?? undefined,
           tokkaGroupPrice,
+          tokkaBillProductCode: item.tokka_bill_product_code ?? undefined,
         });
         createdItems.push(oi);
       }
@@ -11777,6 +11854,11 @@ function NewOrderModal({
                               <td className="pl-3 py-2 max-w-0">
                                 <p className="text-xs font-semibold text-gray-800 truncate">{item.equipment.name}</p>
                                 <p className="text-[10px] text-gray-400">{item.equipment.product_code}</p>
+                                {item.tokka_bill_product_code && (
+                                  <p className="text-[10px] text-indigo-500 font-medium truncate">
+                                    セット請求: {equipment.find((e2) => e2.product_code === item.tokka_bill_product_code)?.name ?? item.tokka_bill_product_code}
+                                  </p>
+                                )}
                               </td>
                               <td className="py-2 px-1 w-[5rem]">
                                 <div className="flex items-center gap-0.5">
@@ -11801,6 +11883,9 @@ function NewOrderModal({
                               )}
                               {kind === "特価自費" && (
                               <td className="py-2 px-1 w-[4rem]">
+                                {item.tokka_bill_product_code ? (
+                                  <span className="text-[10px] text-indigo-500 font-semibold px-1">セット</span>
+                                ) : (
                                 <select
                                   value={item.tokka_group ?? ""}
                                   onChange={(e) => setItems((prev) => prev.map((it, i) => i === idx ? { ...it, tokka_group: e.target.value || null } : it))}
@@ -11811,6 +11896,7 @@ function NewOrderModal({
                                     <option key={g} value={g}>{g}</option>
                                   ))}
                                 </select>
+                                )}
                               </td>
                               )}
                               <td className="py-2 px-1 w-[5.5rem]">
@@ -12028,9 +12114,14 @@ function NewOrderModal({
               <button
                 disabled={equipModalSelected.length === 0}
                 onClick={() => {
+                  const kind = activeModalKind;
+                  // セット商品 (kind='set') は「セットのまま / 構成品に展開」の選択キューに回す
+                  const sets = equipModalSelected.filter(
+                    (sel) => sel.equipment.kind === "set" && !items.some((it) => it.equipment.product_code === sel.equipment.product_code)
+                  );
                   setItems((prev) => {
                     const toAdd = equipModalSelected.filter(
-                      (sel) => !prev.some((it) => it.equipment.product_code === sel.equipment.product_code)
+                      (sel) => sel.equipment.kind !== "set" && !prev.some((it) => it.equipment.product_code === sel.equipment.product_code)
                     );
                     const newItems: NewOrderItem[] = [];
                     for (const sel of toAdd) {
@@ -12038,12 +12129,12 @@ function NewOrderModal({
                         ...prev.filter((i) => i.payment_type === "特価自費"),
                         ...newItems.filter((i) => i.payment_type === "特価自費"),
                       ];
-                      const group = activeModalKind === "特価自費" ? autoTokkaGroup(sel.equipment, currentTokka) : null;
+                      const group = kind === "特価自費" ? autoTokkaGroup(sel.equipment, currentTokka) : null;
                       newItems.push({
                         equipment: sel.equipment,
                         rental_price: sel.equipment.rental_price != null ? String(sel.equipment.rental_price) : "",
                         notes: "",
-                        payment_type: activeModalKind,
+                        payment_type: kind,
                         supplier_id: supplierId || null,
                         quantity: sel.quantity,
                         tokka_group: group,
@@ -12052,6 +12143,9 @@ function NewOrderModal({
                     }
                     return [...prev, ...newItems];
                   });
+                  if (sets.length > 0) {
+                    setPendingSets(sets.map((sel) => ({ equipment: sel.equipment, quantity: sel.quantity, kind })));
+                  }
                   setShowEquipModal(false);
                 }}
                 className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
@@ -12065,6 +12159,42 @@ function NewOrderModal({
           </div>
         </div>
       )}
+
+      {/* ── セット商品 追加方法の選択 ── */}
+      {pendingSets.length > 0 && (() => {
+        const ps = pendingSets[0];
+        const advance = () => setPendingSets((prev) => prev.slice(1));
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] px-4">
+            <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="font-semibold text-gray-800 text-sm">セット商品の追加方法</h3>
+              </div>
+              <div className="p-4 space-y-2">
+                <p className="text-xs text-gray-600 mb-3">
+                  「<span className="font-semibold text-gray-800">{ps.equipment.name}</span>」はセット商品です。追加方法を選択してください。
+                </p>
+                <button
+                  disabled={pendingSetLoading}
+                  onClick={() => { addSetAsSingleRow(ps.equipment, ps.quantity, ps.kind); advance(); }}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-left hover:bg-gray-50 transition-colors disabled:opacity-40"
+                >
+                  <p className="text-sm font-medium text-gray-800">セットのまま追加</p>
+                  <p className="text-[11px] text-gray-400">1 明細として追加（セット商品の TAIS で請求）</p>
+                </button>
+                <button
+                  disabled={pendingSetLoading}
+                  onClick={async () => { await expandSetToComponents(ps.equipment, ps.kind); advance(); }}
+                  className="w-full border border-indigo-200 bg-indigo-50 rounded-xl px-3 py-2.5 text-left hover:bg-indigo-100 transition-colors disabled:opacity-40"
+                >
+                  <p className="text-sm font-medium text-indigo-700">{pendingSetLoading ? "構成品を取得中…" : "構成品に展開"}</p>
+                  <p className="text-[11px] text-indigo-400">構成品ごとに明細化し、セット商品の TAIS で束ねて請求</p>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── 確認画面 ── */}
       {showConfirm && (() => {

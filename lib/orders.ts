@@ -187,6 +187,8 @@ export async function createOrderItem(params: {
   quantity?: number;
   tokkaGroup?: string;
   tokkaGroupPrice?: number;
+  /** セット親の product_code。指定時は同 tokka_group を親 TAIS で束ねて請求 (NULL=単体請求) */
+  tokkaBillProductCode?: string;
 }): Promise<OrderItem> {
   const { data, error } = await supabase
     .from("order_items")
@@ -203,6 +205,7 @@ export async function createOrderItem(params: {
       quantity: params.quantity ?? 1,
       tokka_group: params.tokkaGroup ?? null,
       tokka_group_price: params.tokkaGroupPrice ?? null,
+      tokka_bill_product_code: params.tokkaBillProductCode ?? null,
     })
     .select()
     .single();
