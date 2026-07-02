@@ -775,7 +775,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
                   <select value={item.supplier_id ?? ""} onChange={e => updateCartItem(idx, { supplier_id: e.target.value || null })}
                     className="w-full border border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-emerald-300 bg-white">
                     <option value="">未設定</option>
-                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {suppliers.filter(s => s.is_active !== false).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div>

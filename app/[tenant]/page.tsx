@@ -46,7 +46,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, type ImportResult } from "@/lib/equipment";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, getEquipmentSetItems, saveEquipmentSetItems, findPriceCorrectionTargets, applyPriceCorrection, type ImportResult, type PriceCorrectionTarget } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -2175,6 +2175,27 @@ function EquipmentDetail({
     setPurchasePriceMap(m);
   }, [isEditing, purchasePrices]);
 
+  // セット構成 (BOM)
+  const [kind, setKind] = useState<"single" | "set">(item?.kind ?? "single");
+  const [setComponents, setSetComponents] = useState<{ component_product_code: string; quantity: number }[]>([]);
+  const [allEquip, setAllEquip] = useState<Equipment[]>([]);
+  useEffect(() => {
+    let active = true;
+    getEquipment(tenantId).then((eq) => { if (active) setAllEquip(eq); }).catch(() => {});
+    return () => { active = false; };
+  }, [tenantId]);
+  useEffect(() => {
+    if (!item || item.kind !== "set") return;
+    let active = true;
+    getEquipmentSetItems(tenantId, item.product_code)
+      .then((rows) => { if (active) setSetComponents(rows.map((r) => ({ component_product_code: r.component_product_code, quantity: r.quantity }))); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [tenantId, item]);
+
+  // 仕入価格の一括訂正 (過去の発注実績 restate + 監査ログ)
+  const [correction, setCorrection] = useState<{ supplierId: string; month: string; newPrice: string; reason: string; targets: PriceCorrectionTarget[] | null; running: boolean; done: number | null } | null>(null);
+
   // 用具名から AI でフリガナ自動生成
   const handleGenerateFurigana = async () => {
     if (!name.trim()) return;
@@ -2212,10 +2233,17 @@ function EquipmentDetail({
         price_limit: priceLimit ? parseFloat(priceLimit) : null,
         selection_reason: selectionReason.trim() || null,
         proposal_reason: proposalReason.trim() || null,
+        kind,
       };
       const saved = isNew
         ? await createEquipmentItem(tenantId, payload)
         : await updateEquipment(item!.id, payload);
+      // セット構成 (BOM) を保存 (kind=set の時のみ。single に戻したら構成を空に)
+      await saveEquipmentSetItems(
+        tenantId,
+        saved.product_code,
+        kind === "set" ? setComponents.filter((c) => c.component_product_code && c.quantity > 0) : []
+      );
       // 価格が変更された場合（または新規）、履歴を記録（月初日で登録）
       if (newRentalPrice && priceEffectiveMonth) {
         const oldPrice = item?.rental_price ?? null;
@@ -2280,6 +2308,7 @@ function EquipmentDetail({
     setSelectionReason(item!.selection_reason ?? "");
     setProposalReason(item!.proposal_reason ?? "");
     setPriceEffectiveMonth(new Date().toISOString().slice(0, 7));
+    setKind(item!.kind ?? "single");
     // 卸別仕入価格の入力を現行値に戻す
     const pm: Record<string, string> = {};
     purchasePrices.forEach((p) => { pm[p.supplier_id] = String(p.purchase_price); });
@@ -2430,6 +2459,66 @@ function EquipmentDetail({
                 </div>
               </div>
             )}
+            {/* 商品種別 + セット構成 (BOM) */}
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">商品種別</label>
+              <div className="flex gap-2">
+                {(["single", "set"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setKind(k)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
+                      kind === k ? "bg-emerald-500 text-white border-emerald-500" : "bg-white text-gray-500 border-gray-200"
+                    }`}
+                  >
+                    {k === "single" ? "単品" : "セット（複数商品の組み合わせ）"}
+                  </button>
+                ))}
+              </div>
+              {kind === "set" && (
+                <div className="mt-2 border border-gray-200 rounded-xl p-3 space-y-2">
+                  <p className="text-[11px] text-gray-400">構成品（この用具 = 以下の商品の組み合わせ）</p>
+                  {setComponents.map((c, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <select
+                        value={c.component_product_code}
+                        onChange={(e) => setSetComponents((prev) => prev.map((x, j) => j === i ? { ...x, component_product_code: e.target.value } : x))}
+                        className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white min-w-0"
+                      >
+                        <option value="">選択してください</option>
+                        {allEquip
+                          .filter((e) => e.kind !== "set" && e.product_code !== item?.product_code)
+                          .map((e) => (
+                            <option key={e.product_code} value={e.product_code}>{e.name}（{e.product_code}）</option>
+                          ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        value={c.quantity}
+                        onChange={(e) => setSetComponents((prev) => prev.map((x, j) => j === i ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
+                        className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-right outline-none focus:border-emerald-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSetComponents((prev) => prev.filter((_, j) => j !== i))}
+                        className="shrink-0 text-gray-300 hover:text-red-400"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setSetComponents((prev) => [...prev, { component_product_code: "", quantity: 1 }])}
+                    className="text-xs font-medium text-emerald-600 flex items-center gap-1"
+                  >
+                    <Plus size={14} /> 構成品を追加
+                  </button>
+                </div>
+              )}
+            </div>
             {/* 卸別仕入価格（月次改定） */}
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-2">卸別仕入価格（円）</label>
@@ -2513,6 +2602,23 @@ function EquipmentDetail({
                     </div>
                   </div>
                 )}
+                {/* セット構成 (BOM) */}
+                {item?.kind === "set" && setComponents.length > 0 && (
+                  <div className="px-5 py-3">
+                    <p className="text-xs text-gray-400 mb-1.5">セット構成</p>
+                    <div className="space-y-1.5">
+                      {setComponents.map((c, i) => {
+                        const eq = allEquip.find((e) => e.product_code === c.component_product_code);
+                        return (
+                          <div key={i} className="flex justify-between items-baseline gap-6">
+                            <span className="text-sm text-gray-600">{eq?.name ?? c.component_product_code}</span>
+                            <span className="text-sm text-gray-500">×{c.quantity}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {/* 卸別仕入価格（現行） */}
                 {purchasePrices.length > 0 && (
                   <div className="px-5 py-3">
@@ -2534,6 +2640,104 @@ function EquipmentDetail({
                         );
                       })}
                     </div>
+                    {/* 過去の発注実績の一括訂正 (誤入力の restate + 監査ログ) */}
+                    {item && !correction && (
+                      <button
+                        onClick={() => setCorrection({ supplierId: suppliers[0]?.id ?? "", month: todayYM, newPrice: "", reason: "", targets: null, running: false, done: null })}
+                        className="mt-2 text-[11px] font-medium text-gray-400 hover:text-gray-700 underline"
+                      >
+                        過去の発注実績の仕入価格を訂正…
+                      </button>
+                    )}
+                    {item && correction && (
+                      <div className="mt-3 border border-amber-200 bg-amber-50 rounded-xl p-3 space-y-2">
+                        <p className="text-xs font-semibold text-amber-700">仕入価格の一括訂正（該当月の発注実績を直接修正・監査ログに記録）</p>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <select
+                            value={correction.supplierId}
+                            onChange={(e) => setCorrection({ ...correction, supplierId: e.target.value, targets: null, done: null })}
+                            className="border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none"
+                          >
+                            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                          </select>
+                          <input
+                            type="month"
+                            value={correction.month}
+                            onChange={(e) => setCorrection({ ...correction, month: e.target.value, targets: null, done: null })}
+                            className="border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none"
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!correction.supplierId || !correction.month) return;
+                              setCorrection({ ...correction, running: true });
+                              try {
+                                const targets = await findPriceCorrectionTargets(tenantId, item.product_code, correction.supplierId, correction.month);
+                                setCorrection((c) => c ? { ...c, targets, running: false } : c);
+                              } catch {
+                                setCorrection((c) => c ? { ...c, running: false } : c);
+                                alert("対象の検索に失敗しました");
+                              }
+                            }}
+                            disabled={correction.running}
+                            className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-700 font-medium disabled:opacity-40"
+                          >
+                            対象を検索
+                          </button>
+                          {correction.targets != null && (
+                            <span className="text-amber-700">該当 {correction.targets.length} 件</span>
+                          )}
+                        </div>
+                        {correction.targets != null && correction.targets.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <input
+                              type="number"
+                              placeholder="正しい仕入価格"
+                              value={correction.newPrice}
+                              onChange={(e) => setCorrection({ ...correction, newPrice: e.target.value })}
+                              className="w-32 border border-gray-200 rounded-lg px-2 py-1.5 text-right bg-white outline-none"
+                            />
+                            <input
+                              type="text"
+                              placeholder="訂正理由（任意）"
+                              value={correction.reason}
+                              onChange={(e) => setCorrection({ ...correction, reason: e.target.value })}
+                              className="flex-1 min-w-40 border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none"
+                            />
+                            <button
+                              onClick={async () => {
+                                const np = parseInt(correction.newPrice);
+                                if (!Number.isFinite(np) || np <= 0 || !correction.targets) return;
+                                if (!confirm(`${correction.targets.length} 件の発注実績の仕入価格を ¥${np.toLocaleString()} に訂正します。よろしいですか？`)) return;
+                                setCorrection({ ...correction, running: true });
+                                try {
+                                  const { data: userData } = await supabase.auth.getUser();
+                                  const n = await applyPriceCorrection({
+                                    tenantId,
+                                    targets: correction.targets.map((t) => ({ order_item_id: t.order_item_id, old_price: t.old_price })),
+                                    newPrice: np,
+                                    effectiveMonth: correction.month,
+                                    reason: correction.reason || undefined,
+                                    changedBy: userData.user?.email ?? undefined,
+                                  });
+                                  setCorrection((c) => c ? { ...c, running: false, done: n } : c);
+                                } catch {
+                                  setCorrection((c) => c ? { ...c, running: false } : c);
+                                  alert("訂正の適用に失敗しました");
+                                }
+                              }}
+                              disabled={correction.running || !correction.newPrice.trim()}
+                              className="px-3 py-1.5 rounded-lg bg-amber-500 text-white font-medium disabled:opacity-40"
+                            >
+                              {correction.running ? "適用中…" : "訂正を適用"}
+                            </button>
+                          </div>
+                        )}
+                        {correction.done != null && (
+                          <p className="text-xs font-medium text-emerald-700">✓ {correction.done} 件を訂正しました（監査ログに記録済み）</p>
+                        )}
+                        <button onClick={() => setCorrection(null)} className="text-[11px] text-gray-400 hover:text-gray-600 underline">閉じる</button>
+                      </div>
+                    )}
                   </div>
                 )}
                 <DetailRow label="更新日" value={item ? new Date(item.updated_at).toLocaleDateString("ja-JP") : null} />
@@ -9932,6 +10136,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   const [documents, setDocuments] = useState<Array<{ client_id: string; type: string }>>([]);
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number }>>([]);
+  const [suppliersAll, setSuppliersAll] = useState<Supplier[]>([]); // 卸名解決用 (非表示含む全件)
   const [careOfficesMap, setCareOfficesMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [careManagersMap, setCareManagersMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [loading, setLoading] = useState(true);
@@ -9957,18 +10162,20 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           }
           return all;
         };
-        const [sr, docs, priceHist, ppRes, offs, mgrs] = await Promise.all([
+        const [sr, docs, priceHist, ppRes, offs, mgrs, sups] = await Promise.all([
           getSalesRecords(tenantId),
           fetchAllRows<{ client_id: string; type: string }>("client_documents", "client_id, type"),
           getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
           supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
           fetchAllRows<{ id: string; name: string }>("care_offices", "id, name"),
           fetchAllRows<{ id: string; name: string }>("care_managers", "id, name"),
+          getSuppliers().catch(() => [] as Supplier[]),
         ]);
         setSalesRecords(sr);
         setDocuments(docs);
         setPriceHistory(priceHist);
         setPurchasePrices((ppRes.data ?? []) as Array<{ product_code: string; supplier_id: string; purchase_price: number }>);
+        setSuppliersAll(sups);
         const om = new Map<string, string>();
         offs.forEach((o) => om.set(o.id, o.name));
         setCareOfficesMap(om);
@@ -10137,6 +10344,14 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     let expense = 0;
     let activeCount = 0;
     let startedCount = 0;
+    // 内訳: 商品別 (売上+経費) / 卸別 (経費のみ = 当月開始の仕入)
+    const byProduct = new Map<string, { revenue: number; expense: number; activeCount: number; startedCount: number }>();
+    const bySupplier = new Map<string, { expense: number; startedCount: number }>();
+    const prodAcc = (code: string) => {
+      let acc = byProduct.get(code);
+      if (!acc) { acc = { revenue: 0, expense: 0, activeCount: 0, startedCount: 0 }; byProduct.set(code, acc); }
+      return acc;
+    };
     for (const item of orderItems) {
       const order = orders.find((o) => o.id === item.order_id);
       if (!order) continue;
@@ -10156,17 +10371,28 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           && item.rental_end_date >= monthStart && item.rental_end_date <= monthEnd
           ? parseInt(item.rental_end_date.split("-")[2]) : null;
         const half = (startDay != null && startDay >= 16) || (endDay != null && endDay <= 15);
-        revenue += Math.round(full * (half ? 0.5 : 1));
+        const rev = Math.round(full * (half ? 0.5 : 1));
+        revenue += rev;
         activeCount++;
+        const pa = prodAcc(item.product_code);
+        pa.revenue += rev; pa.activeCount++;
       }
       // ── 経費: その月にレンタル開始した分の仕入原価（スナップ優先）──
       if (item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd) {
-        expense += item.purchase_price ?? catalogPurchaseOf(item.product_code, item.supplier_id);
+        const exp = item.purchase_price ?? catalogPurchaseOf(item.product_code, item.supplier_id);
+        expense += exp;
         startedCount++;
+        const pa = prodAcc(item.product_code);
+        pa.expense += exp; pa.startedCount++;
+        const sKey = item.supplier_id ?? "__none__";
+        const sa = bySupplier.get(sKey) ?? { expense: 0, startedCount: 0 };
+        sa.expense += exp; sa.startedCount++;
+        bySupplier.set(sKey, sa);
       }
     }
-    return { revenue, expense, profit: revenue - expense, activeCount, startedCount };
+    return { revenue, expense, profit: revenue - expense, activeCount, startedCount, byProduct, bySupplier };
   }, [orderItems, orders, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
+  const [showPnlDetail, setShowPnlDetail] = useState(false);
 
   // 書類チェック関数
   const hasDoc = (clientId: string, docType: string) =>
@@ -10264,12 +10490,87 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
 
       {/* 月次損益（発生ベース） */}
       {!loading && (
-        <div className="border-b border-gray-300 bg-slate-50 px-3 py-2 shrink-0 flex items-center gap-4 flex-wrap text-xs">
-          <span className="font-semibold text-gray-700">月次損益（発生ベース）</span>
-          <span className="text-gray-600">売上 <span className="font-semibold text-gray-900">¥{pnl.revenue.toLocaleString()}</span> <span className="text-gray-400">(稼働{pnl.activeCount}件)</span></span>
-          <span className="text-gray-600">経費 <span className="font-semibold text-gray-900">¥{pnl.expense.toLocaleString()}</span> <span className="text-gray-400">(当月開始{pnl.startedCount}件)</span></span>
-          <span className="text-gray-600">利益 <span className={`font-bold ${pnl.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>¥{pnl.profit.toLocaleString()}</span></span>
-          <span className="text-[10px] text-gray-400 ml-auto">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
+        <div className="border-b border-gray-300 bg-slate-50 shrink-0">
+          <div className="px-3 py-2 flex items-center gap-4 flex-wrap text-xs">
+            <span className="font-semibold text-gray-700">月次損益（発生ベース）</span>
+            <span className="text-gray-600">売上 <span className="font-semibold text-gray-900">¥{pnl.revenue.toLocaleString()}</span> <span className="text-gray-400">(稼働{pnl.activeCount}件)</span></span>
+            <span className="text-gray-600">経費 <span className="font-semibold text-gray-900">¥{pnl.expense.toLocaleString()}</span> <span className="text-gray-400">(当月開始{pnl.startedCount}件)</span></span>
+            <span className="text-gray-600">利益 <span className={`font-bold ${pnl.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>¥{pnl.profit.toLocaleString()}</span></span>
+            <button
+              onClick={() => setShowPnlDetail((v) => !v)}
+              className="text-[11px] px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+            >
+              内訳 {showPnlDetail ? "▲" : "▼"}
+            </button>
+            <span className="text-[10px] text-gray-400 ml-auto">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
+          </div>
+          {showPnlDetail && (
+            <div className="px-3 pb-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+              {/* 商品別 (売上上位20) */}
+              <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                <p className="px-3 py-1.5 font-semibold text-gray-600 border-b border-slate-100">商品別（売上上位20）</p>
+                <table className="w-full text-[11px]">
+                  <thead className="bg-slate-50 text-gray-400">
+                    <tr>
+                      <th className="text-left px-3 py-1 font-medium">商品</th>
+                      <th className="text-right px-2 py-1 font-medium">稼働</th>
+                      <th className="text-right px-2 py-1 font-medium">売上</th>
+                      <th className="text-right px-2 py-1 font-medium">経費</th>
+                      <th className="text-right px-3 py-1 font-medium">損益</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(pnl.byProduct.entries())
+                      .sort((a, b) => b[1].revenue - a[1].revenue)
+                      .slice(0, 20)
+                      .map(([code, v]) => {
+                        const eq = equipment.find((e) => e.product_code === code);
+                        const profit = v.revenue - v.expense;
+                        return (
+                          <tr key={code} className="border-t border-dashed border-slate-100">
+                            <td className="px-3 py-1 max-w-0"><span className="block truncate" title={eq?.name ?? code}>{eq?.name ?? code}</span></td>
+                            <td className="text-right px-2 py-1 text-gray-500">{v.activeCount}</td>
+                            <td className="text-right px-2 py-1">¥{v.revenue.toLocaleString()}</td>
+                            <td className="text-right px-2 py-1 text-gray-500">¥{v.expense.toLocaleString()}</td>
+                            <td className={`text-right px-3 py-1 font-medium ${profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>¥{profit.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+              {/* 卸別 (当月開始の仕入) */}
+              <div className="bg-white rounded-lg border border-slate-200 overflow-hidden self-start">
+                <p className="px-3 py-1.5 font-semibold text-gray-600 border-b border-slate-100">卸別 仕入（当月開始分）</p>
+                <table className="w-full text-[11px]">
+                  <thead className="bg-slate-50 text-gray-400">
+                    <tr>
+                      <th className="text-left px-3 py-1 font-medium">卸会社</th>
+                      <th className="text-right px-2 py-1 font-medium">件数</th>
+                      <th className="text-right px-3 py-1 font-medium">仕入額</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(pnl.bySupplier.entries())
+                      .sort((a, b) => b[1].expense - a[1].expense)
+                      .map(([sid, v]) => {
+                        const name = sid === "__none__" ? "（卸未設定）" : (suppliersAll.find((s) => s.id === sid)?.name ?? sid);
+                        return (
+                          <tr key={sid} className="border-t border-dashed border-slate-100">
+                            <td className="px-3 py-1">{name}</td>
+                            <td className="text-right px-2 py-1 text-gray-500">{v.startedCount}</td>
+                            <td className="text-right px-3 py-1">¥{v.expense.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                    {pnl.bySupplier.size === 0 && (
+                      <tr><td colSpan={3} className="px-3 py-2 text-gray-400 text-center">当月開始のレンタルがありません</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -11172,7 +11473,7 @@ function NewOrderModal({
                   className="border border-gray-200 rounded-xl px-3 py-2 text-sm font-medium outline-none focus:border-emerald-400 bg-white text-gray-600 h-[38px]"
                 >
                   <option value="">選択しない</option>
-                  {suppliers.map((s) => (
+                  {suppliers.filter((s) => s.is_active !== false).map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
@@ -11483,7 +11784,7 @@ function NewOrderModal({
                                   className="w-full border border-gray-200 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-emerald-400 bg-white text-gray-600"
                                 >
                                   <option value="">なし</option>
-                                  {suppliers.map((s) => (
+                                  {suppliers.filter((s) => s.is_active !== false).map((s) => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                   ))}
                                 </select>

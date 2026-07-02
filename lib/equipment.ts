@@ -37,6 +37,7 @@ export async function updateEquipment(
     furigana?: string | null;
     tais_code?: string | null;
     category?: string | null;
+    kind?: "single" | "set";
     rental_price?: number | null;
     national_avg_price?: number | null;
     price_limit?: number | null;
@@ -63,6 +64,7 @@ export async function createEquipmentItem(
     furigana?: string | null;
     tais_code?: string | null;
     category?: string | null;
+    kind?: "single" | "set";
     rental_price?: number | null;
     national_avg_price?: number | null;
     price_limit?: number | null;
@@ -101,6 +103,7 @@ export async function createEquipmentItem(
       furigana: input.furigana ?? null,
       tais_code: input.tais_code ?? null,
       category: input.category ?? null,
+      kind: input.kind ?? "single",
       rental_price: input.rental_price ?? null,
       national_avg_price: input.national_avg_price ?? null,
       price_limit: input.price_limit ?? null,
@@ -397,6 +400,123 @@ export async function bulkUpsertPurchasePrices(
     .from("equipment_prices")
     .upsert(payload, { onConflict: "tenant_id,product_code,supplier_id,valid_from" });
   if (error) throw error;
+}
+
+// ─── 仕入価格の一括訂正 (order_items restate + 監査ログ) ─────────────────────
+// 運用原則:
+//  - 発生主義の月次損益では原価の正 = order_items.purchase_price (発注時 snapshot)。
+//  - 「訂正」= 誤りを直す。該当月の order_items.purchase_price をそのまま restate。
+//  - 「黙って変えない」— 変更は必ず order_item_price_changes に監査行を append する。
+//  - 順序は「監査 insert 成功 → UPDATE」(ログ先行で証跡を確実に)。
+
+export type PriceCorrectionTarget = {
+  order_item_id: string;
+  order_id: string;
+  old_price: number | null;
+  rental_start_date: string | null;
+};
+
+export type OrderItemPriceChange = {
+  id: string;
+  tenant_id: string;
+  order_item_id: string;
+  old_price: number | null;
+  new_price: number;
+  effective_month: string; // "YYYY-MM"
+  reason: string | null;
+  changed_by: string | null;
+  changed_at: string;
+};
+
+/**
+ * 一括訂正の対象探し: 用具×卸×レンタル開始月 ("YYYY-MM") に一致する
+ * order_items を返す (cancelled は除外)。
+ */
+export async function findPriceCorrectionTargets(
+  tenantId: string,
+  productCode: string,
+  supplierId: string,
+  month: string // "YYYY-MM"
+): Promise<PriceCorrectionTarget[]> {
+  const [y, m] = month.split("-").map(Number);
+  const monthStart = `${month}-01`;
+  const lastDay = new Date(y, m, 0).getDate(); // 月末日
+  const monthEnd = `${month}-${String(lastDay).padStart(2, "0")}`;
+
+  const { data, error } = await supabase
+    .from("order_items")
+    .select("id, order_id, purchase_price, rental_start_date")
+    .eq("tenant_id", tenantId)
+    .eq("product_code", productCode)
+    .eq("supplier_id", supplierId)
+    .gte("rental_start_date", monthStart)
+    .lte("rental_start_date", monthEnd)
+    .neq("status", "cancelled");
+  if (error) throw error;
+
+  return (data ?? []).map((row) => ({
+    order_item_id: row.id,
+    order_id: row.order_id,
+    old_price: row.purchase_price,
+    rental_start_date: row.rental_start_date,
+  }));
+}
+
+/**
+ * 一括訂正: 対象 order_items の purchase_price を newPrice に UPDATE し、
+ * 1 件ずつ order_item_price_changes に監査行を残す。
+ * 監査 insert 成功 → UPDATE の順 (ログ先行)。更新件数を返す。
+ */
+export async function applyPriceCorrection(params: {
+  tenantId: string;
+  targets: { order_item_id: string; old_price: number | null }[];
+  newPrice: number;
+  effectiveMonth: string; // "YYYY-MM"
+  reason?: string;
+  changedBy?: string;
+}): Promise<number> {
+  if (params.targets.length === 0) return 0;
+
+  // 1) 監査行を bulk insert (ログ先行で証跡を確実に)
+  const auditRows = params.targets.map((t) => ({
+    tenant_id: params.tenantId,
+    order_item_id: t.order_item_id,
+    old_price: t.old_price,
+    new_price: params.newPrice,
+    effective_month: params.effectiveMonth,
+    reason: params.reason ?? null,
+    changed_by: params.changedBy ?? null,
+  }));
+  const { error: auditError } = await supabase
+    .from("order_item_price_changes")
+    .insert(auditRows);
+  if (auditError) throw auditError;
+
+  // 2) order_items を一括 restate
+  const ids = params.targets.map((t) => t.order_item_id);
+  const { error: updateError } = await supabase
+    .from("order_items")
+    .update({ purchase_price: params.newPrice, updated_at: new Date().toISOString() })
+    .eq("tenant_id", params.tenantId)
+    .in("id", ids);
+  if (updateError) throw updateError;
+
+  return ids.length;
+}
+
+/** 仕入価格訂正の監査ログを直近 N 件取得 (新しい順) */
+export async function getPriceChangeLog(
+  tenantId: string,
+  limit = 100
+): Promise<OrderItemPriceChange[]> {
+  const { data, error } = await supabase
+    .from("order_item_price_changes")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("changed_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
 }
 
 export type EquipmentImportRow = {
