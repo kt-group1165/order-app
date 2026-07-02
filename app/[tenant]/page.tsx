@@ -19001,8 +19001,11 @@ function DocTasksTab({
       const totalCount = docGroups.reduce((s, g) => s + g.rows.length, 0);
       out.push({ clientId, client, docGroups, totalCount });
     }
-    // 人はフリガナ ASC (なければ name)
+    // 施設は末尾、人はフリガナ ASC (なければ name)
     out.sort((a, b) => {
+      const fa = a.client?.is_facility ? 1 : 0;
+      const fb = b.client?.is_facility ? 1 : 0;
+      if (fa !== fb) return fa - fb;
       const ka = a.client?.furigana ?? a.client?.name ?? "";
       const kb = b.client?.furigana ?? b.client?.name ?? "";
       return ka.localeCompare(kb, "ja");
