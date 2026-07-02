@@ -197,7 +197,7 @@ export default function MobileMeetingPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         {header}
-        <div className={detail ? "p-4 max-w-4xl mx-auto" : "p-4 max-w-lg mx-auto space-y-2"}>
+        <div className={detail ? "p-4 max-w-6xl mx-auto" : "p-4 max-w-lg mx-auto space-y-2"}>
           {detail ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -209,9 +209,9 @@ export default function MobileMeetingPage() {
                   印刷
                 </button>
               </div>
-              {/* 第4表プレビュー (帳票は A4 幅想定。狭い画面では横スクロール) */}
+              {/* 第4表プレビュー (A4 横想定。狭い画面では横スクロール) */}
               <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 overflow-x-auto">
-                <div className="min-w-[720px]">
+                <div className="min-w-[1000px]">
                   <MeetingNoteSheet data={detail} />
                 </div>
               </div>

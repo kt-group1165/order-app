@@ -22069,7 +22069,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     if (!w) return;
     w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>サービス担当者会議の要点</title><style>
       body{font-family:'Meiryo','MS PGothic',sans-serif;margin:0;padding:0}
-      @page{size:A4 portrait;margin:12mm 14mm}
+      @page{size:A4 landscape;margin:10mm 12mm}
       table{border-collapse:collapse;width:100%}
     </style></head><body>${el.innerHTML}</body></html>`);
     w.document.close();
@@ -22226,12 +22226,13 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
   const cellBase: React.CSSProperties = { border: "1px solid #333", padding: "4px 6px", fontSize: "11px", verticalAlign: "top" };
   const attendeeHeadCell: React.CSSProperties = { ...cellBase, background: "#f3f4f6", fontWeight: 600, textAlign: "center", verticalAlign: "middle", whiteSpace: "nowrap", width: "20%" };
   const attendeeNameHeadCell: React.CSSProperties = { ...attendeeHeadCell, width: "13.3%" };
+  // A4 横 (縦方向 約190mm ≈ 715px) に収まる行高配分
   const bodyRows: { label: string; text: string; minHeight: number }[] = [
-    { label: "検討した項目", text: discussedItems, minHeight: 90 },
-    { label: "検討内容", text: discussionContent, minHeight: 150 },
-    { label: "結論", text: conclusion, minHeight: 90 },
-    { label: "残された課題", text: remainingIssues, minHeight: 70 },
-    { label: "(次回の開催時期)", text: nextMeeting, minHeight: 40 },
+    { label: "検討した項目", text: discussedItems, minHeight: 80 },
+    { label: "検討内容", text: discussionContent, minHeight: 120 },
+    { label: "結論", text: conclusion, minHeight: 80 },
+    { label: "残された課題", text: remainingIssues, minHeight: 60 },
+    { label: "(次回の開催時期)", text: nextMeeting, minHeight: 32 },
   ];
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -22254,8 +22255,8 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-4xl mx-auto bg-white rounded-xl border border-gray-200 shadow-sm p-8">
-          <div id="meeting-note-print-content" style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", color: "#111" }}>
+        <div className="max-w-6xl mx-auto bg-white rounded-xl border border-gray-200 shadow-sm p-8 overflow-x-auto">
+          <div id="meeting-note-print-content" style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", color: "#111", minWidth: "960px" }}>
             {/* 1行目: 第4表 / タイトル / 作成年月日 */}
             <div style={{ display: "flex", alignItems: "flex-start", marginBottom: "14px" }}>
               <div style={{ border: "1px solid #333", padding: "2px 10px", fontSize: "11px", whiteSpace: "nowrap" }}>第4表</div>

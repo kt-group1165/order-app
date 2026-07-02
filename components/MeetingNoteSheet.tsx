@@ -38,7 +38,7 @@ export function printMeetingNoteSheet(printId = "meeting-sheet-print-content") {
   if (!w) return;
   w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>サービス担当者会議の要点</title><style>
     body{font-family:'Meiryo','MS PGothic',sans-serif;margin:0;padding:0}
-    @page{size:A4 portrait;margin:12mm 14mm}
+    @page{size:A4 landscape;margin:10mm 12mm}
     table{border-collapse:collapse;width:100%}
   </style></head><body>${el.innerHTML}</body></html>`);
   w.document.close();
@@ -50,12 +50,13 @@ export function MeetingNoteSheet({ data, printId = "meeting-sheet-print-content"
   const cellBase: React.CSSProperties = { border: "1px solid #333", padding: "4px 6px", fontSize: "11px", verticalAlign: "top" };
   const attendeeHeadCell: React.CSSProperties = { ...cellBase, background: "#f3f4f6", fontWeight: 600, textAlign: "center", verticalAlign: "middle", whiteSpace: "nowrap", width: "20%" };
   const attendeeNameHeadCell: React.CSSProperties = { ...attendeeHeadCell, width: "13.3%" };
+  // A4 横 (縦方向 約190mm ≈ 715px) に収まる行高配分
   const bodyRows: { label: string; text: string; minHeight: number }[] = [
-    { label: "検討した項目", text: data.discussed_items ?? "", minHeight: 90 },
-    { label: "検討内容", text: data.discussion_content ?? "", minHeight: 150 },
-    { label: "結論", text: data.conclusion ?? "", minHeight: 90 },
-    { label: "残された課題", text: data.remaining_issues ?? "", minHeight: 70 },
-    { label: "(次回の開催時期)", text: data.next_meeting ?? "", minHeight: 40 },
+    { label: "検討した項目", text: data.discussed_items ?? "", minHeight: 80 },
+    { label: "検討内容", text: data.discussion_content ?? "", minHeight: 120 },
+    { label: "結論", text: data.conclusion ?? "", minHeight: 80 },
+    { label: "残された課題", text: data.remaining_issues ?? "", minHeight: 60 },
+    { label: "(次回の開催時期)", text: data.next_meeting ?? "", minHeight: 32 },
   ];
   const attendees = data.attendees ?? [];
 
