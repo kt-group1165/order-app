@@ -16,9 +16,30 @@ const DEFAULTS = {
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
+type SavedNote = {
+  id: string;
+  client_name: string;
+  creator_name: string | null;
+  created_date: string | null;
+  meeting_date: string | null;
+  meeting_time: string | null;
+  meeting_place: string | null;
+  attendees: { affiliation: string; name: string }[];
+  discussed_items: string | null;
+  discussion_content: string | null;
+  conclusion: string | null;
+  remaining_issues: string | null;
+  next_meeting: string | null;
+  created_at: string;
+};
+
 export default function MobileMeetingPage() {
   const [key, setKey] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [view, setView] = useState<"form" | "list">("form");
+  const [notes, setNotes] = useState<SavedNote[] | null>(null);
+  const [listError, setListError] = useState("");
+  const [detail, setDetail] = useState<SavedNote | null>(null);
 
   const [clientName, setClientName] = useState("");
   const [creatorName, setCreatorName] = useState("");
@@ -61,6 +82,30 @@ export default function MobileMeetingPage() {
     setNextMeeting("");
     setDone(false);
     setError("");
+  };
+
+  const loadNotes = async (k: string) => {
+    setListError("");
+    setNotes(null);
+    try {
+      const res = await fetch(`/api/meeting-submit?key=${encodeURIComponent(k)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setListError(data.error ?? "取得に失敗しました");
+        setNotes([]);
+        return;
+      }
+      setNotes(data.notes ?? []);
+    } catch {
+      setListError("通信エラーが発生しました");
+      setNotes([]);
+    }
+  };
+
+  const openList = () => {
+    setView("list");
+    setDetail(null);
+    if (key) loadNotes(key);
   };
 
   const handleSubmit = async () => {
@@ -119,6 +164,89 @@ export default function MobileMeetingPage() {
         <button onClick={resetForm} className="mt-2 px-6 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
           続けて入力する
         </button>
+        <button onClick={() => { setDone(false); openList(); }} className="px-6 py-3 border border-gray-300 text-gray-600 text-sm font-medium rounded-xl bg-white">
+          一覧を見る
+        </button>
+      </div>
+    );
+  }
+
+  // ヘッダー (入力/一覧 切替)
+  const header = (
+    <header className="bg-emerald-600 text-white px-4 py-3 sticky top-0 z-10 flex items-center justify-between">
+      <h1 className="text-sm font-semibold">担当者会議録（第4表）</h1>
+      <div className="flex gap-1 bg-emerald-700/60 rounded-lg p-0.5">
+        <button
+          onClick={() => setView("form")}
+          className={`px-3 py-1 text-xs font-medium rounded-md ${view === "form" ? "bg-white text-emerald-700" : "text-emerald-50"}`}
+        >
+          入力
+        </button>
+        <button
+          onClick={openList}
+          className={`px-3 py-1 text-xs font-medium rounded-md ${view === "list" ? "bg-white text-emerald-700" : "text-emerald-50"}`}
+        >
+          一覧
+        </button>
+      </div>
+    </header>
+  );
+
+  if (view === "list") {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        {header}
+        <div className="p-4 max-w-lg mx-auto space-y-2">
+          {detail ? (
+            <div className="space-y-3">
+              <button onClick={() => setDetail(null)} className="text-sm text-emerald-700 font-medium">← 一覧に戻る</button>
+              <div className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
+                {([
+                  ["利用者名", detail.client_name],
+                  ["担当者", detail.creator_name],
+                  ["作成年月日", detail.created_date],
+                  ["開催日", detail.meeting_date],
+                  ["時間", detail.meeting_time],
+                  ["開催場所", detail.meeting_place],
+                  ["会議出席者", (detail.attendees ?? []).map((a) => `${a.affiliation} ${a.name}`.trim()).filter(Boolean).join("、")],
+                  ["検討した項目", detail.discussed_items],
+                  ["検討内容", detail.discussion_content],
+                  ["結論", detail.conclusion],
+                  ["残された課題", detail.remaining_issues],
+                  ["次回の開催時期", detail.next_meeting],
+                ] as [string, string | null][]).map(([label, value]) => (
+                  value ? (
+                    <div key={label} className="px-4 py-2.5">
+                      <p className="text-[11px] text-gray-400 mb-0.5">{label}</p>
+                      <p className="text-sm text-gray-800 whitespace-pre-wrap">{value}</p>
+                    </div>
+                  ) : null
+                ))}
+              </div>
+            </div>
+          ) : notes === null ? (
+            <p className="text-sm text-gray-400 text-center py-12">読み込み中...</p>
+          ) : (
+            <>
+              {listError && <p className="text-sm text-red-500 bg-red-50 rounded-xl p-3">{listError}</p>}
+              {notes.length === 0 && !listError && (
+                <p className="text-sm text-gray-400 text-center py-12">まだ会議録がありません</p>
+              )}
+              {notes.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => setDetail(n)}
+                  className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 active:bg-gray-50"
+                >
+                  <p className="text-sm font-semibold text-gray-800">{n.client_name} 様</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
+                  </p>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -128,9 +256,7 @@ export default function MobileMeetingPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-emerald-600 text-white px-4 py-3 sticky top-0 z-10">
-        <h1 className="text-sm font-semibold">担当者会議録（第4表）スマホ入力</h1>
-      </header>
+      {header}
       <div className="p-4 space-y-4 max-w-lg mx-auto pb-28">
         <div>
           <label className={labelCls}>利用者名 *</label>

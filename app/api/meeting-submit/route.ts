@@ -16,6 +16,33 @@ const s = (v: unknown): string | null => {
   return t.slice(0, MAX_LEN);
 };
 
+// 一覧取得 (スマホページの「一覧」タブ用)。キー検証付き。
+export async function GET(req: Request) {
+  const formKey = process.env.MEETING_FORM_KEY;
+  if (!formKey) {
+    return NextResponse.json(
+      { error: "サーバー側の設定が未完了です (MEETING_FORM_KEY 未設定)" },
+      { status: 503 }
+    );
+  }
+  const url = new URL(req.url);
+  if (url.searchParams.get("key") !== formKey) {
+    return NextResponse.json({ error: "キーが正しくありません" }, { status: 403 });
+  }
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("service_meeting_notes")
+    .select("id, client_name, creator_name, created_date, meeting_date, meeting_time, meeting_place, attendees, discussed_items, discussion_content, conclusion, remaining_issues, next_meeting, created_at")
+    .eq("tenant_id", TENANT_ID)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) {
+    console.error("meeting-submit list failed:", error.message);
+    return NextResponse.json({ error: `取得に失敗しました: ${error.message}` }, { status: 500 });
+  }
+  return NextResponse.json({ notes: data ?? [] });
+}
+
 export async function POST(req: Request) {
   const formKey = process.env.MEETING_FORM_KEY;
   if (!formKey) {
