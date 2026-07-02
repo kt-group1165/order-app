@@ -376,6 +376,8 @@ export type MonitoringRecord = {
   continuity_comment: string | null;
   report_comment: string | null;
   previous_comment: string | null;
+  goal_achievement: string | null; // NULL / '達成' / '一部達成' / '未達成'
+  goal_comment: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -413,5 +415,6 @@ export type MonitoringItem = {
   has_malfunction: boolean;
   has_deterioration: boolean;
   needs_replacement: boolean;
+  has_usage_issue: boolean; // 使用状況の問題 (false=なし / true=あり)
   created_at: string;
 };

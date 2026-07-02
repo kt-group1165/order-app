@@ -7114,7 +7114,7 @@ function ClientDetail({
                       if (doc.type === "rental_report") setRegenDoc(doc);
                       else if (doc.type === "care_plan") { setCarePlanInitialParams(doc.params); setShowCarePlan(true); }
                       else if (doc.type === "proposal") { setProposalInitialParams(doc.params); setShowProposal(true); }
-                      else if (doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
+                      else if (doc.type === "contract" || doc.type === "rental_contract" || doc.type === "important_matters") setShowDocuments(true);
                       else if (doc.type === "supplier_email") {
                         const orderId = doc.params?.orderId as string | undefined;
                         if (!orderId) {
@@ -8355,10 +8355,10 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
     try {
       const docs = await getClientDocuments(tenantId, selectedClient.id);
       // expected type に対応する最新 client_document を取得
-      // rental_contract task は実 type が rental_contract / important_matters のどちらか
+      // rental_contract task は実 type が contract (統合後) / rental_contract / important_matters (旧) のいずれか
       const equivTypes =
         expectedType === "rental_contract"
-          ? ["rental_contract", "important_matters"]
+          ? ["contract", "rental_contract", "important_matters"]
           : [expectedType];
       const latest = docs.find((d) => equivTypes.includes(d.type));
       if (latest) {
@@ -8607,6 +8607,7 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
                           doc.type === "care_plan" ||
                           doc.type === "proposal" ||
                           doc.type === "supplier_email" ||
+                          doc.type === "contract" ||
                           doc.type === "rental_contract" ||
                           doc.type === "important_matters" ||
                           doc.type === "change_contract";
@@ -8627,7 +8628,7 @@ function DocumentsTab({ tenantId, currentOfficeId, officeViewAll, initialSelecte
                                     setCarePlanInitialParams(doc.params); setShowCarePlan(true);
                                   } else if (doc.type === "proposal") {
                                     setProposalInitialParams(doc.params); setShowProposal(true);
-                                  } else if (doc.type === "rental_contract" || doc.type === "important_matters") {
+                                  } else if (doc.type === "contract" || doc.type === "rental_contract" || doc.type === "important_matters") {
                                     setShowContracts(true);
                                   } else if (doc.type === "change_contract") {
                                     setChangeContractInitialParams(doc.params);
@@ -10510,8 +10511,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   // 書類チェック関数
   const hasDoc = (clientId: string, docType: string) =>
     documents.some((d) => d.client_id === clientId && d.type === docType);
-  const hasContract = (clientId: string) =>
-    hasDoc(clientId, "contract") && hasDoc(clientId, "important_matters");
+  const hasContract = (clientId: string) => hasDoc(clientId, "contract");
 
   // 売上帳票レコード（手入力分）を取得
   const getSalesRec = (orderItemId: string, eventType: "start" | "end") =>
@@ -16126,20 +16126,14 @@ function ContractDocumentsModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      const [, contractDoc] = await Promise.all([
-        saveClientDocument({
-          tenant_id: tenantId, client_id: client.id,
-          type: "important_matters",
-          title: `重要事項説明書 ${explanationDate}`,
-          params: { explanationDate },
-        }),
-        saveClientDocument({
-          tenant_id: tenantId, client_id: client.id,
-          type: "rental_contract",
-          title: `福祉用具貸与契約書 ${contractDate}`,
-          params: { contractDate, benefitRate, selectedIds: [...selectedIds], selectedElementIds: [...selectedElementIds] },
-        }),
-      ]);
+      // 重要事項説明書 + 契約書 を 1 件に統合保存 (html はプレビュー全体のスナップショット)
+      const html = document.getElementById("combined-docs-print")?.innerHTML ?? "";
+      const contractDoc = await saveClientDocument({
+        tenant_id: tenantId, client_id: client.id,
+        type: "contract",
+        title: `重要事項説明書兼契約書 ${contractDate}`,
+        params: { explanationDate, contractDate, benefitRate, selectedIds: [...selectedIds], selectedElementIds: [...selectedElementIds], html },
+      });
       // 選択した発生要因を契約書に紐付けて completed (灰色化、再使用不可)
       if (selectedElementIds.size > 0) {
         await completeCarePlanElements([...selectedElementIds], contractDoc.id);
@@ -20220,7 +20214,8 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
 
 function MonitoringPreview({
   client, visitDate, reportDate, tm, staffName, companyInfo,
-  itemChecks, equipment, insuranceRecord, continuityComment, reportComment, previousComment, onClose,
+  itemChecks, equipment, insuranceRecord, continuityComment, reportComment, previousComment,
+  goalAchievement, goalComment, onClose,
   tenantId, currentOfficeId, monitoringRecordId,
 }: {
   client: Client;
@@ -20229,12 +20224,14 @@ function MonitoringPreview({
   tm: string;
   staffName: string;
   companyInfo: CompanyInfo;
-  itemChecks: { order_item_id: string; product_code: string; equipment_name: string; category: string; quantity: number; no_issue: boolean; has_malfunction: boolean; has_deterioration: boolean; needs_replacement: boolean }[];
+  itemChecks: { order_item_id: string; product_code: string; equipment_name: string; category: string; quantity: number; no_issue: boolean; has_malfunction: boolean; has_deterioration: boolean; needs_replacement: boolean; has_usage_issue: boolean }[];
   equipment: Equipment[];
   insuranceRecord: ClientInsuranceRecord | null;
   continuityComment: string;
   reportComment: string;
   previousComment: string;
+  goalAchievement: string;
+  goalComment: string;
   onClose: () => void;
   tenantId: string;
   currentOfficeId: string | null;
@@ -20297,32 +20294,32 @@ function MonitoringPreview({
         .monitoring-doc.tier-few > * { margin-top: 0 !important; margin-bottom: 14px !important; }
         .monitoring-doc.tier-few .monitoring-equipment-table td,
         .monitoring-doc.tier-few .monitoring-equipment-table th { height: 30px; padding: 4px 4px !important; }
-        .monitoring-doc.tier-few .monitoring-report-area { min-height: 240px !important; }
-        .monitoring-doc.tier-few .monitoring-continuity-area { min-height: 70px !important; }
+        .monitoring-doc.tier-few .monitoring-report-area { min-height: 200px !important; }
+        .monitoring-doc.tier-few .monitoring-continuity-area { min-height: 60px !important; }
 
         /* tier: medium (4-6 行) — 中 */
         .monitoring-doc.tier-medium { gap: 10px; }
         .monitoring-doc.tier-medium > * { margin-top: 0 !important; margin-bottom: 10px !important; }
         .monitoring-doc.tier-medium .monitoring-equipment-table td,
         .monitoring-doc.tier-medium .monitoring-equipment-table th { height: 24px; padding: 3px 4px !important; }
-        .monitoring-doc.tier-medium .monitoring-report-area { min-height: 160px !important; }
-        .monitoring-doc.tier-medium .monitoring-continuity-area { min-height: 50px !important; }
+        .monitoring-doc.tier-medium .monitoring-report-area { min-height: 130px !important; }
+        .monitoring-doc.tier-medium .monitoring-continuity-area { min-height: 42px !important; }
 
         /* tier: many (7-10 行) — コンパクト */
         .monitoring-doc.tier-many { gap: 7px; font-size: 10px; }
         .monitoring-doc.tier-many > * { margin-top: 0 !important; margin-bottom: 7px !important; }
         .monitoring-doc.tier-many .monitoring-equipment-table td,
         .monitoring-doc.tier-many .monitoring-equipment-table th { height: 20px; padding: 2px 3px !important; font-size: 9px; }
-        .monitoring-doc.tier-many .monitoring-report-area { min-height: 100px !important; }
-        .monitoring-doc.tier-many .monitoring-continuity-area { min-height: 36px !important; }
+        .monitoring-doc.tier-many .monitoring-report-area { min-height: 80px !important; }
+        .monitoring-doc.tier-many .monitoring-continuity-area { min-height: 30px !important; }
 
         /* tier: overflow (11+ 行) — 最低限まで縮小 */
         .monitoring-doc.tier-overflow { gap: 5px; font-size: 9px; }
         .monitoring-doc.tier-overflow > * { margin-top: 0 !important; margin-bottom: 5px !important; }
         .monitoring-doc.tier-overflow .monitoring-equipment-table td,
         .monitoring-doc.tier-overflow .monitoring-equipment-table th { height: 16px; padding: 1px 2px !important; font-size: 8px; line-height: 1.1; }
-        .monitoring-doc.tier-overflow .monitoring-report-area { min-height: 60px !important; }
-        .monitoring-doc.tier-overflow .monitoring-continuity-area { min-height: 24px !important; }
+        .monitoring-doc.tier-overflow .monitoring-report-area { min-height: 48px !important; }
+        .monitoring-doc.tier-overflow .monitoring-continuity-area { min-height: 20px !important; }
         .monitoring-doc.tier-overflow .monitoring-header { padding: 6px !important; }
         .monitoring-doc.tier-overflow .monitoring-header > div { line-height: 1.25; }
       }
@@ -20404,10 +20401,11 @@ function MonitoringPreview({
                     <th className={`${TH} w-16`} colSpan={2}>不具合</th>
                     <th className={`${TH} w-16`} colSpan={2}>劣化</th>
                     <th className={`${TH} w-16`} colSpan={2}>交換必要</th>
+                    <th className={`${TH} w-16`} colSpan={2}>使用状況の問題</th>
                   </tr>
                   <tr>
                     <th className={TH}></th><th className={TH}></th><th className={TH}></th>
-                    {["問題なし","不具合","劣化","交換必要"].map(h => (
+                    {["問題なし","不具合","劣化","交換必要","使用状況の問題"].map(h => (
                       <Fragment key={h}>
                         <th className={TH}>なし</th>
                         <th className={TH}>あり</th>
@@ -20434,6 +20432,8 @@ function MonitoringPreview({
                         <td className={`${TD} text-center`}>{item.has_deterioration ? "☑" : "□"}</td>
                         <td className={`${TD} text-center`}>{!item.needs_replacement ? "☑" : "□"}</td>
                         <td className={`${TD} text-center`}>{item.needs_replacement ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{!item.has_usage_issue ? "☑" : "□"}</td>
+                        <td className={`${TD} text-center`}>{item.has_usage_issue ? "☑" : "□"}</td>
                       </tr>
                     );
                   })}
@@ -20444,6 +20444,14 @@ function MonitoringPreview({
             {/* Comments */}
             <div className="border border-gray-400 p-2 space-y-2">
               <div>
+                <div className="text-gray-500 font-semibold mb-0.5">■ 利用目標の達成状況</div>
+                <div className="monitoring-goal-area">
+                  <span className="text-gray-500">達成状況: </span>
+                  <span className="font-bold">{goalAchievement || "―"}</span>
+                </div>
+                <div className="whitespace-pre-wrap">{goalComment || "―"}</div>
+              </div>
+              <div className="border-t border-gray-300 pt-2">
                 <div className="text-gray-500 font-semibold mb-0.5">■ 継続・必要性</div>
                 <div className="monitoring-continuity-area whitespace-pre-wrap min-h-[2.5rem]">{continuityComment}</div>
               </div>
@@ -21041,6 +21049,7 @@ type MonitoringItemCheck = {
   has_malfunction: boolean;
   has_deterioration: boolean;
   needs_replacement: boolean;
+  has_usage_issue: boolean;
 };
 
 function MonitoringFormModal({
@@ -21071,6 +21080,8 @@ function MonitoringFormModal({
   const [previousComment, setPreviousComment] = useState(
     existingRecord ? (existingRecord.previous_comment ?? "") : (lastRecord?.report_comment ?? "")
   );
+  const [goalAchievement, setGoalAchievement] = useState(existingRecord?.goal_achievement ?? "");
+  const [goalComment, setGoalComment] = useState(existingRecord?.goal_comment ?? "");
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(existingRecord?.id ?? null);
   const [downloading, setDownloading] = useState(false);
@@ -21086,7 +21097,7 @@ function MonitoringFormModal({
         equipment_name: eq?.name ?? item.product_code,
         category: eq?.category ?? "",
         quantity: item.quantity ?? 1,
-        no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false,
+        no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false, has_usage_issue: false,
       };
     });
     const fromHistory = clientHistItems.map(h => ({
@@ -21095,7 +21106,7 @@ function MonitoringFormModal({
       equipment_name: h.equipment_name,
       category: "",
       quantity: 1,
-      no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false,
+      no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false, has_usage_issue: false,
     }));
     return [...fromOrders, ...fromHistory];
   });
@@ -21116,6 +21127,7 @@ function MonitoringFormModal({
           has_malfunction: item.has_malfunction ?? false,
           has_deterioration: item.has_deterioration ?? false,
           needs_replacement: item.needs_replacement ?? false,
+          has_usage_issue: item.has_usage_issue ?? false,
         })));
       });
   }, [existingRecord?.id]);
@@ -21146,11 +21158,13 @@ function MonitoringFormModal({
         continuity_comment: continuityComment || null,
         report_comment: reportComment || null,
         previous_comment: previousComment || null,
+        goal_achievement: goalAchievement || null,
+        goal_comment: goalComment || null,
         status: "completed",
       }).select().single();
       if (error || !rec) { console.error(error); return; }
       for (const check of itemChecks) {
-        await supabase.from("monitoring_items").insert({
+        const { error: itemError } = await supabase.from("monitoring_items").insert({
           monitoring_id: rec.id,
           tenant_id: tenantId,
           order_item_id: check.order_item_id,
@@ -21162,7 +21176,9 @@ function MonitoringFormModal({
           has_malfunction: check.has_malfunction,
           has_deterioration: check.has_deterioration,
           needs_replacement: check.needs_replacement,
+          has_usage_issue: check.has_usage_issue,
         });
+        if (itemError) console.error("monitoring_items insert failed:", itemError.message);
       }
       setSavedId(rec.id);
       onSaved();
@@ -21233,6 +21249,7 @@ function MonitoringFormModal({
     { key: "has_malfunction", label: "不具合" },
     { key: "has_deterioration", label: "劣化" },
     { key: "needs_replacement", label: "交換" },
+    { key: "has_usage_issue", label: "使用状況" },
   ];
 
   return (
@@ -21246,7 +21263,8 @@ function MonitoringFormModal({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-4xl mx-auto w-full space-y-4">
         {/* 基本情報 */}
         <div className="bg-gray-50 rounded-xl p-3 space-y-2">
           <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">基本情報</p>
@@ -21313,10 +21331,38 @@ function MonitoringFormModal({
                       className="w-3.5 h-3.5 accent-blue-500" />
                     <span className="text-[10px] text-gray-600">交換</span>
                   </label>
+                  <label className="flex items-center gap-0.5 cursor-pointer" title="使用状況の問題（チェック＝あり）">
+                    <input type="checkbox" checked={check.has_usage_issue}
+                      onChange={e => updateCheck(idx, "has_usage_issue", e.target.checked)}
+                      className="w-3.5 h-3.5 accent-purple-500" />
+                    <span className="text-[10px] text-gray-600">使用状況</span>
+                  </label>
                 </div>
               </div>
             );
           })}
+        </div>
+
+        {/* 利用目標の達成状況 */}
+        <div className="bg-gray-50 rounded-xl p-3 space-y-3">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">利用目標の達成状況</p>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">達成状況</label>
+            <select value={goalAchievement} onChange={e => setGoalAchievement(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white">
+              <option value="">未選択</option>
+              <option value="達成">達成</option>
+              <option value="一部達成">一部達成</option>
+              <option value="未達成">未達成</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">達成状況コメント</label>
+            <textarea value={goalComment} onChange={e => setGoalComment(e.target.value)}
+              rows={2}
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
+              placeholder="例: 屋内移動の自立を維持できている" />
+          </div>
         </div>
 
         {/* コメント */}
@@ -21342,6 +21388,7 @@ function MonitoringFormModal({
               className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
               placeholder="前回のコメントが自動入力されます" />
           </div>
+        </div>
         </div>
       </div>
 
@@ -21386,6 +21433,8 @@ function MonitoringFormModal({
           continuityComment={continuityComment}
           reportComment={reportComment}
           previousComment={previousComment}
+          goalAchievement={goalAchievement}
+          goalComment={goalComment}
           tenantId={tenantId}
           currentOfficeId={currentOfficeId}
           monitoringRecordId={savedId}
