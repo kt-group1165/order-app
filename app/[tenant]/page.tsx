@@ -21249,7 +21249,7 @@ function MonitoringFormModal({
     { key: "has_malfunction", label: "不具合" },
     { key: "has_deterioration", label: "劣化" },
     { key: "needs_replacement", label: "交換" },
-    { key: "has_usage_issue", label: "使用状況" },
+    { key: "has_usage_issue", label: "使用状況上の問題" },
   ];
 
   return (
@@ -21331,11 +21331,11 @@ function MonitoringFormModal({
                       className="w-3.5 h-3.5 accent-blue-500" />
                     <span className="text-[10px] text-gray-600">交換</span>
                   </label>
-                  <label className="flex items-center gap-0.5 cursor-pointer" title="使用状況の問題（チェック＝あり）">
+                  <label className="flex items-center gap-0.5 cursor-pointer" title="使用状況上の問題（チェック＝あり／未チェック＝問題なし）">
                     <input type="checkbox" checked={check.has_usage_issue}
                       onChange={e => updateCheck(idx, "has_usage_issue", e.target.checked)}
                       className="w-3.5 h-3.5 accent-purple-500" />
-                    <span className="text-[10px] text-gray-600">使用状況</span>
+                    <span className="text-[10px] text-gray-600">使用状況上の問題</span>
                   </label>
                 </div>
               </div>
