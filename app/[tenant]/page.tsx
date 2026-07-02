@@ -1015,8 +1015,8 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                     </button>
                   </div>
                 )}
-                {/* その利用者の発注一覧 */}
-                <ul className="flex flex-col gap-4 px-3 pb-3 pt-0">
+                {/* その利用者の発注一覧 (名前より一段インデント) */}
+                <ul className="flex flex-col gap-4 pl-8 pr-3 pb-3 pt-0">
                   {group.orders.map((order) => {
                     const visibleItems = showEnded
                       ? order.items
