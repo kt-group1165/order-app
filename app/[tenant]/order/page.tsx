@@ -5,7 +5,7 @@ import { useState, useEffect, use, useRef, useCallback } from "react";
 import { ChevronLeft, ChevronRight, Search, Check, X, Plus, Minus, ShoppingCart, Mic, MicOff, Volume2 } from "lucide-react";
 import { Client, Equipment, Supplier } from "@/lib/supabase";
 import { getClients } from "@/lib/clients";
-import { getEquipment, getSuppliers } from "@/lib/equipment";
+import { getEquipment, getSuppliers, getPurchasePrices, getPurchasePriceForMonth } from "@/lib/equipment";
 import { createOrder, createOrderItem } from "@/lib/orders";
 
 type PaymentKind = "介護" | "自費" | "特価自費";
@@ -517,8 +517,14 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
     setSubmitting(true);
     try {
       const order = await createOrder({ tenantId, clientId: selectedClient.id, paymentType: paymentKind, deliveryType: "自社納品" });
+      // 仕入価格を発注時点でスナップショット (卸別・月次カタログから)
+      const snapRows = await getPurchasePrices(tenantId, [...new Set(cart.map(i => i.equipment.product_code))]).catch(() => []);
+      const snapYM = new Date().toISOString().slice(0, 7);
       for (const item of cart) {
-        await createOrderItem({ orderId: order.id, tenantId, productCode: item.equipment.product_code, supplierId: item.supplier_id ?? undefined, rentalPrice: item.rental_price ? parseInt(item.rental_price, 10) : undefined, paymentType: paymentKind, quantity: item.quantity, notes: item.notes || undefined });
+        const purchasePrice = item.supplier_id
+          ? getPurchasePriceForMonth(snapRows, item.equipment.product_code, item.supplier_id, snapYM) ?? undefined
+          : undefined;
+        await createOrderItem({ orderId: order.id, tenantId, productCode: item.equipment.product_code, supplierId: item.supplier_id ?? undefined, purchasePrice, rentalPrice: item.rental_price ? parseInt(item.rental_price, 10) : undefined, paymentType: paymentKind, quantity: item.quantity, notes: item.notes || undefined });
       }
       setStep("done");
     } catch (e) { alert("エラーが発生しました。"); console.error(e); }

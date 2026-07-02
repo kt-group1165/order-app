@@ -46,7 +46,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, getEquipmentSetItems, saveEquipmentSetItems, findPriceCorrectionTargets, applyPriceCorrection, type ImportResult, type PriceCorrectionTarget } from "@/lib/equipment";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, getEquipmentSetItems, saveEquipmentSetItems, findPriceCorrectionTargets, applyPriceCorrection, getPurchasePrices, getPurchasePriceForMonth, type ImportResult, type PriceCorrectionTarget } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -11399,6 +11399,10 @@ function NewOrderModal({
         attendeeIds: selectedAttendees,
         supplierId: supplierId || undefined,
       });
+      // 仕入価格を発注時点でスナップショット (卸別・月次カタログから。実効卸 = 明細 or ヘッダー)
+      const snapCodes = [...new Set(items.map((i) => i.equipment.product_code))];
+      const snapRows = await getPurchasePrices(tenantId, snapCodes).catch(() => []);
+      const snapYM = new Date().toISOString().slice(0, 7);
       // グループ代表判定（グループ内で最初に現れたアイテムが代表）
       const seenGroupsSubmit = new Set<string>();
       const createdItems: OrderItem[] = [];
@@ -11407,11 +11411,16 @@ function NewOrderModal({
         if (item.tokka_group) seenGroupsSubmit.add(item.tokka_group);
         const tokkaGroupPrice = isGroupRep && item.tokka_group_price ? parseInt(item.tokka_group_price, 10) : undefined;
         const rentalPrice = item.payment_type !== "特価自費" && item.rental_price ? parseFloat(item.rental_price) : undefined;
+        const effSupplier = item.supplier_id || supplierId || null;
+        const purchasePrice = effSupplier
+          ? getPurchasePriceForMonth(snapRows, item.equipment.product_code, effSupplier, snapYM) ?? undefined
+          : undefined;
         const oi = await createOrderItem({
           orderId: order.id,
           tenantId,
           productCode: item.equipment.product_code,
           supplierId: item.supplier_id || undefined,
+          purchasePrice,
           rentalPrice,
           notes: item.notes || undefined,
           paymentType: item.payment_type,
