@@ -16122,6 +16122,7 @@ function ContractDocumentsModal({
                         setSelectedIds(n);
                       }} className="accent-blue-500 shrink-0" />
                       <span className="text-sm text-gray-800">{eq?.name ?? item.product_code}</span>
+                      {item.rental_start_date && <span className="text-xs text-gray-400">開始 {item.rental_start_date}</span>}
                       {item.rental_price && <span className="ml-auto text-xs text-emerald-600">¥{item.rental_price.toLocaleString()}/月</span>}
                     </div>
                   );
