@@ -39,8 +39,18 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // /login と /api/login は未認証で通す (login flow の起点)
-  if (!user && !pathname.startsWith("/login") && pathname !== "/api/login") {
+  // 未認証で通す public 経路:
+  //  - /login, /api/login       : login flow の起点
+  //  - /m/*                     : スマホ入力ページ (URL 共有キー方式。書込は
+  //                               /api/meeting-submit が MEETING_FORM_KEY を検証)
+  //  - /api/meeting-submit      : 同上 (service_role 使用前にキー検証)
+  const isPublic =
+    pathname.startsWith("/login") ||
+    pathname === "/api/login" ||
+    pathname.startsWith("/m/") ||
+    pathname === "/api/meeting-submit";
+
+  if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     if (pathname !== "/") url.searchParams.set("next", pathname + request.nextUrl.search);
