@@ -15576,7 +15576,7 @@ function CarePlanModal({
         </div>
 
         {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -15653,15 +15653,17 @@ function CarePlanModal({
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
                 </div>
               </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">生年月日</label>
-                <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">認定期間（開始日）</label>
-                <input type="date" value={certStartDate} onChange={(e) => setCertStartDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">生年月日</label>
+                  <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">認定期間（開始日）</label>
+                  <input type="date" value={certStartDate} onChange={(e) => setCertStartDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400" />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -15821,7 +15823,7 @@ function ProposalModal({
         </div>
 
         {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -16175,7 +16177,7 @@ function ContractDocumentsModal({
         </div>
 
         {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -16604,7 +16606,7 @@ function ImportantMattersModal({
         </div>
 
         {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
             <div>
               <label className="text-xs text-gray-500 block mb-1">説明日</label>
               <input type="date" value={explanationDate} onChange={(e) => setExplanationDate(e.target.value)}
@@ -16948,7 +16950,7 @@ function RentalContractModal({
 
         {step === 1 ? (
           /* ステップ1: 設定 */
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-500 block mb-1">契約締結日</label>
