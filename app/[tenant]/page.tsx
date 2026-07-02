@@ -1776,6 +1776,17 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const catColor = (cat: string | null) =>
     cat ? (CATEGORY_COLOR[cat] ?? "bg-gray-100 text-gray-600") : "";
 
+  // 用具コード → 卸別仕入の最安/最高 (一覧の仕入・粗利率列用)
+  const purchaseByProduct = (() => {
+    const m = new Map<string, { min: number; max: number }>();
+    for (const p of supplierPrices) {
+      const cur = m.get(p.product_code);
+      if (!cur) m.set(p.product_code, { min: p.purchase_price, max: p.purchase_price });
+      else { cur.min = Math.min(cur.min, p.purchase_price); cur.max = Math.max(cur.max, p.purchase_price); }
+    }
+    return m;
+  })();
+
   if (selectedItem) {
     return (
       <EquipmentDetail
@@ -1941,7 +1952,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
               {equipment.length === 0 ? "用具データがありません。CSVからインポートしてください。" : "該当なし"}
             </p>
           ) : (
-            <table className="min-w-[680px] w-full table-fixed bg-white text-left">
+            <table className="min-w-[860px] w-full table-fixed bg-white text-left">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="pl-3 py-2 text-xs font-semibold text-gray-500 w-[5.5rem]">種目</th>
@@ -1949,6 +1960,8 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
                   <th className="py-2 px-3 text-xs font-semibold text-gray-500 w-[6.5rem]">コード</th>
                   <th className="py-2 pr-3 text-xs font-semibold text-gray-500 w-[10rem]">TAISコード</th>
                   <th className="py-2 pr-2 text-xs font-semibold text-gray-500 w-[5.5rem] text-right">レンタル価格</th>
+                  <th className="py-2 pr-3 text-xs font-semibold text-gray-500 w-[7.5rem] text-right">仕入</th>
+                  <th className="py-2 pr-3 text-xs font-semibold text-gray-500 w-[4rem] text-right">粗利率</th>
                   <th className="w-6"></th>
                 </tr>
               </thead>
@@ -1985,6 +1998,23 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
                     <td className="py-2.5 pr-2 text-sm font-semibold text-emerald-600 whitespace-nowrap w-[5.5rem] text-right">
                       {item.rental_price ? `¥${item.rental_price.toLocaleString()}` : ""}
                       <span className="text-xs font-normal text-gray-400">{item.rental_price ? "/月" : ""}</span>
+                    </td>
+                    {/* 仕入 (最安〜最高) */}
+                    <td className="py-2.5 pr-3 text-xs text-gray-500 whitespace-nowrap w-[7.5rem] text-right">
+                      {(() => {
+                        const pp = purchaseByProduct.get(item.product_code);
+                        if (!pp) return "";
+                        return pp.min === pp.max ? `¥${pp.min.toLocaleString()}` : `¥${pp.min.toLocaleString()}〜¥${pp.max.toLocaleString()}`;
+                      })()}
+                    </td>
+                    {/* 粗利率 (最安仕入基準) */}
+                    <td className="py-2.5 pr-3 text-xs whitespace-nowrap w-[4rem] text-right">
+                      {(() => {
+                        const pp = purchaseByProduct.get(item.product_code);
+                        if (!pp || !item.rental_price) return "";
+                        const rate = Math.round(((item.rental_price - pp.min) / item.rental_price) * 100);
+                        return <span className={rate >= 0 ? "text-emerald-600" : "text-red-500"}>{rate}%</span>;
+                      })()}
                     </td>
                     {/* 矢印 */}
                     <td className="py-2.5 pr-3 w-6">
