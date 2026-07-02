@@ -271,7 +271,49 @@ const matchClient = (c: Client, raw: string): boolean => {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "notifications" | "settings";
+type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "billing" | "documents" | "doc-tasks" | "staff" | "notifications" | "settings";
+
+// ホーム(メニュー一覧)画面
+function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: (t: Tab) => void }) {
+  const items: { id: Tab; icon: React.ElementType; label: string; desc: string }[] = [
+    { id: "orders", icon: ClipboardList, label: "発注管理", desc: "福祉用具の発注・納品・レンタル" },
+    { id: "clients", icon: Users, label: "利用者別", desc: "利用者ごとの情報・履歴" },
+    { id: "documents", icon: FileText, label: "書類", desc: "利用者の書類管理" },
+    { id: "doc-tasks", icon: FileWarning, label: "書類タスク", desc: "期限・不足書類の管理" },
+    { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
+    { id: "staff", icon: Users, label: "職員", desc: "スタッフ管理" },
+    { id: "billing", icon: CreditCard, label: "請求", desc: "月次請求・売上帳票・損益" },
+    { id: "equipment", icon: Package, label: "用具マスタ", desc: "用具・価格・卸の管理" },
+    { id: "settings", icon: Settings, label: "設定", desc: "会社情報・卸会社・各種マスタ" },
+  ];
+  return (
+    <div className="h-full overflow-y-auto bg-gray-50 p-4 sm:p-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-gray-800">{tenantName}</h2>
+          <p className="text-xs text-gray-400">メニューを選択してください</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {items.map(({ id, icon: Icon, label, desc }) => (
+            <button
+              key={id}
+              onClick={() => onNavigate(id)}
+              className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 text-left hover:border-emerald-300 hover:shadow transition-all flex flex-col gap-2"
+            >
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                <Icon size={20} className="text-emerald-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">{label}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5 leading-snug">{desc}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -311,7 +353,7 @@ export default function TenantPage({
   }, [tenantId, router]);
 
   const urlOfficeId = searchParams.get("office");
-  const [activeTab, setActiveTab] = useState<Tab>("orders");
+  const [activeTab, setActiveTab] = useState<Tab>("home");
   const [tenantName, setTenantName] = useState(tenantId);
   const [ordersDirty, setOrdersDirty] = useState(false);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
@@ -374,8 +416,10 @@ export default function TenantPage({
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-emerald-600 text-white px-4 py-3 flex items-center gap-2 shrink-0">
-        <Package size={20} />
-        <h1 className="text-base font-semibold flex-1 truncate">{tenantName}</h1>
+        <button onClick={() => setActiveTab("home")} className="flex items-center gap-2 flex-1 min-w-0" title="ホームメニューへ">
+          <Package size={20} className="shrink-0" />
+          <h1 className="text-base font-semibold truncate">{tenantName}</h1>
+        </button>
         <HeaderNotificationBadge currentOfficeId={currentOfficeId} onClick={() => setActiveTab("notifications")} />
         <span className="text-xs text-emerald-200">用具・発注管理</span>
         <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.10</span>
@@ -383,6 +427,7 @@ export default function TenantPage({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
+        {activeTab === "home" && <HomeMenu tenantName={tenantName} onNavigate={setActiveTab} />}
         {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
         {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
