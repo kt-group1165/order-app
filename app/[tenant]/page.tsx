@@ -548,6 +548,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   const [loading, setLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<OrderItem["status"] | "all">("all");
+  const [nameRow, setNameRow] = useState<string>("all");
   const [showEnded, setShowEnded] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
@@ -714,8 +715,11 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       const diff = new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
       return diff !== 0 ? diff : new Date(b.latestCreatedAt).getTime() - new Date(a.latestCreatedAt).getTime();
     });
-    return groups;
-  }, [orders, filter, clientByIdOrders]);
+    if (nameRow === "all") return groups;
+    const row = KANA_ROWS.find((r) => r.label === nameRow);
+    if (!row) return groups;
+    return groups.filter((g) => row.chars.includes((g.furigana ?? "").trim().charAt(0)));
+  }, [orders, filter, clientByIdOrders, nameRow]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -958,6 +962,30 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
           />
           キャンセル済み・解約済みを表示
         </label>
+      </div>
+
+      {/* 名前(五十音・行)フィルタ */}
+      <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-1.5 overflow-x-auto shrink-0">
+        <span className="shrink-0 text-[11px] text-gray-400 mr-1">名前</span>
+        <button
+          onClick={() => setNameRow("all")}
+          className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+            nameRow === "all" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"
+          }`}
+        >
+          すべて
+        </button>
+        {KANA_ROWS.map((r) => (
+          <button
+            key={r.label}
+            onClick={() => setNameRow(r.label)}
+            className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+              nameRow === r.label ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"
+            }`}
+          >
+            {r.label}行
+          </button>
+        ))}
       </div>
 
       {/* Order list - 利用者グループ表示 */}
