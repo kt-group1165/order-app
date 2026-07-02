@@ -665,6 +665,18 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
 
   const equipName = (code: string) =>
     equipmentByCodeOrders.get(code)?.name ?? code;
+  const equipCategory = (code: string) =>
+    equipmentByCodeOrders.get(code)?.category ?? null;
+  const ORDER_CAT_COLOR: Record<string, string> = {
+    車いす: "bg-blue-100 text-blue-700",
+    歩行器: "bg-purple-100 text-purple-700",
+    ベッド: "bg-amber-100 text-amber-700",
+    特殊寝台: "bg-amber-100 text-amber-700",
+    手すり: "bg-green-100 text-green-700",
+    スロープ: "bg-orange-100 text-orange-700",
+  };
+  const catColorOrders = (cat: string | null) =>
+    cat ? (ORDER_CAT_COLOR[cat] ?? "bg-gray-100 text-gray-600") : "bg-gray-100 text-gray-600";
 
   // 利用者ごとにグループ化して直近活動順に並べる
   const clientGroups = useMemo(() => {
@@ -1204,9 +1216,16 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                                           )}
                                         </div>
                                       </td>
-                                      {/* 用具名 */}
+                                      {/* 種目バッジ + 用具名 */}
                                       <td className="py-2 text-sm font-medium text-gray-800 max-w-0">
-                                        <span className="block truncate">{equipName(item.product_code)}</span>
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          {equipCategory(item.product_code) && (
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0 ${catColorOrders(equipCategory(item.product_code))}`}>
+                                              {equipCategory(item.product_code)}
+                                            </span>
+                                          )}
+                                          <span className="truncate">{equipName(item.product_code)}</span>
+                                        </div>
                                       </td>
                                       {/* コード */}
                                       <td className="py-2 px-3 text-xs text-gray-400 whitespace-nowrap w-[6.5rem]">
