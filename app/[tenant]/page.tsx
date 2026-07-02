@@ -50,6 +50,8 @@ import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateE
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
+import { getDocTemplate, saveDocTemplate, type DocTemplateSections } from "@/lib/docTemplates";
+import { CONTRACT_TEMPLATE_SECTIONS, CONTRACT_SECTION_DEFAULTS, RENTAL_CONTRACT_DOC_TYPE, parseContractArticles } from "@/lib/contractTemplateSections";
 import { getCarePlanElementsByClient, getCertRenewalVirtuals, completeCarePlanElements, describeCarePlanElement, buildOtherFreeText, isVirtualElement, parseVirtualInsuranceId, filterElementsForDocType } from "@/lib/carePlanElements";
 import { CarePlanTemplate, CarePlanElement } from "@/lib/supabase";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -13032,7 +13034,7 @@ function OrderEmailPreviewModal({
 
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
-type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "speech_usage" | "data_reimport";
+type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "contract_template" | "speech_usage" | "data_reimport";
 
 function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange, onViewModeChange }: {
   tenantId: string;
@@ -13206,6 +13208,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
     { id: "suppliers",    label: "卸会社マスタ", desc: "卸の追加・名前・メール・表示の管理" },
     { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
+    { id: "contract_template", label: "契約書・重要事項の文面", desc: "帳票の文章ブロックを編集" },
     { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
     { id: "data_reimport", label: "データ再取込（危険）",    desc: "利用者・保険情報・居宅マスタを一括再構築" },
   ];
@@ -13454,6 +13457,18 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
         <PageHeader title="データ再取込" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <DataReimportSection tenantId={tenantId} />
+        </div>
+      </div>
+    );
+  }
+
+  // ── 契約書・重要事項の文面 ──
+  if (settingsPage === "contract_template") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="契約書・重要事項の文面" onBack={() => setSettingsPage("menu")} />
+        <div className="flex-1 overflow-y-auto p-4">
+          <ContractTemplateSection tenantId={tenantId} />
         </div>
       </div>
     );
@@ -14711,6 +14726,112 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
 
 // ─── Care Plan Template ───────────────────────────────────────────────────────
 
+// ─── Contract Template Section (契約書・重要事項の文面編集) ──────────────────
+function ContractTemplateSection({ tenantId }: { tenantId: string }) {
+  const [sections, setSections] = useState<DocTemplateSections>({});
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
+
+  useEffect(() => {
+    getDocTemplate(tenantId, RENTAL_CONTRACT_DOC_TYPE)
+      .then(setSections)
+      .catch((err) => {
+        console.error("document_templates fetch failed:", err instanceof Error ? err.message : err);
+        setLoadFailed(true);
+      })
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSavedOk(false);
+    try {
+      // 既定文と同一のセクションは保存しない (差分だけ DB に持つ)
+      const diff: DocTemplateSections = {};
+      for (const s of CONTRACT_TEMPLATE_SECTIONS) {
+        const v = sections[s.key];
+        if (v !== undefined && v !== s.defaultText) diff[s.key] = v;
+      }
+      await saveDocTemplate(tenantId, RENTAL_CONTRACT_DOC_TYPE, diff);
+      setSections(diff);
+      setSavedOk(true);
+      setTimeout(() => setSavedOk(false), 2500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      alert("保存に失敗しました: " + msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <p className="text-sm text-gray-400">読み込み中...</p>;
+
+  const groups = ["重要事項説明書", "契約書"] as const;
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-1">
+        <p className="text-xs text-gray-500">帳票（重要事項説明書・契約書）のレイアウトは固定のまま、文章ブロックだけを編集できます。未編集のセクションは既定文がそのまま使われます。</p>
+        <p className="text-xs text-gray-400">{"{契約締結日} / {認定有効期限} は印刷時に自動で差し込まれます。"}</p>
+        {loadFailed && (
+          <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-1.5">保存済みテンプレートの読み込みに失敗しました。既定文を表示しています（保存もできない可能性があります）。</p>
+        )}
+      </div>
+      {groups.map((group) => (
+        <div key={group} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-800 text-sm">{group}</h3>
+          </div>
+          <div className="p-4 space-y-4">
+            {CONTRACT_TEMPLATE_SECTIONS.filter((s) => s.group === group).map((s) => {
+              const value = sections[s.key] ?? s.defaultText;
+              const edited = sections[s.key] !== undefined;
+              const rows = Math.min(Math.max(value.split("\n").length + 1, 3), 16);
+              return (
+                <div key={s.key}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-medium text-gray-500">
+                      {s.label}
+                      {edited && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">変更あり</span>}
+                    </label>
+                    {edited && (
+                      <button
+                        onClick={() => setSections((prev) => { const n = { ...prev }; delete n[s.key]; return n; })}
+                        className="text-xs text-gray-500 hover:text-gray-800"
+                      >既定に戻す</button>
+                    )}
+                  </div>
+                  <textarea
+                    value={value}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSections((prev) => {
+                        const n = { ...prev };
+                        if (v === s.defaultText) delete n[s.key]; else n[s.key] = v;
+                        return n;
+                      });
+                    }}
+                    rows={rows}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 leading-relaxed"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-2">
+        <button onClick={handleSave} disabled={saving}
+          className="w-full py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+          {saving ? <Loader2 size={14} className="animate-spin" /> : "文面を保存"}
+        </button>
+        {savedOk && <p className="text-xs text-emerald-600 font-medium text-center">✓ 保存完了しました</p>}
+      </div>
+    </div>
+  );
+}
+
 function CarePlanTemplateSection({ tenantId }: { tenantId: string }) {
   const [templates, setTemplates] = useState<CarePlanTemplate[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -15952,6 +16073,12 @@ function ContractDocumentsModal({
     });
   }, [client.id]);
 
+  // 文面テンプレート (DB 差し替え分)。fetch 失敗時 (migration 未適用等) は既定文で描画
+  const [tplSections, setTplSections] = useState<DocTemplateSections>({});
+  useEffect(() => {
+    getDocTemplate(tenantId, RENTAL_CONTRACT_DOC_TYPE).then(setTplSections).catch(() => {});
+  }, [tenantId]);
+
   const selectableItems = clientItems.filter((i) =>
     ["ordered", "delivered", "rental_started"].includes(i.status)
   );
@@ -15968,6 +16095,12 @@ function ContractDocumentsModal({
     : "　　年　月　日";
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";
+
+  // セクション文面 (DB 差し替え or 既定文) + 差込プレースホルダ置換
+  const sec = (key: string) =>
+    (tplSections[key] ?? CONTRACT_SECTION_DEFAULTS[key] ?? "")
+      .split("{契約締結日}").join(contractDateJa)
+      .split("{認定有効期限}").join(certEndJa);
 
   const handlePrint = () => {
     const el = document.getElementById("combined-docs-print");
@@ -16149,7 +16282,7 @@ function ContractDocumentsModal({
                   <tr><th style={TH}>管理者・連絡先</th><td style={TD}>{companyInfo.staffName}　TEL: {companyInfo.tel}</td></tr>
                   <tr><th style={TH}>通常の事業の実施地域</th><td style={TD}>{companyInfo.serviceArea || "　"}</td></tr>
                 </tbody></table>
-                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>※通常のサービス提供地域以外の方も希望される方はご気軽にご相談ください。</p>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt", whiteSpace: "pre-wrap" }}>{sec("jusetsu_service_area_note")}</p>
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>２．事業所の職員体制</h2>
                 <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}>
@@ -16172,7 +16305,7 @@ function ContractDocumentsModal({
                     <th style={{ ...TH, width: "60px" }}>営業時間</th><td style={TD}>{companyInfo.businessHours}</td>
                   </tr>
                 </tbody></table>
-                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>注）土・日曜、祝祭日、夏期休暇（8／13〜8／15）、年末年始休暇（12／30〜1／3）を休業とする。</p>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt", whiteSpace: "pre-wrap" }}>{sec("jusetsu_holiday_note")}</p>
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>４．福祉用具貸与の内容等</h2>
                 <p style={{ margin: "0 0 2px" }}>　　福祉用具貸与にて取り扱う福祉用具の種目は、以下のとおりです。</p>
@@ -16185,31 +16318,19 @@ function ContractDocumentsModal({
                 <table style={{ borderCollapse: "collapse", margin: "0 0 4px", fontSize: "8pt" }}><tbody>
                   <tr>{["手すり","スロープ","歩行器","歩行補助つえ"].map((cell,j)=><td key={j} style={{ border:"1px solid #555", padding:"2px 6px" }}>{cell}</td>)}</tr>
                 </tbody></table>
-                <p style={{ margin: "0 0 4px", fontSize: "7.5pt" }}>※上記の（介護予防）福祉用具貸与品以外に、腰掛便座、入浴補助用具、等が介護保険制度により購入できます。また、住宅改修につきましても介護保険により支給されますので、希望される方はご相談ください。</p>
+                <p style={{ margin: "0 0 4px", fontSize: "7.5pt", whiteSpace: "pre-wrap" }}>{sec("jusetsu_taiyo_note")}</p>
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>５．サービスの利用方法</h2>
                 <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（１）サービスの利用開始</p>
-                <p style={{ margin: "0 0 2px", paddingLeft: "2em" }}>まずは、電話等でご連絡ください。当社の専門相談員がご自宅に訪問させていただきます。重要事項を説明した後、正式に契約を結び、サービスの提供を開始します（居宅介護支援事業者に居宅サービス計画の作成を依頼している場合は、事前に当該介護支援専門員とご相談下さい）。</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "2em", whiteSpace: "pre-wrap" }}>{sec("jusetsu_usage_start")}</p>
                 <p style={{ margin: "0 0 2px", fontWeight: "bold" }}>　（２）サービスの終了</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>①お客様の都合によりサービスを終了する場合</p>
-                <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>サービスの終了を希望する日の1週間前までに文書又は口頭で通知することにより、サービスを終了することができます。</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>②当社の都合によりサービスを終了する場合（終了1ヶ月前までに通知します。）</p>
-                <p style={{ margin: "0 0 2px", paddingLeft: "3em" }}>やむを得ない事情により、当社よりサービスの提供を終了させていただく場合があります。</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>③自動終了</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様の要介護認定区分が、更新申請などにより、自立と認定された場合（この場合、条件を変更して再度契約することができます）</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "3em" }}>・お客様が介護保健施設に入所された場合　・医療機関へご入院された場合　・お客様が亡くなられた場合</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "2em" }}>④その他</p>
-                <p style={{ margin: "0 0 4px", paddingLeft: "3em" }}>・当社が正当な理由なく適切なサービスを提供しない場合、守秘義務に反した場合などは、文書で解約を通知することによって即座にサービスを終了することができます。・サービス利用料金の支払いを１ヶ月以上遅延し、催告後３０日以内に支払わない場合等は直ちにサービスを終了させていただく場合があります。</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "2em", whiteSpace: "pre-wrap" }}>{sec("jusetsu_usage_end")}</p>
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>６．当社の（介護予防）福祉用具貸与の運営の方針</h2>
-                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・利用者が、可能な限り居宅において、自立した日常生活を営めるように、利用者の心身の状況、希望及びその置かれている環境を踏まえた適切な福祉用具選定の援助を行います。</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・利用者の要介護状態の軽減もしくは悪化防止のため、適切な福祉用具貸与の提供を行います。</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・サービス従業者は、業務上知り得た利用者又はその家族の秘密を保持します。</p>
-                <p style={{ margin: "0 0 1px", paddingLeft: "1em" }}>・専門相談員の資質向上のために、定期的に福祉用具に関する適切な研修の機会を設けます。</p>
-                <p style={{ margin: "0 0 4px", paddingLeft: "1em" }}>・災害発生時や感染症流行時などの非常時においては、事前に合意した日時・内容通りのサービスが提供できない可能性があります。利用者が避難所に避難された場合には、状況を考慮した上で提供可能と判断した場合にのみサービスを提供するものとします。</p>
+                <p style={{ margin: "0 0 4px", paddingLeft: "1em", whiteSpace: "pre-wrap" }}>{sec("jusetsu_policy")}</p>
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>７．サービス内容に関する相談･苦情</h2>
-                <p style={{ margin: "0 0 2px", paddingLeft: "1em" }}>当社福祉用具貸与事業に関する相談、要望、苦情等は、担当の専門相談員又はお客様サービス係までご連絡下さい。</p>
+                <p style={{ margin: "0 0 2px", paddingLeft: "1em", whiteSpace: "pre-wrap" }}>{sec("jusetsu_complaint_intro")}</p>
                 <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "2px", fontSize: "8pt" }}><tbody>
                   <tr>
                     <th style={{ ...TH, width: "80px" }}>事業所名</th><td style={TD}>{companyInfo.companyName}</td>
@@ -16217,7 +16338,7 @@ function ContractDocumentsModal({
                   </tr>
                   <tr><th style={TH}>受付時間</th><td style={TD} colSpan={3}>{companyInfo.businessHours}（{companyInfo.businessDays}）</td></tr>
                 </tbody></table>
-                <p style={{ margin: "0 0 2px" }}>当社以外に、区役所・市役所・町、村役場などでも相談･苦情等に対する窓口があります。</p>
+                <p style={{ margin: "0 0 2px", whiteSpace: "pre-wrap" }}>{sec("jusetsu_complaint_public")}</p>
                 <table style={{ borderCollapse: "collapse", width: "100%", margin: "0 0 4px", fontSize: "8pt" }}>
                   <tbody>
                     {[
@@ -16240,17 +16361,15 @@ function ContractDocumentsModal({
 
                 {/* 説明者欄 */}
                 <div style={{ border: "1px solid #555", padding: "5px 8px", marginBottom: "4px", fontSize: "7.5pt" }}>
-                  <p style={{ margin: "0 0 2px" }}>私は、（介護予防）福祉用具貸与の提供について利用者またはその家族等に対して、契約書及び本書面によって重要事項を説明しました。</p>
+                  <p style={{ margin: "0 0 2px", whiteSpace: "pre-wrap" }}>{sec("jusetsu_explain_statement")}</p>
                   <p style={{ margin: "0 0 2px" }}>説明日　{explanationDateJa}　　説明者　　　　　　　　　　　　㊞</p>
                   <p style={{ margin: "0 0 1px" }}>事業者　＜住所＞{companyInfo.companyAddress}　＜事業所名＞{companyInfo.companyName}　＜管理者名＞{companyInfo.staffName}　㊞</p>
                 </div>
                 <div style={{ marginBottom: "4px", fontSize: "7.5pt" }}>
-                  <p style={{ margin: "0 0 1px" }}>○　利用者等に福祉用具搬入後、取扱説明書を説明し交付する。</p>
-                  <p style={{ margin: "0 0 1px" }}>○　利用者等に貸与する福祉用具を使用しながら、使用方法を説明する。</p>
-                  <p style={{ margin: "0 0 3px" }}>○　当該商品の全国平均貸与価格と、その貸与事業所の貸与価格の両方を利用者に説明する。</p>
+                  <p style={{ margin: "0 0 3px", whiteSpace: "pre-wrap" }}>{sec("jusetsu_confirm_items")}</p>
                 </div>
                 <div style={{ border: "1px solid #555", padding: "5px 8px", fontSize: "7.5pt" }}>
-                  <p style={{ margin: "0 0 2px" }}>私は、契約書及び本書面によって事業者から福祉用具貸与事業について重要事項及び上記について説明を受けました。</p>
+                  <p style={{ margin: "0 0 2px", whiteSpace: "pre-wrap" }}>{sec("jusetsu_client_statement")}</p>
                   <p style={{ margin: 0 }}>＜利用者氏名＞{client.name}　　　　　　印　　　　＜代理人氏名＞　　　　　　　　　　　　印</p>
                 </div>
               </div>
@@ -16290,15 +16409,8 @@ function ContractDocumentsModal({
                   </td></tr>
                 </tbody></table>
 
-                {[
-                  { title: "第１条（契約の目的）", body: "　事業者は、利用者に対し、介護保険認定利用者に対して介護保険法令の趣旨に従って、利用者が可能な限りその居宅において、その有する能力に応じて自立した日常生活を営むことが出来るよう、（介護予防）福祉用具貸与を提供し、利用者は、事業者に対してそのサービスに対する料金を支払います。" },
-                  { title: "第２条（契約期間）", body: `１　この契約の契約期間は、${contractDateJa}から利用者の要介護認定又は要支援認定の有効期限満了日（${certEndJa}）までとします。\n２　契約満了の１週間前までに、利用者から事業者に対して、文書又は口頭で契約終了の申し出がない場合、契約は自動更新されるものとします。` },
-                  { title: "第３条（専門相談員）", body: "　事業者は、一定の研修を修了した専門相談員を配置し、専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえて、居宅介護支援事業者の作成する「居宅サービス計画」に沿って、福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じます。" },
-                  { title: "第４条（（介護予防）福祉用具貸与の内容）", body: "１　福祉用具が適切に選定され、かつ使用されるよう、専門的知識に基づき、利用者からの相談に応じるとともに、取り扱い説明書等の文書を示して福祉用具の機能、使用方法、利用料金等に関する情報を提供し、個別の福祉用具の貸与に係る同意を得ます。\n２　貸与する福祉用具の機能、安全性、衛生状態などを考慮し、十分な点検を行います。\n３　利用者の心身の状況等に応じて福祉用具の調整を行うとともに、当該福祉用具の使用方法、使用上の留意事項、故障時の対応等を記載した文書を利用者に交付し、十分な説明を行った上で、必要に応じて利用者に実際に当該福祉用具を使用してもらいながら使用方法の指導を行います。\n４　貸与した福祉用具の使用状況の定期的な確認を行い、必要な場合は、使用方法の指導又は修理等を行います。" },
-                  { title: "第５条（福祉用具貸与計画の作成）", body: "１　福祉用具専門相談員は、利用者の心身の状況、要望及びその置かれている環境を踏まえ、（介護予防）福祉用具利用計画・目標、当該目標を達成する為の具体的なサービスの内容を記載した福祉用具サービス計画を作成致します。\n２　福祉用具サービス計画は、既に居宅サービス計画が作成されている場合はその計画内容に沿って作成致します。\n３　福祉用具専門相談員は、福祉用具サービス計画の作成にあたり、その内容について利用者又はその家族に対して説明し、利用者様の同意を得てから計画をすすめてまいります。\n４　福祉用具専門相談員は、福祉用具サービス計画を作成した際には、当該福祉用具サービス計画を利用者様に交付致します。" },
-                  { title: "第６条（サービス提供の記録）", body: "１　事業者は、サービス提供記録を作成することとし、この契約の終了後２年間保存します。\n２　利用者は、事業所の営業時間内にその事業所にて、当該利用者に関する第１項のサービス提供記録やサービスの実施マニュアル等、サービスの質を利用者が評価するための情報については、いつでも閲覧できます。\n３　利用者は、当該利用者に関する第１項のサービス実施記録等の複写物の交付を無料で受けることができます。" },
-                ].map(({ title, body }) => (
-                  <div key={title} style={{ marginBottom: "5px" }}>
+                {parseContractArticles(sec("contract_articles_1_6")).map(({ title, body }, idx) => (
+                  <div key={idx} style={{ marginBottom: "5px" }}>
                     <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>{title}</p>
                     <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{body}</p>
                   </div>
@@ -16307,14 +16419,9 @@ function ContractDocumentsModal({
                 {/* 第７条 料金 */}
                 <div style={{ marginBottom: "5px" }}>
                   <p style={{ fontWeight: "bold", margin: "0 0 4px" }}>第７条（料金）</p>
-                  <p style={{ margin: "0 0 3px", paddingLeft: "1em", lineHeight: "1.6" }}>１　利用者は、サービスの対価として、下記の（介護予防）福祉用具貸与料金一覧表をもとに、月額料金の1割・2割・3割いずれかの合計額を利用者の負担として支払います。</p>
-                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>２　搬出入にかかる費用は、現に福祉用具貸与に要した費用に含まれるものとし、別にいただきません。</p>
-                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>３　事業者は当月の利用内容明細を請求書として、使用月の翌月末日までに利用者に交付します。</p>
-                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6" }}>４　利用者は、事業者が発行した請求書に記載されている口座引き落とし日の前日までに、事前にご記入いただいた預金口座振替依頼書の指定金融機関の口座に、請求された金額をご入金ください。</p>
-                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6" }}>５　事業者は、利用者から料金の支払いを受けたときは、利用者に対し領収書を発行します。介護保険適用の場合、利用者の負担額は原則として下記の（介護予防）福祉用具貸与料金一覧表の1割・2割・3割のいずれかです。ただし、介護保険適用外のサービス利用については、全額が利用者の負担となります。</p>
+                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{sec("contract_article_7_terms")}</p>
                   <p style={{ fontWeight: "bold", margin: "0 0 2px", paddingLeft: "1em" }}>（介護予防）福祉用具貸与料金一覧表</p>
-                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（１）介護保険の適用がある場合は、料金表のサービス費の1割・2割・3割のいずれかが利用者負担額となります。</p>
-                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>　　下記の「利用者負担額」は介護保険の負担割合が1割の方の場合の負担額となります。介護保険の負担割合が２割または３割の方はこれに２または３を乗じた金額が負担額となります。</p>
+                  <p style={{ margin: "0 0 4px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt", whiteSpace: "pre-wrap" }}>{sec("contract_fee_note_pre")}</p>
                   <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}>
                     <thead><tr>
                       <th style={{ border: "1px solid #555", background: "#eee", padding: "3px 5px", textAlign: "center" }}>種目</th>
@@ -16358,33 +16465,18 @@ function ContractDocumentsModal({
                       })()}
                     </tbody>
                   </table>
-                  <p style={{ margin: "0 0 2px", paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（２）利用者負担金は契約開始月については使用月末締めの翌々月６日にご指定の金融機関の口座から引き落としをさせていただきます。（注）金融機関休業日の場合は翌営業日となります。</p>
-                  <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt" }}>（３）尚、契約起算日が月の１５日以前の場合においては月額の全額を、１６日以降の場合においては１/２の料金を請求させていただきます。解約の場合も同様に月の１５日以前の解約については月額の１/２を、１６日以降の解約については１ヵ月分の料金を請求させていただきます。</p>
+                  <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", fontSize: "7.5pt", whiteSpace: "pre-wrap" }}>{sec("contract_fee_note_post")}</p>
                 </div>
 
-                {[
-                  { title: "第８条（（介護予防）福祉用具貸与の変更）", body: "１　利用者は、身体状況の急変等によって必要とする福祉用具に変更が生じた場合、事業者に対して当該福祉用具の変更を求めることができます。ただし、製品によっては料金の変更が生じる場合がありますのでご了承下さい。\n２　貸与された福祉用具について、万一不良品などで使い勝手が悪く、他に変更したい場合は、すぐにお申し出くだされば、無料で変更します。\n３　前記第２項については、同一製品に限り有効で、他製品への変更は、遠慮させていただきます。" },
-                  { title: "第９条（料金の変更）", body: "１　事業者は、利用者に対して１ヵ月前までに文書で通知することにより、料金の変更（増額又は減額）を申し出ることができます。\n２　利用者が料金の変更を承諾する場合、新たな料金表に基づく【契約書別紙】を作成し、お互いに取り交わします。\n３　利用者は料金の変更を承諾しない場合、事業者に対し、文書で通知することにより、この契約を解除することができます。" },
-                  { title: "第１０条（契約の終了）", body: "１　利用者は事業者に対して、１週間の予告期間を置いて文書又は口頭で通知することにより､この契約を解約することができます｡但し､利用者の病変、急な入院などやむをえない事情がある場合は､１週間以内の通知でもこの契約を解約することができます｡\n２　事業者は､やむをえない事情がある場合､利用者に対して､１ヵ月間の予告期間をおいて理由を示した文書で通知することにより､この契約を解約することができます｡\n３　次の事由に該当した場合は､利用者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　事業者が正当な理由なくサービスを提供しない場合\n　②　事業者が守秘義務に反した場合\n　③　事業者が利用者やその家族などに対して社会理念を逸脱する行為を行った場合\n　④　事業者が破産した場合\n４　次の事由に該当した場合は､事業者は文書で通知することにより､直ちにこの契約を解約することができます｡\n　①　利用者のサービス料金の支払いが１ヵ月以上遅延し､料金を支払うよう催促したにもかかわらず､３０日以内に支払われない場合\n　②　利用者又はその家族などが､事業者やサービス提供者に対して本契約を継続しがたいほどの背信行為を行った場合\n５　次の事由に該当した場合は､この契約は自動的に終了します｡\n　①　利用者が介護保健施設に入所した場合\n　②　利用者の要介護（要支援）認定区分が、非該当（自立）と認定されたとき（この場合、内容を変更して再度契約することができます）\n　③　医療機関への入院\n　④　利用者が亡くなられたとき" },
-                  { title: "第１１条（守秘義務）", body: "１　事業者及び事業者の使用する者は､（介護予防）福祉用具貸与を提供する上で知り得た利用者及びその家族に関する秘密を正当な理由なく第三者に漏らしません｡この守秘義務は契約終了後についても同様です｡\n２　事業者は､利用者からあらかじめ文書で同意を得ない限り、サービス担当者会議等において､利用者の個人情報を用いません｡\n３　事業者は､利用者の家族からあらかじめ文書で同意を得ない限り、サービス担当者会議等において、当該家族の個人情報を用いません｡" },
-                  { title: "第１２条（利用者及びその家族等の義務）", body: "１　利用者及びその家族等は、レンタル商品について定められた使用方法及び使用上の注意事項を遵守する事とします。\n２　利用者等は、事業者の承諾を得ることなくレンタル商品の仕様変更、加工・改造等を行うことはできません。\n３　利用者等は、事業者の承諾を得ることなく本契約に基づく権利の全部もしくは一部を第三者に譲渡し又は転貸することはできません。" },
-                  { title: "第１３条（福祉用具の保管･消毒）", body: "　福祉用具の保管･消毒については、指定居宅サービス等の事業の人員、設置及び運営に関する基準第２０３条第３項の規定に基づき、株式会社インフォゲート、フランスベッド株式会社、野口株式会社、株式会社日本ケアサプライ、ケアレックス株式会社にこの業務を委託し、業務委託契約書を取り交わした上で事業所は委託の契約の内容において、保管及び消毒が適切な方法により行われていることを担保します。" },
-                  { title: "第１４条（賠償責任）", body: "　事業者は､福祉用具貸与サービスの提供に伴い、賠償責任を負う場合に備えて損害保険に加入し、納品時に家具に損傷を与えるなど、事業者の責めに帰すべき事由により利用者の生命・身体・財産に損害を及ぼした場合は､利用者に対してその損害を賠償します｡ただし、事業者は自己の責に帰すべからざる事由によって生じた損害については賠償責任を負いません。とりわけ、以下の事由に該当する場合には、損害賠償責任を免れます。\n①　利用者が、その疾患・心身状態及び福祉用具の設置・使用環境等、レンタル商品の選定に必要な事項について故意にこれを告げず、又は不実の告知を行ったことに起因して損害が発生した場合。\n②　利用者の急激な体調の変化等、事業者の実施した（介護予防）福祉用具貸与サービスを原因としない事由に起因して損害が発生した場合。\n③　利用者又はその家族が、事業者及びサービス従事者の指示・説明に反して行った行為に起因して損害が発生した場合。" },
-                  { title: "第１５条（災害等発生時のサービス提供）", body: "１　災害発生時や感染症流行時などの非常時においては、事業者は従業員の安全を確保した上でサービスを提供するため、事前に合意した日時・内容通りのサービスが提供できない可能性があります。\n２　利用者が避難所に避難された場合には、サービス提供の場所が変わることになりますので、道路状況・人員体制・避難所の環境等を考慮した上で、サービスの提供が可能と事業者が判断した場合にのみサービスを提供するものとします。" },
-                  { title: "第１６条（利用者の損害賠償責任）", body: "　事業者は、利用者の故意又は重大な過失によってレンタル商品が消失し、又は回収したレンタル商品について通常の使用状態を超える著しい破損・汚損等が認められる場合には、利用者等に対して補修費もしくは弁償費相当額の支払を請求することができます。" },
-                  { title: "第１７条（身分証携帯義務）", body: "　サービス従業者は、常に身分証を携帯し、初回納品時及び利用者やその家族から提示を求められたときは、いつでも身分証を提示します。" },
-                  { title: "第１８条（連携）", body: "１　事業者は、福祉用具貸与の提供にあたり、介護支援専門員及び保健医療サービス又は福祉サービスを提供する者との密接な関係に努めます。\n２　事業者は、本契約の内容が変更された場合又は本契約が終了した場合は、その内容を記した書面の写しを速やかに介護支援専門員に送付します。なお、第１０条２項及び４項に基づいて解約通知をする際は、事前に介護支援専門員に連絡します。" },
-                  { title: "第１９条（苦情処理）", body: "１　事業者は、利用者からの相談･苦情に対する窓口を設置し、当該福祉用具の故障・修理依頼など、（介護予防）福祉用具貸与に関する利用者の要望、苦情等に対し、迅速に対応します。\n２　苦情の内容によっては、再発防止のために関係メーカー及び提携先との連携･調整を行います。また、必要に応じて「苦情処理改善会議」を開催します。\n３　事業者は、利用者が苦情等を申し立てた場合であっても、これを理由にしていかなる不利益な扱いをしません。" },
-                  { title: "第２０条（信義誠実の原則）", body: "１　利用者及び事業者は、信義に従い誠実に本契約を履行するものとする。\n２　本契約に定める事項に疑義が生じた場合及び本契約に定めのない事項については、介護保険法令その他諸法令の定めるところを尊重し、双方の協議の上定めるものとします。" },
-                ].map(({ title, body }) => (
-                  <div key={title} style={{ marginBottom: "5px" }}>
+                {parseContractArticles(sec("contract_articles_8_20")).map(({ title, body }, idx) => (
+                  <div key={idx} style={{ marginBottom: "5px" }}>
                     <p style={{ fontWeight: "bold", margin: "0 0 2px" }}>{title}</p>
                     <p style={{ margin: 0, paddingLeft: "1em", lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{body}</p>
                   </div>
                 ))}
 
-                <p style={{ margin: "10px 0 8px", lineHeight: "1.6", fontSize: "8pt" }}>
-                  本契約書の契約内容を証するため、本書２通を作成し、利用者、事業者が署名押印の上、各自１通保有するものとします。同様に、介護保険制度にて義務づけられているサービス担当者会議の開催が必要と認められる場合において、利用者様の個人情報を用いることについての説明を受け、同意するものといたします。
+                <p style={{ margin: "10px 0 8px", lineHeight: "1.6", fontSize: "8pt", whiteSpace: "pre-wrap" }}>
+                  {sec("contract_closing")}
                 </p>
 
                 <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "8pt" }}><tbody>
@@ -16413,7 +16505,7 @@ function ContractDocumentsModal({
 
                 <div style={{ marginTop: "10px", border: "1px solid #555", padding: "6px 8px", fontSize: "7.5pt" }}>
                   <p style={{ fontWeight: "bold", margin: "0 0 3px" }}>【個人情報の取り扱いについて】</p>
-                  <p style={{ margin: 0, lineHeight: "1.6" }}>当事業所はご利用者様の身体的状況やご家族の状況をケアプラン上必要な情報に限り、ご利用者様担当ケアマネージャーに報告致します。当事業所内においてのお客様に関するサービス内容の検討や、向上の為のケース会議、ケアマネージャー様等関係従事者様とのサービス担当者会議以外に個人情報を用いない事を厳守いたします。</p>
+                  <p style={{ margin: 0, lineHeight: "1.6", whiteSpace: "pre-wrap" }}>{sec("contract_privacy")}</p>
                 </div>
 
               </div>
