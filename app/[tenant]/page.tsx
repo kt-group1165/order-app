@@ -45,8 +45,8 @@ import {
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
-import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, updateSupplierEmail, mergeOrders, unmergeOrder } from "@/lib/orders";
-import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, type ImportResult } from "@/lib/equipment";
+import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
+import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, type ImportResult } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenants, getTenantById, updateTenantInfo, type Tenant } from "@/lib/tenants";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
@@ -1558,7 +1558,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
         getEquipment(tenantId),
         getOffices(tenantId).catch(() => [] as Office[]),
         getOfficePrices(tenantId).catch(() => [] as EquipmentOfficePrice[]),
-        getSuppliers().catch(() => [] as Supplier[]),
+        getActiveSuppliers().catch(() => [] as Supplier[]),
         getAllActivePurchasePrices(tenantId).catch(() => [] as EquipmentPrice[]),
       ]);
       setEquipment(eq);
@@ -2033,7 +2033,7 @@ function EquipmentDetail({
   // 卸マスタを読み込む
   useEffect(() => {
     let active = true;
-    getSuppliers().then((s) => { if (active) setSuppliers(s); }).catch(() => {});
+    getActiveSuppliers().then((s) => { if (active) setSuppliers(s); }).catch(() => {});
     return () => { active = false; };
   }, []);
   // この用具の現行仕入価格を読み込む
@@ -12364,8 +12364,12 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
 }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({});
+  const [nameMap, setNameMap] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [newSupplierEmail, setNewSupplierEmail] = useState("");
+  const [addingSupplier, setAddingSupplier] = useState(false);
   const [loading, setLoading] = useState(true);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("menu");
 
@@ -12402,8 +12406,10 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
       setSuppliers(list);
       setSettingsOffices(ofs);
       const map: Record<string, string> = {};
-      list.forEach((s) => { map[s.id] = s.email ?? ""; });
+      const nmap: Record<string, string> = {};
+      list.forEach((s) => { map[s.id] = s.email ?? ""; nmap[s.id] = s.name; });
       setEmailMap(map);
+      setNameMap(nmap);
       if (tenant) {
         setCompany({
           business_number:       tenant.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
@@ -12431,11 +12437,41 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
     setSaving(supplierId);
     setSaved(null);
     try {
-      await updateSupplierEmail(supplierId, emailMap[supplierId] ?? "");
+      const nm = (nameMap[supplierId] ?? "").trim();
+      await updateSupplier(supplierId, { name: nm || undefined, email: emailMap[supplierId] ?? "" });
+      setSuppliers((prev) => prev.map((s) => s.id === supplierId ? { ...s, name: nm || s.name, email: emailMap[supplierId] ?? "" } : s));
       setSaved(supplierId);
       setTimeout(() => setSaved(null), 2000);
     } finally {
       setSaving(null);
+    }
+  };
+
+  const handleAddSupplier = async () => {
+    const name = newSupplierName.trim();
+    if (!name) return;
+    setAddingSupplier(true);
+    try {
+      const created = await createSupplier(name, newSupplierEmail.trim() || undefined);
+      setSuppliers((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, "ja")));
+      setNameMap((m) => ({ ...m, [created.id]: created.name }));
+      setEmailMap((m) => ({ ...m, [created.id]: created.email ?? "" }));
+      setNewSupplierName("");
+      setNewSupplierEmail("");
+    } catch {
+      alert("卸会社の追加に失敗しました");
+    } finally {
+      setAddingSupplier(false);
+    }
+  };
+
+  const handleToggleSupplierActive = async (supplierId: string, next: boolean) => {
+    setSuppliers((prev) => prev.map((s) => s.id === supplierId ? { ...s, is_active: next } : s));
+    try {
+      await updateSupplier(supplierId, { is_active: next });
+    } catch {
+      setSuppliers((prev) => prev.map((s) => s.id === supplierId ? { ...s, is_active: !next } : s));
+      alert("表示状態の変更に失敗しました");
     }
   };
 
@@ -12488,7 +12524,7 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   const menuItems: { id: SettingsPage; label: string; desc: string }[] = [
     { id: "company",      label: "会社情報",           desc: "事業所番号・住所・担当者など" },
     { id: "own_offices",  label: "自事業所管理",        desc: "事業所の追加・編集" },
-    { id: "suppliers",    label: "卸会社メールアドレス", desc: "発注メール送信先の管理" },
+    { id: "suppliers",    label: "卸会社マスタ", desc: "卸の追加・名前・メール・表示の管理" },
     { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
     { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
@@ -12641,11 +12677,40 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
   if (settingsPage === "suppliers") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <PageHeader title="卸会社メールアドレス" onBack={() => setSettingsPage("menu")} />
+        <PageHeader title="卸会社マスタ" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* 新規追加 */}
+          <div className="bg-white rounded-xl p-4 space-y-2 border border-emerald-100">
+            <p className="text-sm font-semibold text-gray-800">卸会社を追加</p>
+            <input
+              value={newSupplierName}
+              onChange={(e) => setNewSupplierName(e.target.value)}
+              placeholder="会社名（必須）"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+            />
+            <input
+              type="email"
+              value={newSupplierEmail}
+              onChange={(e) => setNewSupplierEmail(e.target.value)}
+              placeholder="メール（任意）"
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
+            />
+            <button onClick={handleAddSupplier} disabled={addingSupplier || !newSupplierName.trim()}
+              className="w-full py-2 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40 flex items-center justify-center gap-1">
+              {addingSupplier ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} 追加
+            </button>
+          </div>
+          {/* 既存卸 (非表示含む) */}
           {suppliers.map((s) => (
-            <div key={s.id} className="bg-white rounded-xl p-4 space-y-2">
-              <p className="text-sm font-semibold text-gray-800">{s.name}</p>
+            <div key={s.id} className={`bg-white rounded-xl p-4 space-y-2 ${s.is_active === false ? "opacity-60" : ""}`}>
+              <div className="flex items-center gap-2">
+                <input
+                  value={nameMap[s.id] ?? ""}
+                  onChange={(e) => setNameMap({ ...nameMap, [s.id]: e.target.value })}
+                  className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm font-semibold outline-none focus:border-emerald-400"
+                />
+                {s.is_active === false && <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500 shrink-0">非表示</span>}
+              </div>
               <div className="flex gap-2">
                 <input
                   type="email"
@@ -12659,7 +12724,13 @@ function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange,
                   {saving === s.id ? <Loader2 size={14} className="animate-spin" /> : "保存"}
                 </button>
               </div>
-              {saved === s.id && <p className="text-xs text-emerald-600 font-medium">✓ 保存完了しました</p>}
+              <div className="flex items-center justify-between">
+                {saved === s.id ? <p className="text-xs text-emerald-600 font-medium">✓ 保存完了しました</p> : <span />}
+                <button onClick={() => handleToggleSupplierActive(s.id, s.is_active === false)}
+                  className="text-xs font-medium text-gray-500 hover:text-gray-800">
+                  {s.is_active === false ? "再表示する" : "非表示にする"}
+                </button>
+              </div>
             </div>
           ))}
         </div>

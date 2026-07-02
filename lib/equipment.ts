@@ -131,6 +131,33 @@ export async function getSuppliers(bypassCache = false): Promise<Supplier[]> {
   return cached(`suppliers:all`, fetcher);
 }
 
+/** 有効な卸のみ (非表示 is_active:false を除外)。選択肢・列・価格入力に使う。 */
+export async function getActiveSuppliers(bypassCache = false): Promise<Supplier[]> {
+  return (await getSuppliers(bypassCache)).filter((s) => s.is_active !== false);
+}
+
+/** 卸会社を新規追加。 */
+export async function createSupplier(name: string, email?: string): Promise<Supplier> {
+  const { data, error } = await supabase
+    .from("suppliers")
+    .insert({ name: name.trim(), email: email?.trim() || null })
+    .select()
+    .single();
+  if (error) throw error;
+  invalidateCache("suppliers:");
+  return data as Supplier;
+}
+
+/** 卸会社を更新 (名前 / メール / 表示状態)。削除はせず is_active で非表示にする。 */
+export async function updateSupplier(
+  id: string,
+  patch: { name?: string; email?: string | null; is_active?: boolean }
+): Promise<void> {
+  const { error } = await supabase.from("suppliers").update(patch).eq("id", id);
+  if (error) throw error;
+  invalidateCache("suppliers:");
+}
+
 export async function getEquipmentPrices(
   tenantId: string,
   productCode: string

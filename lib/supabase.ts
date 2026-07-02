@@ -144,6 +144,8 @@ export type Supplier = {
   name: string;
   email: string | null;
   memo: string | null;
+  // false = UI 非表示(論理削除)。DB には残す
+  is_active: boolean;
   created_at: string;
 };
 
