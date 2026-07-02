@@ -6,6 +6,7 @@
 // 本体アプリの「担当者会議録」一覧に表示される。
 
 import { useEffect, useState } from "react";
+import { MeetingNoteSheet, printMeetingNoteSheet } from "@/components/MeetingNoteSheet";
 
 const DEFAULTS = {
   discussed_items: "居宅サービス計画書原案について\n①全体の援助方針について\n②サービス内容について",
@@ -199,29 +200,20 @@ export default function MobileMeetingPage() {
         <div className="p-4 max-w-lg mx-auto space-y-2">
           {detail ? (
             <div className="space-y-3">
-              <button onClick={() => setDetail(null)} className="text-sm text-emerald-700 font-medium">← 一覧に戻る</button>
-              <div className="bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100">
-                {([
-                  ["利用者名", detail.client_name],
-                  ["担当者", detail.creator_name],
-                  ["作成年月日", detail.created_date],
-                  ["開催日", detail.meeting_date],
-                  ["時間", detail.meeting_time],
-                  ["開催場所", detail.meeting_place],
-                  ["会議出席者", (detail.attendees ?? []).map((a) => `${a.affiliation} ${a.name}`.trim()).filter(Boolean).join("、")],
-                  ["検討した項目", detail.discussed_items],
-                  ["検討内容", detail.discussion_content],
-                  ["結論", detail.conclusion],
-                  ["残された課題", detail.remaining_issues],
-                  ["次回の開催時期", detail.next_meeting],
-                ] as [string, string | null][]).map(([label, value]) => (
-                  value ? (
-                    <div key={label} className="px-4 py-2.5">
-                      <p className="text-[11px] text-gray-400 mb-0.5">{label}</p>
-                      <p className="text-sm text-gray-800 whitespace-pre-wrap">{value}</p>
-                    </div>
-                  ) : null
-                ))}
+              <div className="flex items-center justify-between">
+                <button onClick={() => setDetail(null)} className="text-sm text-emerald-700 font-medium">← 一覧に戻る</button>
+                <button
+                  onClick={() => printMeetingNoteSheet()}
+                  className="px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-xl"
+                >
+                  印刷
+                </button>
+              </div>
+              {/* 第4表プレビュー (帳票は A4 幅想定のため横スクロール可) */}
+              <div className="bg-white rounded-2xl border border-gray-200 p-4 overflow-x-auto">
+                <div className="min-w-[640px]">
+                  <MeetingNoteSheet data={detail} />
+                </div>
               </div>
             </div>
           ) : notes === null ? (
