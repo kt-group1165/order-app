@@ -549,6 +549,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<OrderItem["status"] | "all">("all");
   const [nameRow, setNameRow] = useState<string>("all");
+  const [orderSearch, setOrderSearch] = useState("");
   const [showEnded, setShowEnded] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
@@ -715,11 +716,26 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       const diff = new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
       return diff !== 0 ? diff : new Date(b.latestCreatedAt).getTime() - new Date(a.latestCreatedAt).getTime();
     });
-    if (nameRow === "all") return groups;
+    // 検索フィルタ (利用者名・ふりがな・用具名・商品コード)
+    let visibleGroups = groups;
+    const q = normalizeSearch(orderSearch.trim());
+    if (q) {
+      visibleGroups = visibleGroups.filter((g) => {
+        if (normalizeSearch(`${g.name}${g.furigana ?? ""}`).includes(q)) return true;
+        return g.orders.some((o) =>
+          o.items.some((i) => {
+            const eqNm = equipmentByCodeOrders.get(i.product_code)?.name ?? i.product_code;
+            return normalizeSearch(eqNm).includes(q) || normalizeSearch(i.product_code).includes(q);
+          })
+        );
+      });
+    }
+
+    if (nameRow === "all") return visibleGroups;
     const row = KANA_ROWS.find((r) => r.label === nameRow);
-    if (!row) return groups;
-    return groups.filter((g) => row.chars.includes((g.furigana ?? "").trim().charAt(0)));
-  }, [orders, filter, clientByIdOrders, nameRow]);
+    if (!row) return visibleGroups;
+    return visibleGroups.filter((g) => row.chars.includes((g.furigana ?? "").trim().charAt(0)));
+  }, [orders, filter, clientByIdOrders, nameRow, orderSearch, equipmentByCodeOrders]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -810,6 +826,21 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     }
     return result;
   }, [clientGroups]);
+
+  // ── 要対応サマリー (filter 前の全 orders から集計) ──
+  const actionSummary = useMemo(() => {
+    let deliveryWait = 0; // 発注済のまま = 納品待ち
+    let startWait = 0;    // 納品済/デモ中 = レンタル開始待ち
+    for (const o of orders) {
+      for (const i of o.items) {
+        if (i.status === "ordered") deliveryWait++;
+        else if (i.status === "delivered" || i.status === "trial") startWait++;
+      }
+    }
+    let mergeCount = 0;
+    for (const groups of mergeCandidates.values()) mergeCount += groups.length;
+    return { deliveryWait, startWait, mergeCount };
+  }, [orders, mergeCandidates]);
 
   const toggleSelectMerge = (orderId: string) => {
     setSelectedMergeIds((prev) => {
@@ -935,6 +966,60 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
           </button>
         )}
       </div>
+
+      {/* 検索ボックス */}
+      <div className="bg-white border-b border-gray-100 px-3 py-2 shrink-0">
+        <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-1.5 bg-white max-w-md">
+          <Search size={14} className="text-gray-400 shrink-0" />
+          <input
+            value={orderSearch}
+            onChange={(e) => setOrderSearch(e.target.value)}
+            placeholder="利用者名・用具名・コードで検索"
+            className="flex-1 text-sm outline-none bg-transparent"
+          />
+          {orderSearch && (
+            <button onClick={() => setOrderSearch("")} aria-label="検索をクリア">
+              <X size={14} className="text-gray-400" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 要対応サマリー */}
+      {(actionSummary.deliveryWait > 0 || actionSummary.startWait > 0 || actionSummary.mergeCount > 0) && (
+        <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 overflow-x-auto shrink-0">
+          <span className="shrink-0 text-[11px] text-gray-400 mr-1">要対応</span>
+          {actionSummary.deliveryWait > 0 && (
+            <button
+              onClick={() => setFilter(filter === "ordered" ? "all" : "ordered")}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                filter === "ordered"
+                  ? "bg-amber-500 text-white border-amber-500"
+                  : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+              }`}
+            >
+              納品待ち {actionSummary.deliveryWait}件
+            </button>
+          )}
+          {actionSummary.startWait > 0 && (
+            <button
+              onClick={() => setFilter(filter === "delivered" ? "all" : "delivered")}
+              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                filter === "delivered"
+                  ? "bg-blue-500 text-white border-blue-500"
+                  : "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+              }`}
+            >
+              開始待ち {actionSummary.startWait}件
+            </button>
+          )}
+          {actionSummary.mergeCount > 0 && (
+            <span className="shrink-0 px-3 py-1 rounded-full text-xs font-medium border bg-gray-50 text-gray-500 border-gray-200">
+              統合候補 {actionSummary.mergeCount}件
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Filter bar */}
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 overflow-x-auto shrink-0">
@@ -1096,6 +1181,32 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                               {new Date(order.ordered_at).toLocaleDateString("ja-JP")}発注
                             </span>
                             <span className="text-xs text-gray-400 whitespace-nowrap">{activeItems.length}点</span>
+                            {/* 放置発注の経過日数警告 (発注済 item が残っている order のみ) */}
+                            {order.items.some((i) => i.status === "ordered") && (() => {
+                              const elapsedDays = Math.floor((Date.now() - new Date(order.ordered_at).getTime()) / 86400000);
+                              return (
+                                <span
+                                  className={`text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${
+                                    elapsedDays >= 14
+                                      ? "text-red-600 bg-red-50"
+                                      : elapsedDays >= 7
+                                        ? "text-amber-600 bg-amber-50"
+                                        : "text-gray-400"
+                                  }`}
+                                >
+                                  発注から{elapsedDays}日
+                                </span>
+                              );
+                            })()}
+                            {/* 卸未設定バッジ */}
+                            {activeItems.length > 0 && !order.supplier_id && activeItems.every((i) => !i.supplier_id) && (
+                              <span
+                                title="卸を選ぶと仕入原価が記録され月次損益に反映されます"
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 whitespace-nowrap shrink-0"
+                              >
+                                卸未設定
+                              </span>
+                            )}
                             {(order.merged_from_order_ids?.length ?? 0) > 0 && (
                               <span
                                 title={`${order.merged_from_order_ids.length} 件の発注が統合されています`}
