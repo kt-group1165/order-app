@@ -1702,6 +1702,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [officePrices, setOfficePrices] = useState<EquipmentOfficePrice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierPrices, setSupplierPrices] = useState<EquipmentPrice[]>([]);
+  const [showSupplierPriceUpdate, setShowSupplierPriceUpdate] = useState(false);
 
   const handleDeleteAll = async () => {
     if (deleteConfirm === "idle") { setDeleteConfirm("confirm1"); return; }
@@ -1984,6 +1985,14 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           <Download size={14} />
           CSV出力
         </button>
+        <button
+          onClick={() => setShowSupplierPriceUpdate(true)}
+          className="shrink-0 flex items-center gap-1 bg-teal-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
+          title="卸から届いた価格改定リストを貼り付けて差分確認のうえ反映"
+        >
+          <Upload size={14} />
+          卸価格取込
+        </button>
         {/* フリガナ未登録件数があれば一括生成ボタンを表示 */}
         {(() => {
           const missing = equipment.filter((e) => !e.furigana || !e.furigana.trim()).length;
@@ -2165,6 +2174,19 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
           onClose={() => setShowImport(false)}
           onDone={() => {
             setShowImport(false);
+            load();
+          }}
+        />
+      )}
+
+      {showSupplierPriceUpdate && (
+        <SupplierPriceUpdateModal
+          tenantId={tenantId}
+          suppliers={suppliers}
+          equipment={equipment}
+          onClose={() => setShowSupplierPriceUpdate(false)}
+          onDone={() => {
+            setShowSupplierPriceUpdate(false);
             load();
           }}
         />
@@ -3177,6 +3199,359 @@ function ImportModal({
                 </div>
               )}
 
+              <button
+                onClick={onDone}
+                className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2"
+              >
+                <CheckCircle2 size={16} />
+                完了
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 卸別価格取込 (差分プレビュー付き) ────────────────────────────────────────
+// 卸から届く「変更となる用具と価格」の2列リスト (識別子, 新価格) を貼り付け →
+// 差分プレビューで確認 → bulkUpsertPurchasePrices で valid_from 付き反映。
+
+type SupplierPriceDiffRow = {
+  /** 貼り付け元の行テキスト (エラー表示用) */
+  line: string;
+  status: "change" | "new" | "same" | "error";
+  /** error のときの理由 (形式エラー / 該当なし / 複数候補 / 重複行) */
+  reason?: string;
+  equipmentName?: string;
+  productCode?: string;
+  currentPrice?: number;
+  newPrice?: number;
+};
+
+function SupplierPriceUpdateModal({
+  tenantId,
+  suppliers,
+  equipment,
+  onClose,
+  onDone,
+}: {
+  tenantId: string;
+  suppliers: Supplier[];
+  equipment: Equipment[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [step, setStep] = useState<"input" | "preview" | "done">("input");
+  const [supplierId, setSupplierId] = useState("");
+  const [effectiveMonth, setEffectiveMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [listText, setListText] = useState("");
+  const [currentPrices, setCurrentPrices] = useState<EquipmentPrice[] | null>(null);
+  const [diffRows, setDiffRows] = useState<SupplierPriceDiffRow[]>([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [doneCount, setDoneCount] = useState(0);
+
+  // 現行有効価格 (卸別) を mount 時に fetch
+  useEffect(() => {
+    let active = true;
+    getAllActivePurchasePrices(tenantId)
+      .then((rows) => { if (active) setCurrentPrices(rows); })
+      .catch((e) => {
+        console.error("getAllActivePurchasePrices failed:", e);
+        if (active) setError(`現行価格の取得に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+      });
+    return () => { active = false; };
+  }, [tenantId]);
+
+  /** 識別子 → 用具の照合: ①product_code 完全一致 ②tais_code 完全一致 ③正規化名 完全一致 → 部分一致(一意のみ) */
+  const matchIdentifier = (ident: string): { eq?: Equipment; reason?: string } => {
+    const raw = ident.trim();
+    if (!raw) return { reason: "形式エラー (識別子が空)" };
+    const byCode = equipment.find((e) => e.product_code === raw);
+    if (byCode) return { eq: byCode };
+    const byTais = equipment.find((e) => (e.tais_code ?? "") !== "" && e.tais_code === raw);
+    if (byTais) return { eq: byTais };
+    const nq = normalizeSearch(raw);
+    if (!nq) return { reason: "形式エラー (識別子が空)" };
+    const exact = equipment.filter((e) => normalizeSearch(e.name) === nq);
+    if (exact.length === 1) return { eq: exact[0] };
+    if (exact.length > 1) return { reason: `複数候補 (${exact.length}件)` };
+    const partial = equipment.filter((e) => normalizeSearch(e.name).includes(nq));
+    if (partial.length === 1) return { eq: partial[0] };
+    if (partial.length > 1) return { reason: `複数候補 (${partial.length}件)` };
+    return { reason: "該当なし" };
+  };
+
+  /** 「差分を確認 →」: 貼り付けテキストをパースして差分行を組み立てる */
+  const handlePreview = () => {
+    setError("");
+    if (!supplierId) { setError("卸を選択してください"); return; }
+    if (!/^\d{4}-\d{2}$/.test(effectiveMonth)) { setError("適用開始月を指定してください"); return; }
+    if (!listText.trim()) { setError("リストを貼り付けてください"); return; }
+    if (currentPrices === null) { setError("現行価格を読み込み中です。少し待ってから再度お試しください"); return; }
+
+    // 現行価格 lookup (選択卸のみ)
+    const currentByProduct = new Map<string, number>();
+    for (const p of currentPrices) {
+      if (p.supplier_id === supplierId) currentByProduct.set(p.product_code, p.purchase_price);
+    }
+
+    const rows: SupplierPriceDiffRow[] = [];
+    const seenProducts = new Set<string>();
+    const lines = listText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+    for (const line of lines) {
+      // 末尾の価格 (¥・カンマ・全角数字許容) と、その手前の区切り (カンマ/タブ/読点) で分割
+      const m = line.match(/^(.+?)[\t,，、]\s*([¥￥]?\s*[0-9０-９][0-9０-９,，.\s]*)\s*円?\s*$/);
+      if (!m) {
+        rows.push({ line, status: "error", reason: "形式エラー (識別子, 価格 の2列で入力)" });
+        continue;
+      }
+      const priceStr = m[2]
+        .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+        .replace(/[¥￥,，.\s]/g, "");
+      const price = parseInt(priceStr, 10);
+      if (isNaN(price) || price <= 0) {
+        rows.push({ line, status: "error", reason: "形式エラー (価格を数値化できない)" });
+        continue;
+      }
+      const { eq, reason } = matchIdentifier(m[1]);
+      if (!eq) {
+        rows.push({ line, status: "error", reason });
+        continue;
+      }
+      if (seenProducts.has(eq.product_code)) {
+        rows.push({ line, status: "error", reason: `重複行 (${eq.name} は既に上の行にあります)`, equipmentName: eq.name, productCode: eq.product_code });
+        continue;
+      }
+      seenProducts.add(eq.product_code);
+      const cur = currentByProduct.get(eq.product_code);
+      rows.push({
+        line,
+        status: cur === undefined ? "new" : cur === price ? "same" : "change",
+        equipmentName: eq.name,
+        productCode: eq.product_code,
+        currentPrice: cur,
+        newPrice: price,
+      });
+    }
+    if (rows.length === 0) { setError("有効な行が見つかりませんでした"); return; }
+    setDiffRows(rows);
+    setStep("preview");
+  };
+
+  const applyTargets = diffRows.flatMap((r) =>
+    (r.status === "change" || r.status === "new") && r.productCode && r.newPrice != null
+      ? [{ tenant_id: tenantId, product_code: r.productCode, supplier_id: supplierId, purchase_price: r.newPrice, valid_from: `${effectiveMonth}-01` }]
+      : []
+  );
+
+  const handleExecute = async () => {
+    if (applyTargets.length === 0) return;
+    setSaving(true);
+    setError("");
+    try {
+      await bulkUpsertPurchasePrices(applyTargets);
+      setDoneCount(applyTargets.length);
+      setStep("done");
+    } catch (e) {
+      console.error("bulkUpsertPurchasePrices failed:", e);
+      setError(`取込に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const counts = {
+    change: diffRows.filter((r) => r.status === "change").length,
+    new: diffRows.filter((r) => r.status === "new").length,
+    same: diffRows.filter((r) => r.status === "same").length,
+    error: diffRows.filter((r) => r.status === "error").length,
+  };
+  const supplierName = suppliers.find((s) => s.id === supplierId)?.name ?? "";
+  const monthLabel = /^\d{4}-\d{2}$/.test(effectiveMonth)
+    ? `${parseInt(effectiveMonth.slice(0, 4), 10)}年${parseInt(effectiveMonth.slice(5, 7), 10)}月`
+    : effectiveMonth;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end z-50">
+      <div className="bg-white w-full rounded-t-2xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">卸別価格取込</h3>
+          <button onClick={onClose}>
+            <X size={20} className="text-gray-400" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {step === "input" && (
+            <>
+              <div className="bg-teal-50 rounded-xl p-3 text-xs text-teal-700 space-y-1">
+                <p className="font-semibold">卸から届いた価格改定リストをそのまま貼り付け</p>
+                <p>1行 = 識別子（商品コード / TAISコード / 商品名）と新価格。カンマ or タブ区切り</p>
+                <p>反映前に差分（現行 → 新価格）をプレビューで確認できます</p>
+              </div>
+
+              <div className="flex gap-3 flex-wrap">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">卸（必須）</label>
+                  <select
+                    value={supplierId}
+                    onChange={(e) => setSupplierId(e.target.value)}
+                    className="w-52 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-teal-400 bg-white"
+                  >
+                    <option value="">選択してください</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">適用開始月</label>
+                  <input
+                    type="month"
+                    value={effectiveMonth}
+                    onChange={(e) => setEffectiveMonth(e.target.value)}
+                    className="w-44 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-teal-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">
+                  卸から届いたリストを貼り付け（1行 = 識別子, 新価格）
+                </label>
+                <textarea
+                  value={listText}
+                  onChange={(e) => setListText(e.target.value)}
+                  placeholder={"00170-000513, 9400\n安寿 楽らく開閉シャワーベンチ\t9400"}
+                  className="w-full h-40 text-xs font-mono border border-gray-200 rounded-xl p-2 outline-none focus:border-teal-400 resize-none"
+                />
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={handlePreview}
+                className="w-full bg-teal-600 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2"
+              >
+                差分を確認
+                <ChevronRight size={16} />
+              </button>
+            </>
+          )}
+
+          {step === "preview" && (
+            <>
+              <div className="bg-gray-50 rounded-xl p-3 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
+                <span>{supplierName} / {monthLabel}から適用</span>
+                <span className="font-semibold">
+                  <span className="text-red-500">変更 {counts.change}</span>
+                  {" / "}
+                  <span className="text-emerald-600">新規 {counts.new}</span>
+                  {" / "}
+                  <span className="text-gray-400">変更なし {counts.same}</span>
+                  {" / "}
+                  <span className={counts.error > 0 ? "text-red-500" : "text-gray-400"}>照合不可 {counts.error}</span>
+                </span>
+              </div>
+
+              <div className="space-y-1 max-h-[45vh] overflow-y-auto">
+                {diffRows.map((r, i) => {
+                  if (r.status === "error") {
+                    return (
+                      <div key={i} className="text-xs bg-red-50 rounded-lg p-2 flex items-start gap-2">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5 text-red-500" />
+                        <div className="min-w-0">
+                          <p className="text-red-600 font-medium">{r.reason}（反映されません）</p>
+                          <p className="text-red-400 truncate">{r.line}</p>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (r.status === "same") {
+                    return (
+                      <div key={i} className="text-xs bg-gray-50 rounded-lg p-2 flex items-center justify-between gap-2 text-gray-400">
+                        <span className="truncate">{r.equipmentName}</span>
+                        <span className="shrink-0 whitespace-nowrap">¥{r.newPrice?.toLocaleString()} 変更なし（スキップ）</span>
+                      </div>
+                    );
+                  }
+                  if (r.status === "new") {
+                    return (
+                      <div key={i} className="text-xs bg-emerald-50 rounded-lg p-2 flex items-center justify-between gap-2">
+                        <span className="truncate font-medium text-gray-700">{r.equipmentName}</span>
+                        <span className="shrink-0 whitespace-nowrap text-emerald-600 font-semibold">
+                          (現行なし) → ¥{r.newPrice?.toLocaleString()} 新規設定
+                        </span>
+                      </div>
+                    );
+                  }
+                  // change
+                  const cur = r.currentPrice ?? 0;
+                  const nw = r.newPrice ?? 0;
+                  const diff = nw - cur;
+                  const rate = cur > 0 ? Math.round((diff / cur) * 100) : 0;
+                  const up = diff > 0;
+                  return (
+                    <div key={i} className="text-xs bg-white border border-gray-200 rounded-lg p-2 flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-gray-700">{r.equipmentName}</span>
+                      <span className={`shrink-0 whitespace-nowrap font-semibold ${up ? "text-red-500" : "text-blue-500"}`}>
+                        ¥{cur.toLocaleString()} → ¥{nw.toLocaleString()}
+                        <span className="font-normal">
+                          {" "}({up ? "+" : ""}{diff.toLocaleString()} / {up ? "+" : ""}{rate}%)
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {error && (
+                <div className="flex items-start gap-2 text-xs text-red-500 bg-red-50 rounded-xl p-3">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setError(""); setStep("input"); }}
+                  disabled={saving}
+                  className="shrink-0 bg-gray-100 text-gray-600 px-4 py-3 rounded-xl font-medium text-sm disabled:opacity-50"
+                >
+                  ← 戻る
+                </button>
+                <button
+                  onClick={handleExecute}
+                  disabled={saving || applyTargets.length === 0}
+                  className="flex-1 bg-teal-600 text-white py-3 rounded-xl font-medium text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                  この内容で取込（{applyTargets.length}件）
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === "done" && (
+            <div className="space-y-4">
+              <div className="bg-emerald-50 rounded-xl p-4 text-center space-y-1">
+                <CheckCircle2 size={28} className="text-emerald-500 mx-auto" />
+                <p className="text-sm font-semibold text-emerald-700">
+                  {doneCount}件を{monthLabel}から有効な価格として登録しました
+                </p>
+                <p className="text-xs text-emerald-600">{supplierName} / 過去の発注価格には影響しません</p>
+              </div>
               <button
                 onClick={onDone}
                 className="w-full bg-emerald-500 text-white py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2"
