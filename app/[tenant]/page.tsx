@@ -21921,6 +21921,7 @@ const MEETING_NOTE_DEFAULTS = {
   discussionContent: "総合的援助の方針、援助目標についての確認",
   conclusion: "居宅サービス計画の原案通りに進める",
   remainingIssues: "モニタリングの上、計画変更がある場合に開催する。",
+  nextMeeting: "モニタリングの上、計画変更がある場合に開催する。",
 };
 
 function emptyMeetingAttendees(): MeetingAttendee[] {
@@ -21949,7 +21950,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
   const [discussionContent, setDiscussionContent] = useState(MEETING_NOTE_DEFAULTS.discussionContent);
   const [conclusion, setConclusion] = useState(MEETING_NOTE_DEFAULTS.conclusion);
   const [remainingIssues, setRemainingIssues] = useState(MEETING_NOTE_DEFAULTS.remainingIssues);
-  const [nextMeeting, setNextMeeting] = useState("");
+  const [nextMeeting, setNextMeeting] = useState(MEETING_NOTE_DEFAULTS.nextMeeting);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -21980,7 +21981,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     setDiscussionContent(MEETING_NOTE_DEFAULTS.discussionContent);
     setConclusion(MEETING_NOTE_DEFAULTS.conclusion);
     setRemainingIssues(MEETING_NOTE_DEFAULTS.remainingIssues);
-    setNextMeeting("");
+    setNextMeeting(MEETING_NOTE_DEFAULTS.nextMeeting);
     setView("edit");
   };
 

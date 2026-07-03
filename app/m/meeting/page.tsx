@@ -13,6 +13,7 @@ const DEFAULTS = {
   discussion_content: "総合的援助の方針、援助目標についての確認",
   conclusion: "居宅サービス計画の原案通りに進める",
   remaining_issues: "モニタリングの上、計画変更がある場合に開催する。",
+  next_meeting: "モニタリングの上、計画変更がある場合に開催する。",
 };
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -65,7 +66,7 @@ export default function MobileMeetingPage() {
   const [discussionContent, setDiscussionContent] = useState(DEFAULTS.discussion_content);
   const [conclusion, setConclusion] = useState(DEFAULTS.conclusion);
   const [remainingIssues, setRemainingIssues] = useState(DEFAULTS.remaining_issues);
-  const [nextMeeting, setNextMeeting] = useState("");
+  const [nextMeeting, setNextMeeting] = useState(DEFAULTS.next_meeting);
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -91,7 +92,7 @@ export default function MobileMeetingPage() {
     setDiscussionContent(DEFAULTS.discussion_content);
     setConclusion(DEFAULTS.conclusion);
     setRemainingIssues(DEFAULTS.remaining_issues);
-    setNextMeeting("");
+    setNextMeeting(DEFAULTS.next_meeting);
     setDone(false);
     setError("");
   };
