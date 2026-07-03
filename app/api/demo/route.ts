@@ -111,7 +111,7 @@ export async function POST(req: Request) {
     if (!clientName) {
       return NextResponse.json({ error: "利用者名は必須です" }, { status: 400 });
     }
-    const { error: loanError } = await admin.from("demo_loans").insert({
+    const { data: loanRow, error: loanError } = await admin.from("demo_loans").insert({
       tenant_id: TENANT_ID,
       unit_id: unitId,
       client_name: clientName,
@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       taken_by: s(body.takenBy),
       due_date: s(body.dueDate),
       memo: s(body.memo),
-    });
+    }).select("id").single();
     if (loanError) {
       console.error("demo checkout insert failed:", loanError.message);
       return NextResponse.json({ error: `保存に失敗しました: ${loanError.message}` }, { status: 500 });
@@ -133,6 +133,13 @@ export async function POST(req: Request) {
       console.error("demo checkout unit update failed:", unitError.message);
       return NextResponse.json({ error: `保存に失敗しました: ${unitError.message}` }, { status: 500 });
     }
+    // 操作ログ (append-only・UI 非表示)。本操作成功後のためログ失敗は握りつぶさず console のみ
+    const { error: logError } = await admin.from("demo_logs").insert({
+      tenant_id: TENANT_ID, unit_id: unitId, loan_id: loanRow?.id ?? null,
+      action: "checkout", actor: s(body.takenBy), source: "mobile",
+      detail: { clientName, takenDate: s(body.takenDate), dueDate: s(body.dueDate), memo: s(body.memo) },
+    });
+    if (logError) console.error("demo_logs insert failed:", logError.message);
     return NextResponse.json({ ok: true });
   }
 
@@ -171,6 +178,13 @@ export async function POST(req: Request) {
       console.error("demo return unit update failed:", unitError.message);
       return NextResponse.json({ error: `保存に失敗しました: ${unitError.message}` }, { status: 500 });
     }
+    // 操作ログ (append-only・UI 非表示)
+    const { error: logError } = await admin.from("demo_logs").insert({
+      tenant_id: TENANT_ID, unit_id: unitId, loan_id: loanId,
+      action: "return", actor: s(body.returnedBy), source: "mobile",
+      detail: { returnedDate, storageLocation: s(body.storageLocation) ?? "事務所", cleaned: body.cleaned === true },
+    });
+    if (logError) console.error("demo_logs insert failed:", logError.message);
     return NextResponse.json({ ok: true });
   }
 

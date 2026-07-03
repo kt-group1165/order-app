@@ -35,6 +35,25 @@ export type DemoLoan = {
   created_at?: string;
 };
 
+// 操作ログ (demo_logs) — append-only・UI非表示の監査用。
+// 本操作の成功後に記録するため、ログ失敗で操作自体は失敗させない (console.error のみ)。
+async function logDemoAction(
+  tenantId: string,
+  action: "checkout" | "return" | "unit_create" | "unit_update" | "unit_discard" | "unit_restore",
+  opts: { unitId?: string | null; loanId?: string | null; detail?: Record<string, unknown>; actor?: string | null }
+): Promise<void> {
+  const { error } = await supabase.from("demo_logs").insert({
+    tenant_id: tenantId,
+    unit_id: opts.unitId ?? null,
+    loan_id: opts.loanId ?? null,
+    action,
+    detail: opts.detail ?? null,
+    actor: opts.actor ?? null,
+    source: "app",
+  });
+  if (error) console.error("demo_logs insert failed:", error.message);
+}
+
 // 台帳一覧 (既定 is_active=true のみ。includeInactive=true で廃棄済みも返す)。officeId 指定時はその事業所分だけ
 export async function listDemoUnits(tenantId: string, officeId?: string, includeInactive?: boolean): Promise<DemoUnit[]> {
   let q = supabase
@@ -84,6 +103,7 @@ export async function createDemoUnit(
     .select()
     .single();
   if (error) throw error;
+  await logDemoAction(unit.tenant_id, "unit_create", { unitId: (data as DemoUnit).id, detail: unit as unknown as Record<string, unknown> });
   return data as DemoUnit;
 }
 
@@ -98,7 +118,10 @@ export async function updateDemoUnit(
     .select()
     .single();
   if (error) throw error;
-  return data as DemoUnit;
+  const updated = data as DemoUnit;
+  const action = patch.is_active === false ? "unit_discard" : patch.is_active === true ? "unit_restore" : "unit_update";
+  await logDemoAction(updated.tenant_id, action, { unitId: id, detail: patch as Record<string, unknown> });
+  return updated;
 }
 
 // 持出: loan insert + unit を「利用者宅・未清掃」に更新
@@ -111,7 +134,7 @@ export async function checkoutUnit(params: {
   dueDate?: string | null;
   memo?: string | null;
 }): Promise<void> {
-  const { error: loanError } = await supabase.from("demo_loans").insert({
+  const { data: loanRow, error: loanError } = await supabase.from("demo_loans").insert({
     tenant_id: params.tenantId,
     unit_id: params.unitId,
     client_name: params.clientName,
@@ -119,13 +142,19 @@ export async function checkoutUnit(params: {
     taken_by: params.takenBy || null,
     due_date: params.dueDate || null,
     memo: params.memo || null,
-  });
+  }).select("id").single();
   if (loanError) throw loanError;
   const { error: unitError } = await supabase
     .from("demo_units")
     .update({ storage_location: "利用者宅", cleaned: false, updated_at: new Date().toISOString() })
     .eq("id", params.unitId);
   if (unitError) throw unitError;
+  await logDemoAction(params.tenantId, "checkout", {
+    unitId: params.unitId,
+    loanId: loanRow?.id ?? null,
+    actor: params.takenBy ?? null,
+    detail: { clientName: params.clientName, takenDate: params.takenDate, dueDate: params.dueDate ?? null, memo: params.memo ?? null },
+  });
 }
 
 // 返却: loan に返却日/返却者を記録 + unit の保管場所・清掃状態を更新
@@ -155,4 +184,10 @@ export async function returnUnit(params: {
     })
     .eq("id", params.unitId);
   if (unitError) throw unitError;
+  await logDemoAction(params.tenantId, "return", {
+    unitId: params.unitId,
+    loanId: params.loanId,
+    actor: params.returnedBy ?? null,
+    detail: { returnedDate: params.returnedDate, storageLocation: params.storageLocation, cleaned: params.cleaned },
+  });
 }
