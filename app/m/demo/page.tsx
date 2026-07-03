@@ -5,7 +5,7 @@
 // 一覧・持出・返却は /api/demo 経由で demo_units / demo_loans を読み書きする。
 // 台帳の追加・編集は本体アプリの「デモ機管理」タブのみ。
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -297,52 +297,58 @@ export default function MobileDemoPage() {
                   <h3 className="text-xs font-semibold text-gray-500 mb-2">
                     {cat}<span className="text-gray-300 ml-1">({us.length})</span>
                   </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 items-start">
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+                    <table className="w-full text-sm min-w-[680px]">
+                      <tbody className="divide-y divide-gray-100">
             {us.map((u) => {
               const loan = loanByUnit.get(u.id) ?? null;
               const overdue = loan ? isOverdue(loan) : false;
               const isCheckoutOpen = checkoutTarget?.id === u.id;
               const isReturnOpen = returnTarget?.unit.id === u.id;
               return (
-                <div key={u.id} className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-gray-800">
-                        <span className="font-mono text-xs text-gray-400 mr-1">{u.unit_no || "―"}</span>
-                        {u.product_name}
-                        {u.color && <span className="font-normal text-xs text-gray-400 ml-1">{u.color}</span>}
-                      </p>
+                <Fragment key={u.id}>
+                  <tr className="hover:bg-gray-50">
+                    <td className="pl-3 pr-1 py-2 font-mono text-xs text-gray-400 whitespace-nowrap w-12">{u.unit_no || "―"}</td>
+                    <td className="px-2 py-2">
+                      <span className="font-medium text-gray-800">{u.product_name}</span>
+                      {u.color && <span className="text-xs text-gray-400 ml-1">{u.color}</span>}
+                    </td>
+                    <td className="px-2 py-2 text-xs whitespace-nowrap">
                       {loan ? (
-                        <p className={`text-xs mt-1 ${overdue ? "text-red-600" : "text-amber-700"}`}>
+                        <span className={overdue ? "text-red-600" : "text-amber-700"}>
                           貸出中: {loan.client_name.replace(/[\s　]*様$/, "")} 様
                           {loan.taken_date && ` / 持出 ${loan.taken_date}`}
                           {loan.due_date && ` / 返却予定 ${loan.due_date}${overdue ? " (超過)" : ""}`}
-                        </p>
+                        </span>
                       ) : (
-                        <p className="text-xs mt-1 text-emerald-700">
+                        <span className="text-emerald-700">
                           在庫: {u.storage_location || "―"} / {u.cleaned ? "清掃済 ✓" : "未清掃"}
-                        </p>
+                        </span>
                       )}
-                      {loan?.memo && <p className="text-[11px] text-gray-400 mt-0.5">{loan.memo}</p>}
-                    </div>
-                    <div className="shrink-0">
+                      {loan?.memo && <span className="text-gray-400 ml-2">{loan.memo}</span>}
+                    </td>
+                    <td className="px-3 py-1.5 w-16 text-right whitespace-nowrap">
                       {loan ? (
                         <button onClick={() => (isReturnOpen ? setReturnTarget(null) : openReturn(u, loan))}
-                          className="px-4 py-2 bg-emerald-500 text-white text-xs font-medium rounded-xl">
+                          className="px-3 py-1.5 bg-emerald-500 text-white text-xs font-medium rounded-lg">
                           返却
                         </button>
                       ) : (
                         <button onClick={() => (isCheckoutOpen ? setCheckoutTarget(null) : openCheckout(u))}
-                          className="px-4 py-2 border border-emerald-300 text-emerald-700 bg-emerald-50 text-xs font-medium rounded-xl">
+                          className="px-3 py-1.5 border border-emerald-300 text-emerald-700 bg-emerald-50 text-xs font-medium rounded-lg">
                           持出
                         </button>
                       )}
-                    </div>
-                  </div>
+                    </td>
+                  </tr>
+                  {(isCheckoutOpen || isReturnOpen) && (
+                  <tr>
+                    <td colSpan={4} className="bg-gray-50 px-4 py-3">
+                      <div className="max-w-md">
 
                   {/* 持出フォーム (カード内展開) */}
                   {isCheckoutOpen && (
-                    <div className="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                    <div className="space-y-3">
                       <div>
                         <label className={labelCls}>利用者名 *</label>
                         <input value={coClientName} onChange={(e) => setCoClientName(e.target.value)} placeholder="例：山田 太郎" className={inputCls} />
@@ -375,7 +381,7 @@ export default function MobileDemoPage() {
 
                   {/* 返却フォーム (カード内展開) */}
                   {isReturnOpen && (
-                    <div className="mt-3 pt-3 border-t border-gray-100 space-y-3">
+                    <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className={labelCls}>返却日</label>
@@ -403,9 +409,15 @@ export default function MobileDemoPage() {
                       </button>
                     </div>
                   )}
-                </div>
+                      </div>
+                    </td>
+                  </tr>
+                  )}
+                </Fragment>
               );
             })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               ));
