@@ -2928,14 +2928,39 @@ function ImportModal({
     setError("");
     try {
       const text = csvText.replace(/^﻿/, "");
-      const lines = text.split(/\r?\n/).filter((l) => l.trim());
-      if (lines.length === 0) {
+      // RFC4180 準拠の CSV パース (引用符内のカンマ・改行・"" エスケープ対応)。
+      // 出力側 (handleExportCSV) が全セルを引用して書き出すため、
+      // 出力したファイルは選定理由等にカンマ/改行を含んでいても必ず取り込める。
+      const parseCsvTable = (src: string): string[][] => {
+        const records: string[][] = [];
+        let row: string[] = [];
+        let cur = "";
+        let q = false;
+        for (let i = 0; i < src.length; i++) {
+          const ch = src[i];
+          if (q) {
+            if (ch === '"') {
+              if (src[i + 1] === '"') { cur += '"'; i++; } else q = false;
+            } else cur += ch;
+          } else if (ch === '"') q = true;
+          else if (ch === ",") { row.push(cur.trim()); cur = ""; }
+          else if (ch === "\n" || ch === "\r") {
+            if (ch === "\r" && src[i + 1] === "\n") i++;
+            row.push(cur.trim()); cur = "";
+            if (row.some((c) => c !== "")) records.push(row);
+            row = [];
+          } else cur += ch;
+        }
+        row.push(cur.trim());
+        if (row.some((c) => c !== "")) records.push(row);
+        return records;
+      };
+      const records = parseCsvTable(text);
+      if (records.length === 0) {
         setError("有効なデータが見つかりませんでした。CSVの形式を確認してください。");
         return;
       }
-      const parseRow = (line: string) =>
-        line.split(",").map((c) => c.trim().replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
-      const headers = parseRow(lines[0]);
+      const headers = records[0];
       const officeMap = new Map(offices.map((o) => [o.name, o.id]));
       const supplierMap = new Map(suppliers.map((s) => [s.name, s.id]));
       const officeCols: { idx: number; officeId: string }[] = [];
@@ -2958,11 +2983,8 @@ function ImportModal({
       });
 
       // 基本情報: 事業所/仕入列を除いた CSV を再構成して既存パーサへ渡す
-      const baseCsv = lines
-        .map((line) => {
-          const cols = parseRow(line);
-          return baseColIdx.map((i) => `"${String(cols[i] ?? "").replace(/"/g, '""')}"`).join(",");
-        })
+      const baseCsv = records
+        .map((cols) => baseColIdx.map((i) => `"${String(cols[i] ?? "").replace(/"/g, '""')}"`).join(","))
         .join("\n");
       const rows = parseEquipmentCSV(baseCsv);
       if (rows.length === 0) {
@@ -2978,8 +3000,8 @@ function ImportModal({
         const officeRows: { tenant_id: string; product_code: string; office_id: string; rental_price: number }[] = [];
         const supplierRows: { tenant_id: string; product_code: string; supplier_id: string; purchase_price: number; valid_from: string }[] = [];
         const validFrom = `${effectiveMonth}-01`;
-        for (let i = 1; i < lines.length; i++) {
-          const cols = parseRow(lines[i]);
+        for (let i = 1; i < records.length; i++) {
+          const cols = records[i];
           const productCode = cols[codeIdx]?.trim();
           if (!productCode) continue;
           for (const oc of officeCols) {
