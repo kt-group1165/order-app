@@ -35,15 +35,15 @@ export type DemoLoan = {
   created_at?: string;
 };
 
-// 台帳一覧 (is_active=true のみ)。officeId 指定時はその事業所分だけ
-export async function listDemoUnits(tenantId: string, officeId?: string): Promise<DemoUnit[]> {
+// 台帳一覧 (既定 is_active=true のみ。includeInactive=true で廃棄済みも返す)。officeId 指定時はその事業所分だけ
+export async function listDemoUnits(tenantId: string, officeId?: string, includeInactive?: boolean): Promise<DemoUnit[]> {
   let q = supabase
     .from("demo_units")
     .select("*")
     .eq("tenant_id", tenantId)
-    .eq("is_active", true)
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("unit_no", { ascending: true });
+  if (!includeInactive) q = q.eq("is_active", true);
   if (officeId) q = q.eq("office_id", officeId);
   const { data, error } = await q;
   if (error) throw error;

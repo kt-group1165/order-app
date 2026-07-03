@@ -22731,12 +22731,14 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
 
   const [offices, setOffices] = useState<Office[]>([]);
   const [officeFilter, setOfficeFilter] = useState<string>(""); // "" = 全事業所
-  const [units, setUnits] = useState<DemoUnit[]>([]);
+  const [subTab, setSubTab] = useState<"status" | "master">("status"); // 貸出状況 / 台帳管理
+  const [units, setUnits] = useState<DemoUnit[]>([]); // 廃棄済み含む全件 (表示側でフィルタ)
   const [openLoans, setOpenLoans] = useState<DemoLoan[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<DemoStatusFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>(""); // "" = 全カテゴリ
+  const [showInactive, setShowInactive] = useState(false); // 台帳管理: 廃棄済みを表示
   const [saving, setSaving] = useState(false);
 
   // ── 持出モーダル ──
@@ -22773,7 +22775,7 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
     setListError(null);
     try {
       const [u, l] = await Promise.all([
-        listDemoUnits(tenantId, officeFilter || undefined),
+        listDemoUnits(tenantId, officeFilter || undefined, true),
         listOpenLoans(tenantId),
       ]);
       setUnits(u);
@@ -22811,33 +22813,36 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
     [todayStr]
   );
 
+  // 貸出状況ビューは稼働中 (is_active=true) のみ対象
+  const activeUnits = useMemo(() => units.filter((u) => u.is_active), [units]);
+
   const counts = useMemo(() => {
     let out = 0, stock = 0, overdue = 0;
-    for (const u of units) {
+    for (const u of activeUnits) {
       const loan = loanByUnit.get(u.id);
       if (loan) { out++; if (isOverdue(loan)) overdue++; }
       else stock++;
     }
     return { out, stock, overdue };
-  }, [units, loanByUnit, isOverdue]);
+  }, [activeUnits, loanByUnit, isOverdue]);
 
   const categories = useMemo(() => {
     const list: string[] = [];
-    for (const u of units) {
+    for (const u of activeUnits) {
       const c = u.category || "未分類";
       if (!list.includes(c)) list.push(c);
     }
     return list;
-  }, [units]);
+  }, [activeUnits]);
 
-  const filteredUnits = useMemo(() => units.filter((u) => {
+  const filteredUnits = useMemo(() => activeUnits.filter((u) => {
     if (categoryFilter && (u.category || "未分類") !== categoryFilter) return false;
     const loan = loanByUnit.get(u.id);
     if (statusFilter === "out") return !!loan;
     if (statusFilter === "stock") return !loan;
     if (statusFilter === "overdue") return !!loan && isOverdue(loan);
     return true;
-  }), [units, loanByUnit, statusFilter, categoryFilter, isOverdue]);
+  }), [activeUnits, loanByUnit, statusFilter, categoryFilter, isOverdue]);
 
   // カテゴリごとにグループ表示 (出現順)
   const grouped = useMemo(() => {
@@ -22850,6 +22855,22 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
     }
     return Array.from(m.entries());
   }, [filteredUnits]);
+
+  // 台帳管理ビュー: 「廃棄済みを表示」ON なら is_active=false も含める
+  const masterUnits = useMemo(
+    () => (showInactive ? units : activeUnits),
+    [units, activeUnits, showInactive]
+  );
+  const masterGrouped = useMemo(() => {
+    const m = new Map<string, DemoUnit[]>();
+    for (const u of masterUnits) {
+      const key = u.category || "未分類";
+      const arr = m.get(key);
+      if (arr) arr.push(u);
+      else m.set(key, [u]);
+    }
+    return Array.from(m.entries());
+  }, [masterUnits]);
 
   // ── モーダルを開く ──
   const openCheckout = (u: DemoUnit) => {
@@ -22988,16 +23009,32 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
     }
   };
 
-  const handleDeactivate = async () => {
-    if (editTarget === null || editTarget === "new") return;
-    if (!confirm(`「${editTarget.unit_no} ${editTarget.product_name}」を非表示にしますか？(廃棄等。一覧に出なくなります)`)) return;
+  // 廃棄 (論理削除)。貸出中はブロック
+  const handleDiscard = async (u: DemoUnit) => {
+    if (loanByUnit.get(u.id)) {
+      alert("貸出中のため廃棄できません。先に返却してください");
+      return;
+    }
+    if (!confirm(`「${u.unit_no} ${u.product_name}」を廃棄 (非表示) にします。貸出履歴は残ります。`)) return;
     setSaving(true);
     try {
-      await updateDemoUnit(editTarget.id, { is_active: false });
-      setEditTarget(null);
+      await updateDemoUnit(u.id, { is_active: false });
       await load();
     } catch (e) {
-      console.error("demo unit deactivate failed:", e);
+      console.error("demo unit discard failed:", e);
+      alert(`更新に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRestore = async (u: DemoUnit) => {
+    setSaving(true);
+    try {
+      await updateDemoUnit(u.id, { is_active: true });
+      await load();
+    } catch (e) {
+      console.error("demo unit restore failed:", e);
       alert(`更新に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
@@ -23019,28 +23056,48 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
         <h2 className="font-semibold text-gray-800">デモ機管理</h2>
-        <button onClick={() => openEdit("new")}
-          className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg">
-          <Plus size={14} /> デモ機を追加
-        </button>
       </div>
 
-      {/* フィルタ: 事業所 / ステータス / カテゴリ */}
+      {/* サブタブ + フィルタ: 事業所 / (貸出状況: ステータス・カテゴリ) / (台帳管理: 追加・廃棄済み表示) */}
       <div className="bg-white border-b border-gray-100 px-4 py-2 shrink-0 space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            {([["status", "貸出状況"], ["master", "台帳管理"]] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setSubTab(id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                  subTab === id ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="w-px h-4 bg-gray-200" />
           <select value={officeFilter} onChange={(e) => setOfficeFilter(e.target.value)}
             className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 bg-white">
             <option value="">全事業所</option>
             {offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
           </select>
-          {statusChips.map((c) => (
-            <button key={c.id} onClick={() => setStatusFilter(c.id)}
-              className={chipCls(statusFilter === c.id)}>{c.label}</button>
-          ))}
+          {subTab === "status" ? (
+            statusChips.map((c) => (
+              <button key={c.id} onClick={() => setStatusFilter(c.id)}
+                className={chipCls(statusFilter === c.id)}>{c.label}</button>
+            ))
+          ) : (
+            <>
+              <button onClick={() => openEdit("new")}
+                className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg">
+                <Plus size={14} /> デモ機を追加
+              </button>
+              <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+                <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} className="accent-emerald-500" />
+                廃棄済みを表示
+              </label>
+            </>
+          )}
         </div>
-        {categories.length > 0 && (
+        {subTab === "status" && categories.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <button onClick={() => setCategoryFilter("")} className={chipCls(categoryFilter === "")}>全カテゴリ</button>
             {categories.map((c) => (
@@ -23059,9 +23116,82 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
         <div className="p-4">
           <p className="text-sm text-red-500">読み込みに失敗しました: {listError}</p>
         </div>
+      ) : subTab === "master" ? (
+        /* ── 台帳管理ビュー ── */
+        masterUnits.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-16">
+            デモ機がありません。「デモ機を追加」から台帳に登録してください
+          </p>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="max-w-4xl mx-auto space-y-4">
+              {masterGrouped.map(([category, list]) => (
+                <div key={category}>
+                  <h3 className="text-xs font-semibold text-gray-500 mb-1.5">{category} <span className="font-normal text-gray-400">({list.length})</span></h3>
+                  <div className="bg-white border border-gray-100 rounded-xl overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-[11px] text-gray-400 border-b border-gray-100">
+                          <th className="text-left font-normal px-3 py-1.5 w-20">番号</th>
+                          <th className="text-left font-normal px-3 py-1.5">商品名</th>
+                          <th className="text-left font-normal px-3 py-1.5 w-24">カラー</th>
+                          <th className="text-left font-normal px-3 py-1.5 w-32">状態</th>
+                          <th className="text-right font-normal px-3 py-1.5 w-44">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {list.map((u) => {
+                          const loan = loanByUnit.get(u.id) ?? null;
+                          return (
+                            <tr key={u.id} className={`border-b border-gray-50 last:border-b-0 ${u.is_active ? "" : "opacity-60"}`}>
+                              <td className="px-3 py-2 text-xs font-mono text-gray-500">{u.unit_no || "―"}</td>
+                              <td className="px-3 py-2 text-gray-800">
+                                {u.product_name}
+                                {!u.is_active && (
+                                  <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 align-middle">廃棄済み</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-xs text-gray-500">{u.color || "―"}</td>
+                              <td className="px-3 py-2 text-xs">
+                                {loan ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">貸出中</span>
+                                ) : (
+                                  <span className="text-gray-500">{u.storage_location || "―"}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button onClick={() => openEdit(u)}
+                                    className="flex items-center gap-1 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 px-2.5 py-1 rounded-lg">
+                                    <Pencil size={12} /> 編集
+                                  </button>
+                                  {u.is_active ? (
+                                    <button onClick={() => handleDiscard(u)} disabled={saving}
+                                      className="text-xs text-red-500 bg-red-50 hover:bg-red-100 border border-red-100 px-2.5 py-1 rounded-lg disabled:opacity-50">
+                                      廃棄
+                                    </button>
+                                  ) : (
+                                    <button onClick={() => handleRestore(u)} disabled={saving}
+                                      className="text-xs text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg disabled:opacity-50">
+                                      復活
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
       ) : filteredUnits.length === 0 ? (
         <p className="text-sm text-gray-400 text-center py-16">
-          {units.length === 0 ? "デモ機がありません。「デモ機を追加」から台帳に登録してください" : "条件に合うデモ機がありません"}
+          {activeUnits.length === 0 ? "デモ機がありません。「台帳管理」タブから登録してください" : "条件に合うデモ機がありません"}
         </p>
       ) : (
         <div className="flex-1 overflow-y-auto p-4">
@@ -23113,10 +23243,6 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
                           <button onClick={(e) => { e.stopPropagation(); openHistory(u); }}
                             className="p-1.5 text-gray-300 hover:text-emerald-600 rounded-lg" title="貸出履歴">
                             <History size={15} />
-                          </button>
-                          <button onClick={(e) => { e.stopPropagation(); openEdit(u); }}
-                            className="p-1.5 text-gray-300 hover:text-emerald-600 rounded-lg" title="編集">
-                            <Pencil size={15} />
                           </button>
                         </div>
                       </div>
@@ -23250,12 +23376,6 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
               className="w-full flex items-center justify-center gap-1 text-sm text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-2.5 rounded-xl disabled:opacity-50">
               {saving && <Loader2 size={14} className="animate-spin" />} 保存
             </button>
-            {editTarget !== "new" && (
-              <button onClick={handleDeactivate} disabled={saving}
-                className="w-full text-xs text-red-500 hover:text-red-600 py-1 disabled:opacity-50">
-                このデモ機を非表示にする (廃棄等)
-              </button>
-            )}
           </div>
         </div>
       )}
