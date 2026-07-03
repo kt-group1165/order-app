@@ -21652,11 +21652,14 @@ function MonitoringFormModal({
           has_malfunction: c.has_malfunction,
           has_deterioration: c.has_deterioration,
           needs_replacement: c.needs_replacement,
+          has_usage_issue: c.has_usage_issue,
           };
         }),
         continuity_comment: continuityComment,
         report_comment: reportComment,
         previous_comment: previousComment,
+        goal_achievement: goalAchievement || null,
+        goal_comment: goalComment || null,
       };
       const res = await fetch("/api/monitoring-excel", {
         method: "POST",

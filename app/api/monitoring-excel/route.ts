@@ -11,10 +11,12 @@ export async function POST(req: NextRequest) {
     report_date,  // "YYYY-MM-DD"
     staff_name,
     company,      // { name, tel, fax }
-    items,        // [{ category, equipment_name, quantity, no_issue, has_malfunction, has_deterioration, needs_replacement }]
+    items,        // [{ category, equipment_name, quantity, no_issue, has_malfunction, has_deterioration, needs_replacement, has_usage_issue }]
     continuity_comment,
     report_comment,
     previous_comment,
+    goal_achievement, // "達成" / "一部達成" / "未達成" / null
+    goal_comment,
   } = body;
 
   const wb = new ExcelJS.Workbook();
@@ -87,13 +89,13 @@ export async function POST(req: NextRequest) {
     }
     set(baseRow, 17, item.equipment_name ?? "");
     set(baseRow, 34, item.quantity ?? 1);
-    // Checks - なし row
-    set(baseRow, 36, item.no_issue ? "☑" : "□");
+    // Checks - なし row (col 36=使用上問題点 / 41=不具合 / 48=劣化 / 55=交換)
+    set(baseRow, 36, !item.has_usage_issue ? "☑" : "□");
     set(baseRow, 41, !item.has_malfunction ? "☑" : "□");
     set(baseRow, 48, !item.has_deterioration ? "☑" : "□");
     set(baseRow, 55, !item.needs_replacement ? "☑" : "□");
     // あり row
-    set(ariRow, 36, !item.no_issue ? "☑" : "□");
+    set(ariRow, 36, item.has_usage_issue ? "☑" : "□");
     set(ariRow, 41, item.has_malfunction ? "☑" : "□");
     set(ariRow, 48, item.has_deterioration ? "☑" : "□");
     set(ariRow, 55, item.needs_replacement ? "☑" : "□");
@@ -110,7 +112,12 @@ export async function POST(req: NextRequest) {
 
   // Comments
   set(96, 17, continuity_comment ?? "");
-  set(105, 2, report_comment ?? "");
+  // 利用目標の達成状況 (テンプレに専用セルが無いため報告内容セルの先頭に前置)
+  const goalLines: string[] = [];
+  if (goal_achievement) goalLines.push(`【利用目標の達成状況：${goal_achievement}】`);
+  if (goal_comment) goalLines.push(goal_comment);
+  const goalPrefix = goalLines.length ? goalLines.join("\n") + "\n\n" : "";
+  set(105, 2, goalPrefix + (report_comment ?? ""));
 
   // Report date
   const rd = toDate(report_date);

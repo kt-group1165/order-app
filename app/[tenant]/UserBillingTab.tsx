@@ -13,6 +13,7 @@ import {
   getUserInvoices,
   upsertUserInvoice,
   updateUserInvoiceStatus,
+  getNextUserInvoiceNo,
   type BillingUserInvoice,
   type BillingUserInvoiceStatus,
 } from "@/lib/userBilling";
@@ -109,6 +110,11 @@ function reiwaMonth(ym: string): string {
   return `令和${yy - 2018}年${parseInt(mm[2], 10)}月分`;
 }
 
+// 発行番号の表示形式: {年}-{番号4桁}  (例: 2026-0001)
+function formatInvoiceNo(year: number, no: number): string {
+  return `${year}-${String(no).padStart(4, "0")}`;
+}
+
 type IssuerInfo = {
   companyName: string;
   companyAddress: string;
@@ -129,34 +135,49 @@ function issuerFromTenant(t: Tenant | null): IssuerInfo {
   };
 }
 
-// 1 利用者分の A4 帳票 (請求書 or 領収書) の HTML を組み立てる
+// 1 枚分の A4 帳票 (請求書 or 領収書) の HTML を組み立てる。
+// group.length === 1 → 通常の 1 利用者。>1 → 名寄せ (同一世帯合算)。
 function buildDocPage(
-  row: Row,
+  group: Row[],
   mode: "invoice" | "receipt",
   issuer: IssuerInfo,
   billingMonth: string,
-  issueDate: string
+  issueDate: string,
+  invoiceNo: string | null
 ): string {
+  const rep = group[0];
+  const isMerged = group.length > 1;
   const title = mode === "invoice" ? "利 用 料 請 求 書" : "利 用 料 領 収 書";
   const amountLabel = mode === "invoice" ? "今回ご請求額" : "領 収 金 額";
   const dateLabel = mode === "invoice" ? "発行日" : "領収日";
-  const billed = row.invoice?.total_amount ?? row.computedTotal;
-  const nonTaxable = row.lineItems.filter((li) => !li.is_taxable).reduce((s, li) => s + li.amount, 0);
-  const taxableBase = row.lineItems.filter((li) => li.is_taxable).reduce((s, li) => s + li.amount, 0);
-  const tax = row.computedTax;
-  const officeName = row.careOffice?.name ?? row.client.care_manager_org ?? "";
+  const noLabel = mode === "invoice" ? "請求書No." : "領収書No.";
 
-  const rowsHtml = row.lineItems
-    .map(
-      (li) => `
+  const allItems = group.flatMap((r) => r.lineItems);
+  const billed = group.reduce((s, r) => s + (r.invoice?.total_amount ?? r.computedTotal), 0);
+  const nonTaxable = allItems.filter((li) => !li.is_taxable).reduce((s, li) => s + li.amount, 0);
+  const taxableBase = allItems.filter((li) => li.is_taxable).reduce((s, li) => s + li.amount, 0);
+  const tax = group.reduce((s, r) => s + r.computedTax, 0);
+  const officeName = rep.careOffice?.name ?? rep.client.care_manager_org ?? "";
+
+  const itemRow = (li: LineItem) => `
       <tr>
         <td class="l">${escapeHtml(li.kind)}<br><span class="sub">${escapeHtml(li.name)}</span></td>
         <td class="r mono">¥${li.unit_price.toLocaleString()}</td>
         <td class="r mono">${li.quantity}</td>
         <td class="r mono">¥${li.amount.toLocaleString()}</td>
-      </tr>`
-    )
-    .join("");
+      </tr>`;
+
+  // 明細: 通常は行の羅列、名寄せ時は利用者ごとに見出し行を挟む
+  const rowsHtml = isMerged
+    ? group
+        .map((r) => {
+          const sub = r.lineItems.reduce((s, li) => s + li.amount + li.tax_amount, 0);
+          return `
+      <tr class="person"><td class="l" colspan="3">${escapeHtml(r.client.name)}　様</td><td class="r mono">¥${sub.toLocaleString()}</td></tr>
+      ${r.lineItems.map(itemRow).join("")}`;
+        })
+        .join("")
+    : rep.lineItems.map(itemRow).join("");
 
   const taxRows = `
     ${nonTaxable > 0 ? `<tr><td class="l">非課税分</td><td colspan="2"></td><td class="r mono">¥${nonTaxable.toLocaleString()}</td></tr>` : ""}
@@ -169,6 +190,13 @@ function buildDocPage(
       ? `<div class="note">但し　${reiwaMonth(billingMonth)}　福祉用具貸与利用料として　上記正に領収いたしました。</div>`
       : `<div class="note">下記のとおりご請求申し上げます。恐れ入りますがお支払期日までにお納めください。</div>`;
 
+  const toName = isMerged
+    ? `<span class="to-name">${escapeHtml(rep.client.name)}</span>　様　他 ${group.length - 1} 名`
+    : `<span class="to-name">${escapeHtml(rep.client.name)}</span>　様`;
+  const householdSub = isMerged
+    ? `<div class="to-sub">（同一世帯：${escapeHtml(group.map((r) => r.client.name).join("・"))}）</div>`
+    : "";
+
   return `
   <div class="sheet">
     <div class="titlebar">${title}</div>
@@ -176,7 +204,9 @@ function buildDocPage(
     <div class="head">
       <div class="head-l">
         <div class="issue">${escapeHtml(dateLabel)}：${reiwaDate(issueDate)}</div>
-        <div class="to"><span class="to-name">${escapeHtml(row.client.name)}</span>　様</div>
+        ${invoiceNo ? `<div class="issue">${escapeHtml(noLabel)} ${escapeHtml(invoiceNo)}</div>` : ""}
+        <div class="to">${toName}</div>
+        ${householdSub}
         ${officeName ? `<div class="to-sub">（居宅：${escapeHtml(officeName)}）</div>` : ""}
       </div>
       <div class="head-r">
@@ -294,6 +324,7 @@ function openPrintWindow(inner: string, docTitle: string, layout: "invoice" | "l
   table.detail .r { text-align: right; }
   table.detail .sub { font-size: 10px; color: #666; }
   table.detail tr.total td { background: #eef2f7; font-weight: 700; }
+  table.detail tr.person td { background: #f6f8fa; font-weight: 600; }
   table.detail .empty { text-align: center; color: #999; padding: 16px; }
   .foot { margin-top: 10px; font-size: 10px; color: #666; }
 
@@ -608,8 +639,10 @@ export default function UserBillingTab({
       payment_method?: string | null;
       issued_date?: string | null;
       status?: BillingUserInvoiceStatus;
+      invoice_no?: number | null;
+      invoice_year?: number | null;
     }
-  ) => {
+  ): Promise<BillingUserInvoice | null> => {
     setSaving(true);
     try {
       const next = await upsertUserInvoice({
@@ -625,17 +658,41 @@ export default function UserBillingTab({
         medical_deduction_amount: row.invoice?.medical_deduction_amount ?? 0,
         overpaid_offset_amount: row.invoice?.overpaid_offset_amount ?? 0,
         notes: row.invoice?.notes ?? null,
+        invoice_no: patch.invoice_no ?? row.invoice?.invoice_no ?? null,
+        invoice_year: patch.invoice_year ?? row.invoice?.invoice_year ?? null,
       });
       setInvoiceMap((prev) => new Map(prev).set(next.client_id, next));
+      return next;
     } catch (err) {
       console.error(err);
       alert("保存に失敗しました");
+      return null;
     } finally {
       setSaving(false);
     }
   };
 
+  // 未採番なら発行番号を確保して返す (採番済ならそのまま)。返り値は表示用文字列。
+  const ensureInvoiceNo = async (row: Row): Promise<string | null> => {
+    const inv = row.invoice ?? invoiceMap.get(row.client.id) ?? null;
+    if (inv?.invoice_no != null && inv?.invoice_year != null) {
+      return formatInvoiceNo(inv.invoice_year, inv.invoice_no);
+    }
+    const year = new Date().getFullYear();
+    const no = await getNextUserInvoiceNo(tenantId, year);
+    const next = await persistInvoice(row, { invoice_no: no, invoice_year: year });
+    if (!next || next.invoice_no == null || next.invoice_year == null) return null;
+    return formatInvoiceNo(next.invoice_year, next.invoice_no);
+  };
+
   const changeStatus = async (row: Row, status: BillingUserInvoiceStatus) => {
+    // 確定時は未採番なら発行番号を採番してから確定する
+    if (status === "確定" && (row.invoice?.invoice_no == null)) {
+      const year = new Date().getFullYear();
+      const no = await getNextUserInvoiceNo(tenantId, year);
+      await persistInvoice(row, { status, invoice_no: no, invoice_year: year });
+      return;
+    }
     // 確定 / 入金完 化時は計算済値で必ず upsert
     if (!row.invoice) {
       await persistInvoice(row, { status });
@@ -662,7 +719,27 @@ export default function UserBillingTab({
     return checked.length > 0 ? checked : sortedRows;
   };
 
-  const printDocs = (mode: "invoice" | "receipt") => {
+  // 名寄せ: mergedSet かつ同一住所の利用者を 1 グループ (世帯合算) に。
+  // それ以外は 1 名 1 グループ。
+  const groupForPrint = (targets: Row[]): Row[][] => {
+    const singles: Row[][] = [];
+    const householdMap = new Map<string, Row[]>();
+    for (const r of targets) {
+      const addr = (r.client.address ?? "").trim();
+      if (mergedSet.has(r.client.id) && addr) {
+        const g = householdMap.get(addr) ?? [];
+        g.push(r);
+        householdMap.set(addr, g);
+      } else {
+        singles.push([r]);
+      }
+    }
+    const merged: Row[][] = [];
+    for (const g of householdMap.values()) merged.push(g); // 1 名でもグループ扱い (単独表示)
+    return [...singles, ...merged];
+  };
+
+  const printDocs = async (mode: "invoice" | "receipt") => {
     const targets = printTargetRows();
     if (targets.length === 0) {
       alert("対象月に請求対象の利用者がいません。");
@@ -670,7 +747,26 @@ export default function UserBillingTab({
     }
     const info = issuerFromTenant(issuer);
     const issue = todayIso();
-    const inner = targets.map((r) => buildDocPage(r, mode, info, billingMonth, issue)).join("");
+    const groups = groupForPrint(targets);
+
+    // 発行番号: 請求書は未採番なら採番、領収書は既存番号があれば流用のみ
+    const noMap = new Map<string, string>();
+    for (const g of groups) {
+      const rep = g[0];
+      if (mode === "invoice") {
+        const no = await ensureInvoiceNo(rep);
+        if (no) noMap.set(rep.client.id, no);
+      } else {
+        const inv = rep.invoice ?? invoiceMap.get(rep.client.id) ?? null;
+        if (inv?.invoice_no != null && inv?.invoice_year != null) {
+          noMap.set(rep.client.id, formatInvoiceNo(inv.invoice_year, inv.invoice_no));
+        }
+      }
+    }
+
+    const inner = groups
+      .map((g) => buildDocPage(g, mode, info, billingMonth, issue, noMap.get(g[0].client.id) ?? null))
+      .join("");
     openPrintWindow(inner, mode === "invoice" ? "利用料請求書" : "利用料領収書", "invoice");
   };
 
@@ -832,7 +928,7 @@ export default function UserBillingTab({
                             });
                           }}
                           onClick={(e) => e.stopPropagation()}
-                          title="名寄せ (Phase 4 で実装予定)"
+                          title="名寄せ (チェックした同一住所の利用者を請求書/領収書 1 枚に世帯合算)"
                         />
                       </td>
                       <td className="px-2 py-1 border border-gray-200 text-center">
@@ -846,7 +942,9 @@ export default function UserBillingTab({
                         {careOffice?.name ?? client.care_manager_org ?? "-"}
                       </td>
                       <td className="px-2 py-1 border border-gray-200 font-mono">
-                        {client.user_number ?? "-"}-{seq}
+                        {invoice?.invoice_no != null && invoice?.invoice_year != null
+                          ? formatInvoiceNo(invoice.invoice_year, invoice.invoice_no)
+                          : `${client.user_number ?? "-"}-${seq}`}
                       </td>
                       <td
                         className="px-2 py-1 border border-gray-200"

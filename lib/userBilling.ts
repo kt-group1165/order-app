@@ -18,6 +18,8 @@ export type BillingUserInvoice = {
   medical_deduction_amount: number;
   overpaid_offset_amount: number;
   notes: string | null;
+  invoice_no: number | null;   // 発行番号 (採番後にセット)
+  invoice_year: number | null; // 発行年 (西暦)
   created_at: string;
   updated_at: string;
 };
@@ -118,7 +120,24 @@ export type UpsertUserInvoicePatch = {
   medical_deduction_amount?: number;
   overpaid_offset_amount?: number;
   notes?: string | null;
+  invoice_no?: number | null;
+  invoice_year?: number | null;
 };
+
+// tenant × 発行年 で次の採番番号を返す (max+1)。採番済が無ければ 1。
+export async function getNextUserInvoiceNo(tenantId: string, year: number): Promise<number> {
+  const { data, error } = await supabase
+    .from("billing_user_invoices")
+    .select("invoice_no")
+    .eq("tenant_id", tenantId)
+    .eq("invoice_year", year)
+    .not("invoice_no", "is", null)
+    .order("invoice_no", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const max = data && data.length > 0 ? (data[0].invoice_no as number) : 0;
+  return (max ?? 0) + 1;
+}
 
 export async function upsertUserInvoice(patch: UpsertUserInvoicePatch): Promise<BillingUserInvoice> {
   const { data, error } = await supabase
