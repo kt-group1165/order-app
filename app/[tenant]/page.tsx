@@ -391,6 +391,21 @@ export default function TenantPage({
     setCurrentOfficeId(urlOfficeId);
   }, [urlOfficeId]);
 
+  // ヘッダー表示用: ログイン中 (URL ?office=) の事業所名
+  const [currentOfficeName, setCurrentOfficeName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!currentOfficeId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount init / office 切替追従)
+      setCurrentOfficeName(null);
+      return;
+    }
+    let active = true;
+    getOffices(tenantId)
+      .then((ofs) => { if (active) setCurrentOfficeName(ofs.find((o) => o.id === currentOfficeId)?.name ?? null); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [tenantId, currentOfficeId]);
+
   useEffect(() => {
     getTenants().then((list) => {
       const found = list.find((t) => t.id === tenantId);
@@ -432,9 +447,14 @@ export default function TenantPage({
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-emerald-600 text-white px-4 py-3 flex items-center gap-2 shrink-0">
-        <button onClick={() => setActiveTab("home")} className="flex items-center gap-2 flex-1 min-w-0" title="ホームメニューへ">
+        <button onClick={() => setActiveTab("home")} className="flex items-center gap-2 flex-1 min-w-0 text-left" title="ホームメニューへ">
           <Package size={20} className="shrink-0" />
-          <h1 className="text-base font-semibold truncate">{tenantName}</h1>
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold truncate leading-tight">{tenantName}</h1>
+            {currentOfficeName && (
+              <p className="text-[10px] text-emerald-200 truncate leading-tight">{currentOfficeName}</p>
+            )}
+          </div>
         </button>
         <HeaderNotificationBadge currentOfficeId={currentOfficeId} onClick={() => setActiveTab("notifications")} />
         <span className="text-xs text-emerald-200">用具・発注管理</span>
@@ -454,7 +474,7 @@ export default function TenantPage({
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} />}
-        {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} />}
+        {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
 
@@ -22726,11 +22746,12 @@ const DEMO_RETURN_LOCATIONS = ["事務所", "消毒庫", "社用車", "その他
 
 type DemoStatusFilter = "all" | "out" | "stock" | "overdue";
 
-function DemoUnitsTab({ tenantId }: { tenantId: string }) {
+function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
   const todayStr = new Date().toISOString().split("T")[0];
 
   const [offices, setOffices] = useState<Office[]>([]);
-  const [officeFilter, setOfficeFilter] = useState<string>(""); // "" = 全事業所
+  // ログイン中の事業所がある場合はそこに固定 (他事業所のデモ機は見せない)。無い場合のみ全事業所+セレクト
+  const [officeFilter, setOfficeFilter] = useState<string>(currentOfficeId ?? "");
   const [subTab, setSubTab] = useState<"status" | "master">("status"); // 貸出状況 / 台帳管理
   const [units, setUnits] = useState<DemoUnit[]>([]); // 廃棄済み含む全件 (表示側でフィルタ)
   const [openLoans, setOpenLoans] = useState<DemoLoan[]>([]);
@@ -23074,11 +23095,17 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
             ))}
           </div>
           <span className="w-px h-4 bg-gray-200" />
-          <select value={officeFilter} onChange={(e) => setOfficeFilter(e.target.value)}
-            className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 bg-white">
-            <option value="">全事業所</option>
-            {offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+          {currentOfficeId ? (
+            <span className="text-xs font-medium text-gray-600 px-1">
+              {offices.find((o) => o.id === currentOfficeId)?.name ?? ""}
+            </span>
+          ) : (
+            <select value={officeFilter} onChange={(e) => setOfficeFilter(e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-400 bg-white">
+              <option value="">全事業所</option>
+              {offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          )}
           {subTab === "status" ? (
             statusChips.map((c) => (
               <button key={c.id} onClick={() => setStatusFilter(c.id)}
