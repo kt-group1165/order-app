@@ -12,8 +12,8 @@ const DEFAULTS = {
   discussed_items: "居宅サービス計画書原案について\n①全体の援助方針について\n②サービス内容について",
   discussion_content: "総合的援助の方針、援助目標についての確認",
   conclusion: "居宅サービス計画の原案通りに進める",
+  // 「残された課題（次回の開催時期）」は標準様式どおり1枠
   remaining_issues: "モニタリングの上、計画変更がある場合に開催する。",
-  next_meeting: "モニタリングの上、計画変更がある場合に開催する。",
 };
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -66,7 +66,6 @@ export default function MobileMeetingPage() {
   const [discussionContent, setDiscussionContent] = useState(DEFAULTS.discussion_content);
   const [conclusion, setConclusion] = useState(DEFAULTS.conclusion);
   const [remainingIssues, setRemainingIssues] = useState(DEFAULTS.remaining_issues);
-  const [nextMeeting, setNextMeeting] = useState(DEFAULTS.next_meeting);
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -92,7 +91,6 @@ export default function MobileMeetingPage() {
     setDiscussionContent(DEFAULTS.discussion_content);
     setConclusion(DEFAULTS.conclusion);
     setRemainingIssues(DEFAULTS.remaining_issues);
-    setNextMeeting(DEFAULTS.next_meeting);
     setDone(false);
     setError("");
   };
@@ -143,7 +141,6 @@ export default function MobileMeetingPage() {
           discussion_content: discussionContent,
           conclusion,
           remaining_issues: remainingIssues,
-          next_meeting: nextMeeting,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -332,12 +329,8 @@ export default function MobileMeetingPage() {
           <textarea value={conclusion} onChange={(e) => setConclusion(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
         </div>
         <div>
-          <label className={labelCls}>残された課題</label>
-          <textarea value={remainingIssues} onChange={(e) => setRemainingIssues(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
-        </div>
-        <div>
-          <label className={labelCls}>次回の開催時期</label>
-          <input value={nextMeeting} onChange={(e) => setNextMeeting(e.target.value)} placeholder="例：モニタリング時" className={inputCls} />
+          <label className={labelCls}>残された課題（次回の開催時期）</label>
+          <textarea value={remainingIssues} onChange={(e) => setRemainingIssues(e.target.value)} rows={3} className={`${inputCls} resize-none`} />
         </div>
 
         {error && (

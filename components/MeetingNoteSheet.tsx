@@ -55,8 +55,8 @@ export function MeetingNoteSheet({ data, printId = "meeting-sheet-print-content"
     { label: "検討した項目", text: data.discussed_items ?? "", minHeight: 80 },
     { label: "検討内容", text: data.discussion_content ?? "", minHeight: 120 },
     { label: "結論", text: data.conclusion ?? "", minHeight: 80 },
-    { label: "残された課題", text: data.remaining_issues ?? "", minHeight: 60 },
-    { label: "(次回の開催時期)", text: data.next_meeting ?? "", minHeight: 32 },
+    // 標準様式どおり1枠。旧データ (next_meeting 別枠時代) は結合して表示
+    { label: "残された課題（次回の開催時期）", text: [data.remaining_issues, data.next_meeting].filter(Boolean).join("\n"), minHeight: 90 },
   ];
   const attendees = data.attendees ?? [];
 

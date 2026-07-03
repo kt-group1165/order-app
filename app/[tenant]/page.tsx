@@ -21920,8 +21920,8 @@ const MEETING_NOTE_DEFAULTS = {
   discussedItems: "居宅サービス計画書原案について\n①全体の援助方針について\n②サービス内容について",
   discussionContent: "総合的援助の方針、援助目標についての確認",
   conclusion: "居宅サービス計画の原案通りに進める",
+  // 「残された課題（次回の開催時期）」は標準様式どおり1枠
   remainingIssues: "モニタリングの上、計画変更がある場合に開催する。",
-  nextMeeting: "モニタリングの上、計画変更がある場合に開催する。",
 };
 
 function emptyMeetingAttendees(): MeetingAttendee[] {
@@ -21950,7 +21950,6 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
   const [discussionContent, setDiscussionContent] = useState(MEETING_NOTE_DEFAULTS.discussionContent);
   const [conclusion, setConclusion] = useState(MEETING_NOTE_DEFAULTS.conclusion);
   const [remainingIssues, setRemainingIssues] = useState(MEETING_NOTE_DEFAULTS.remainingIssues);
-  const [nextMeeting, setNextMeeting] = useState(MEETING_NOTE_DEFAULTS.nextMeeting);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -21981,7 +21980,6 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     setDiscussionContent(MEETING_NOTE_DEFAULTS.discussionContent);
     setConclusion(MEETING_NOTE_DEFAULTS.conclusion);
     setRemainingIssues(MEETING_NOTE_DEFAULTS.remainingIssues);
-    setNextMeeting(MEETING_NOTE_DEFAULTS.nextMeeting);
     setView("edit");
   };
 
@@ -22001,8 +21999,8 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     setDiscussedItems(n.discussed_items ?? "");
     setDiscussionContent(n.discussion_content ?? "");
     setConclusion(n.conclusion ?? "");
-    setRemainingIssues(n.remaining_issues ?? "");
-    setNextMeeting(n.next_meeting ?? "");
+    // 旧データ互換: 別枠だった next_meeting は「残された課題（次回の開催時期）」に結合
+    setRemainingIssues([n.remaining_issues, n.next_meeting].filter(Boolean).join("\n"));
     setView("edit");
   };
 
@@ -22036,7 +22034,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
         discussion_content: discussionContent,
         conclusion,
         remaining_issues: remainingIssues,
-        next_meeting: nextMeeting,
+        next_meeting: null, // 標準様式どおり「残された課題（次回の開催時期）」1枠に統合
       });
       setView("list");
       await loadNotes();
@@ -22211,12 +22209,8 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
               <textarea rows={2} value={conclusion} onChange={(e) => setConclusion(e.target.value)} className={`${inputCls} resize-none`} />
             </div>
             <div>
-              <label className="text-xs text-gray-500">残された課題</label>
-              <textarea rows={2} value={remainingIssues} onChange={(e) => setRemainingIssues(e.target.value)} className={`${inputCls} resize-none`} />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500">次回の開催時期</label>
-              <input type="text" value={nextMeeting} onChange={(e) => setNextMeeting(e.target.value)} className={inputCls} />
+              <label className="text-xs text-gray-500">残された課題（次回の開催時期）</label>
+              <textarea rows={3} value={remainingIssues} onChange={(e) => setRemainingIssues(e.target.value)} className={`${inputCls} resize-none`} />
             </div>
           </div>
         </div>
@@ -22233,8 +22227,7 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     { label: "検討した項目", text: discussedItems, minHeight: 80 },
     { label: "検討内容", text: discussionContent, minHeight: 120 },
     { label: "結論", text: conclusion, minHeight: 80 },
-    { label: "残された課題", text: remainingIssues, minHeight: 60 },
-    { label: "(次回の開催時期)", text: nextMeeting, minHeight: 32 },
+    { label: "残された課題（次回の開催時期）", text: remainingIssues, minHeight: 90 },
   ];
   return (
     <div className="flex flex-col h-full bg-gray-50">
