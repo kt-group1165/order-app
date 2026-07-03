@@ -48,7 +48,8 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/login") ||
     pathname === "/api/login" ||
     pathname.startsWith("/m/") ||
-    pathname === "/api/meeting-submit";
+    pathname === "/api/meeting-submit" ||
+    pathname === "/api/demo";
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
