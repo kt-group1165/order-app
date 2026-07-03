@@ -17,6 +17,7 @@ import {
   type BillingUserInvoiceStatus,
 } from "@/lib/userBilling";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
+import { getTenantById, type Tenant } from "@/lib/tenants";
 
 // ── かな行フィルター (MonthlyInfoTab と同じ pattern) ─────────────────────
 const USER_BILLING_KANA_ROWS = ["あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ", "他"];
@@ -78,6 +79,245 @@ function parseLocalDate(s: string): Date {
   return new Date(py, pm - 1, pd);
 }
 
+// ── 帳票印刷 (請求書 / 領収書 / 一覧) ────────────────────────────────────
+// window.open した別窓に自己完結の A4 HTML を書き込んで印刷する
+// (会議録の printMeetingNoteSheet と同じ流儀。ページ本体の DOM は汚さない)。
+function escapeHtml(s: string | null | undefined): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function reiwaDate(iso: string): string {
+  const mm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!mm) return iso;
+  const yy = parseInt(mm[1], 10);
+  return `令和${yy - 2018}年${parseInt(mm[2], 10)}月${parseInt(mm[3], 10)}日`;
+}
+
+function reiwaMonth(ym: string): string {
+  const mm = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!mm) return ym;
+  const yy = parseInt(mm[1], 10);
+  return `令和${yy - 2018}年${parseInt(mm[2], 10)}月分`;
+}
+
+type IssuerInfo = {
+  companyName: string;
+  companyAddress: string;
+  tel: string;
+  fax: string;
+  businessNumber: string;
+  staffName: string;
+};
+
+function issuerFromTenant(t: Tenant | null): IssuerInfo {
+  return {
+    companyName: t?.company_name ?? "○○福祉用具",
+    companyAddress: t?.company_address ?? "",
+    tel: t?.company_tel ?? "",
+    fax: t?.company_fax ?? "",
+    businessNumber: t?.business_number ?? "",
+    staffName: t?.staff_name ?? "",
+  };
+}
+
+// 1 利用者分の A4 帳票 (請求書 or 領収書) の HTML を組み立てる
+function buildDocPage(
+  row: Row,
+  mode: "invoice" | "receipt",
+  issuer: IssuerInfo,
+  billingMonth: string,
+  issueDate: string
+): string {
+  const title = mode === "invoice" ? "利 用 料 請 求 書" : "利 用 料 領 収 書";
+  const amountLabel = mode === "invoice" ? "今回ご請求額" : "領 収 金 額";
+  const dateLabel = mode === "invoice" ? "発行日" : "領収日";
+  const billed = row.invoice?.total_amount ?? row.computedTotal;
+  const nonTaxable = row.lineItems.filter((li) => !li.is_taxable).reduce((s, li) => s + li.amount, 0);
+  const taxableBase = row.lineItems.filter((li) => li.is_taxable).reduce((s, li) => s + li.amount, 0);
+  const tax = row.computedTax;
+  const officeName = row.careOffice?.name ?? row.client.care_manager_org ?? "";
+
+  const rowsHtml = row.lineItems
+    .map(
+      (li) => `
+      <tr>
+        <td class="l">${escapeHtml(li.kind)}<br><span class="sub">${escapeHtml(li.name)}</span></td>
+        <td class="r mono">¥${li.unit_price.toLocaleString()}</td>
+        <td class="r mono">${li.quantity}</td>
+        <td class="r mono">¥${li.amount.toLocaleString()}</td>
+      </tr>`
+    )
+    .join("");
+
+  const taxRows = `
+    ${nonTaxable > 0 ? `<tr><td class="l">非課税分</td><td colspan="2"></td><td class="r mono">¥${nonTaxable.toLocaleString()}</td></tr>` : ""}
+    ${taxableBase > 0 ? `<tr><td class="l">課税分 (税抜)</td><td colspan="2"></td><td class="r mono">¥${taxableBase.toLocaleString()}</td></tr>` : ""}
+    ${tax > 0 ? `<tr><td class="l">消費税 (10%)</td><td colspan="2"></td><td class="r mono">¥${tax.toLocaleString()}</td></tr>` : ""}
+    <tr class="total"><td class="l">合計</td><td colspan="2"></td><td class="r mono">¥${billed.toLocaleString()}</td></tr>`;
+
+  const receiptNote =
+    mode === "receipt"
+      ? `<div class="note">但し　${reiwaMonth(billingMonth)}　福祉用具貸与利用料として　上記正に領収いたしました。</div>`
+      : `<div class="note">下記のとおりご請求申し上げます。恐れ入りますがお支払期日までにお納めください。</div>`;
+
+  return `
+  <div class="sheet">
+    <div class="titlebar">${title}</div>
+
+    <div class="head">
+      <div class="head-l">
+        <div class="issue">${escapeHtml(dateLabel)}：${reiwaDate(issueDate)}</div>
+        <div class="to"><span class="to-name">${escapeHtml(row.client.name)}</span>　様</div>
+        ${officeName ? `<div class="to-sub">（居宅：${escapeHtml(officeName)}）</div>` : ""}
+      </div>
+      <div class="head-r">
+        <div class="co-name">${escapeHtml(issuer.companyName)}</div>
+        ${issuer.companyAddress ? `<div>${escapeHtml(issuer.companyAddress)}</div>` : ""}
+        <div>${issuer.tel ? `TEL: ${escapeHtml(issuer.tel)}` : ""}${issuer.fax ? `　FAX: ${escapeHtml(issuer.fax)}` : ""}</div>
+        ${issuer.businessNumber ? `<div>事業所番号: ${escapeHtml(issuer.businessNumber)}</div>` : ""}
+        ${issuer.staffName ? `<div>担当: ${escapeHtml(issuer.staffName)}</div>` : ""}
+        <div class="seal">印</div>
+      </div>
+    </div>
+
+    <div class="target">対象月：${reiwaMonth(billingMonth)}</div>
+
+    <div class="amountbox">
+      <span class="amountlabel">${escapeHtml(amountLabel)}</span>
+      <span class="amountval">¥${billed.toLocaleString()}</span>
+      <span class="amounttax">（うち消費税 ¥${tax.toLocaleString()}）</span>
+    </div>
+
+    ${receiptNote}
+
+    <table class="detail">
+      <thead>
+        <tr><th class="l">利用料項目</th><th class="r">単価</th><th class="r">数量</th><th class="r">金額</th></tr>
+      </thead>
+      <tbody>
+        ${rowsHtml || `<tr><td colspan="4" class="empty">明細がありません</td></tr>`}
+        ${taxRows}
+      </tbody>
+    </table>
+
+    <div class="foot">※ 本書は福祉用具貸与にかかる利用者負担分の${mode === "invoice" ? "請求" : "領収"}書です。</div>
+  </div>`;
+}
+
+// 一覧 (管理帳票) の HTML を組み立てる
+function buildListPage(rows: Row[], billingMonth: string, issuer: IssuerInfo): string {
+  const body = rows
+    .map((r, i) => {
+      const status = r.invoice?.status ?? "未確定";
+      const billed = r.invoice?.total_amount ?? r.computedTotal;
+      const office = r.careOffice?.name ?? r.client.care_manager_org ?? "-";
+      return `<tr>
+        <td class="r mono">${i + 1}</td>
+        <td class="c">${escapeHtml(status)}</td>
+        <td>${escapeHtml(r.client.name)}</td>
+        <td class="sub">${escapeHtml(office)}</td>
+        <td class="c">${escapeHtml(r.invoice?.payment_method ?? "")}</td>
+        <td class="r mono">¥${billed.toLocaleString()}</td>
+        <td class="c">${r.invoice?.issued_date ? reiwaDate(r.invoice.issued_date) : ""}</td>
+      </tr>`;
+    })
+    .join("");
+  const total = rows.reduce((s, r) => s + (r.invoice?.total_amount ?? r.computedTotal), 0);
+  return `
+  <div class="sheet list">
+    <div class="list-head">
+      <h1>利用請求一覧（${reiwaMonth(billingMonth)}）</h1>
+      <div class="list-co">${escapeHtml(issuer.companyName)}</div>
+    </div>
+    <table class="listtbl">
+      <thead>
+        <tr><th>No</th><th>状態</th><th>利用者名</th><th>事業所名</th><th>支払方法</th><th>請求額</th><th>請求書発行日</th></tr>
+      </thead>
+      <tbody>
+        ${body || `<tr><td colspan="7" class="empty">対象がありません</td></tr>`}
+        <tr class="total"><td colspan="5" class="r">合計（${rows.length}件）</td><td class="r mono">¥${total.toLocaleString()}</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function openPrintWindow(inner: string, docTitle: string, layout: "invoice" | "list") {
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) {
+    alert("印刷ウィンドウを開けませんでした。ポップアップブロックを解除してください。");
+    return;
+  }
+  const pageCss =
+    layout === "list"
+      ? "@page { size: A4 portrait; margin: 12mm; }"
+      : "@page { size: A4 portrait; margin: 12mm; }";
+  const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${escapeHtml(docTitle)}</title>
+<style>
+  ${pageCss}
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic','Meiryo',sans-serif; color: #111; font-size: 12px; line-height: 1.5; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .sheet { width: 186mm; margin: 0 auto; padding: 0 0 8mm; page-break-after: always; }
+  .sheet:last-child { page-break-after: auto; }
+
+  /* 請求書 / 領収書 */
+  .titlebar { background: #d4ead7; border: 1px solid #374151; border-radius: 12px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; letter-spacing: .12em; margin-bottom: 14px; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+  .head-l { width: 55%; }
+  .head-r { width: 42%; text-align: left; position: relative; padding-right: 42px; }
+  .issue { font-size: 11px; color: #444; margin-bottom: 10px; }
+  .to-name { font-size: 17px; font-weight: 700; border-bottom: 1px solid #111; padding: 0 8px 1px; }
+  .to { margin-bottom: 2px; }
+  .to-sub { font-size: 11px; color: #555; }
+  .co-name { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  .head-r div { font-size: 11px; }
+  .seal { position: absolute; top: 0; right: 0; width: 34px; height: 34px; border: 1px solid #c0392b; border-radius: 4px; color: #c0392b; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .target { font-size: 12px; margin: 4px 0 8px; }
+  .amountbox { border: 2px solid #374151; border-radius: 8px; padding: 8px 14px; display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+  .amountlabel { font-size: 13px; font-weight: 700; }
+  .amountval { font-size: 24px; font-weight: 700; letter-spacing: .02em; }
+  .amounttax { font-size: 11px; color: #555; margin-left: auto; }
+  .note { font-size: 11px; color: #333; margin-bottom: 10px; }
+  table.detail { width: 100%; border-collapse: collapse; }
+  table.detail th, table.detail td { border: 1px solid #9ca3af; padding: 5px 8px; }
+  table.detail th { background: #f3f4f6; font-weight: 600; }
+  table.detail .l { text-align: left; }
+  table.detail .r { text-align: right; }
+  table.detail .sub { font-size: 10px; color: #666; }
+  table.detail tr.total td { background: #eef2f7; font-weight: 700; }
+  table.detail .empty { text-align: center; color: #999; padding: 16px; }
+  .foot { margin-top: 10px; font-size: 10px; color: #666; }
+
+  /* 一覧 */
+  .list-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+  .list-head h1 { font-size: 16px; margin: 0; }
+  .list-co { font-size: 12px; }
+  table.listtbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.listtbl th, table.listtbl td { border: 1px solid #9ca3af; padding: 4px 6px; }
+  table.listtbl th { background: #f3f4f6; }
+  table.listtbl .r { text-align: right; }
+  table.listtbl .c { text-align: center; }
+  table.listtbl .sub { font-size: 10px; color: #555; }
+  table.listtbl tr.total td { background: #eef2f7; font-weight: 700; }
+  table.listtbl .empty { text-align: center; color: #999; padding: 16px; }
+</style></head>
+<body>${inner}
+<script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+</body></html>`;
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
 export default function UserBillingTab({
   tenantId,
   currentOfficeId,
@@ -109,6 +349,7 @@ export default function UserBillingTab({
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [issuer, setIssuer] = useState<Tenant | null>(null);
 
   const [y, m] = billingMonth.split("-").map(Number);
   const prevMonth = () => {
@@ -123,6 +364,11 @@ export default function UserBillingTab({
   // 居宅マスタ (列「事業所名」表示用)
   useEffect(() => {
     getCareOffices(tenantId).then(setCareOffices).catch(console.error);
+  }, [tenantId]);
+
+  // 発行元 (自社) 情報 — 帳票の差出人欄用
+  useEffect(() => {
+    getTenantById(tenantId).then(setIssuer).catch(console.error);
   }, [tenantId]);
 
   // 当月に対象月が掛かる insurance_record
@@ -409,6 +655,34 @@ export default function UserBillingTab({
     }
   };
 
+  // ── 帳票印刷 ───────────────────────────────────────────────────────────
+  // 対象 (チェック済) の行。無ければ表示中の全行を対象にする。
+  const printTargetRows = (): Row[] => {
+    const checked = sortedRows.filter((r) => targetSet.has(r.client.id));
+    return checked.length > 0 ? checked : sortedRows;
+  };
+
+  const printDocs = (mode: "invoice" | "receipt") => {
+    const targets = printTargetRows();
+    if (targets.length === 0) {
+      alert("対象月に請求対象の利用者がいません。");
+      return;
+    }
+    const info = issuerFromTenant(issuer);
+    const issue = todayIso();
+    const inner = targets.map((r) => buildDocPage(r, mode, info, billingMonth, issue)).join("");
+    openPrintWindow(inner, mode === "invoice" ? "利用料請求書" : "利用料領収書", "invoice");
+  };
+
+  const printList = () => {
+    if (sortedRows.length === 0) {
+      alert("対象月に請求対象の利用者がいません。");
+      return;
+    }
+    const info = issuerFromTenant(issuer);
+    openPrintWindow(buildListPage(sortedRows, billingMonth, info), "利用請求一覧", "list");
+  };
+
   if (dataLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -416,6 +690,9 @@ export default function UserBillingTab({
       </div>
     );
   }
+
+  const checkedCount = sortedRows.filter((r) => targetSet.has(r.client.id)).length;
+  const printScopeLabel = checkedCount > 0 ? `対象 ${checkedCount} 名` : `全 ${sortedRows.length} 名`;
 
   const statusBadge = (status: BillingUserInvoiceStatus | "未確定") => {
     if (status === "入金完")
@@ -465,31 +742,32 @@ export default function UserBillingTab({
             </div>
             <span className="text-xs text-gray-500 ml-2">{sortedRows.length} 件</span>
             <div className="w-px h-5 bg-gray-300 mx-1" />
-            {/* 帳票出力 (Phase 4 で実装) */}
+            {/* 帳票出力 */}
             <button
-              disabled
-              className="border border-gray-300 rounded bg-white px-2.5 py-1 text-gray-400 cursor-not-allowed flex items-center gap-1.5 text-xs"
-              title="Phase 4 で実装予定"
+              onClick={printList}
+              className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50 flex items-center gap-1.5 text-xs"
+              title="この一覧を印刷"
             >
               <Printer size={13} />
               印刷
             </button>
             <button
-              disabled
-              className="border border-gray-300 rounded bg-white px-2.5 py-1 text-gray-400 cursor-not-allowed flex items-center gap-1.5 text-xs"
-              title="Phase 4 で実装予定"
+              onClick={() => printDocs("invoice")}
+              className="border border-emerald-500 rounded bg-emerald-50 px-2.5 py-1 text-emerald-700 hover:bg-emerald-100 flex items-center gap-1.5 text-xs font-medium"
+              title={`請求書を発行（${printScopeLabel}）`}
             >
               <FileText size={13} />
               請求書
             </button>
             <button
-              disabled
-              className="border border-gray-300 rounded bg-white px-2.5 py-1 text-gray-400 cursor-not-allowed flex items-center gap-1.5 text-xs"
-              title="Phase 4 で実装予定"
+              onClick={() => printDocs("receipt")}
+              className="border border-emerald-500 rounded bg-emerald-50 px-2.5 py-1 text-emerald-700 hover:bg-emerald-100 flex items-center gap-1.5 text-xs font-medium"
+              title={`領収書を発行（${printScopeLabel}）`}
             >
               <Receipt size={13} />
               領収書
             </button>
+            <span className="text-[11px] text-gray-400">{printScopeLabel}</span>
             {(loadingInvoices || saving) && (
               <Loader2 size={14} className="animate-spin text-indigo-400 ml-2" />
             )}
