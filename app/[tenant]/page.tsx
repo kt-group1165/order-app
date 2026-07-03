@@ -70,6 +70,8 @@ import {
 } from "@/lib/billing";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
+import Encoding from "encoding-japanese";
+import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import UserBillingTab from "./UserBillingTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
@@ -9961,116 +9963,97 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     }
   };
 
-  // 伝送データ生成
+  // 伝送データ生成 (国保連 正式インタフェース: 7111 請求書 + 7131 様式第二 / Shift_JIS)
   const generateTransferData = () => {
     const [y, m] = billingMonth.split("-").map(Number);
-    const serviceMonth = `${y}${String(m).padStart(2, "0")}`;
     // 選択中の事業所の事業所番号を優先、なければテナントの番号にフォールバック
     const currentOffice = offices.find(o => o.id === currentOfficeId);
     const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
-    const officeNumber = rawOfficeNumber.replace(/-/g, "") || "0000000000";
+    const officeNumber = rawOfficeNumber.replace(/-/g, "");
     if (currentOfficeId && !currentOffice?.business_number) {
       alert(`事業所「${currentOffice?.name ?? ""}」に事業所番号が設定されていません。設定タブで登録してください。`);
       return;
     }
-    const lines: string[] = [];
     const lateClientIdsCsv = new Set<string>([
       ...autoLateClients,
       ...Array.from(lateFlags.keys()),
     ]);
     const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
 
-    // コントロールレコード
-    lines.push([
-      "1", // レコード種別
-      "61", // 交換情報識別番号（居宅系：様式第二の三 福祉用具貸与）
-      serviceMonth,
-      officeNumber,
-      String(billingGroups.length),
-      "", "", "",
-    ].join(","));
-
+    // 明細行 → 利用者ごとの請求行を組む
+    const rows: FukuyoguSeikyuRow[] = [];
+    const preWarnings: string[] = [];
     for (const { client, items } of billingGroups) {
-      const insuredNumber = client.user_number ?? "";
-      // 給付率（benefit_rateは90/80/70などの給付率で保存済み）
-      const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
-
-      // 基本情報レコード
-      lines.push([
-        "2", // レコード種別コード（基本情報）
-        "61",
-        serviceMonth,
-        officeNumber,
-        "", // 証記載保険者番号（被保険者証から）
-        insuredNumber,
-        "1", // 居宅サービス
-        "", // 認定有効期間開始
-        "", // 認定有効期間終了
-        client.care_level?.replace("要介護", "").replace("要支援", "") ?? "",
-        String(benefitRate),
-        "", // 生活保護
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ].join(","));
-
-      // 明細情報レコード（用具ごと）
-      let seq = 1;
+      const details: FukuyoguDetailLine[] = [];
       let totalUnits = 0;
       for (const item of items) {
         const eq = equipment.find((e) => e.product_code === item.product_code);
-        const units = getUnits(item, client.id) * item.quantity;
-        const taisCode = eq?.tais_code ?? "";
+        const unitPer = getUnits(item, client.id);
+        const count = item.quantity;
+        const units = unitPer * count;
+        if (units <= 0) continue;
+        const code = fukuyoguServiceCode(eq?.category);
+        if (!code) {
+          preWarnings.push(`${client.name}: 種目「${eq?.category ?? "未設定"}」(${eq?.name ?? item.product_code}) の福祉用具貸与サービスコードが不明です`);
+          continue;
+        }
+        details.push({ serviceCode: code, unitPer, count, units });
         totalUnits += units;
-        lines.push([
-          "3", // レコード種別コード（明細情報）
-          "61",
-          serviceMonth,
-          officeNumber,
-          "",
-          insuredNumber,
-          String(seq++).padStart(2, "0"),
-          "17", // サービス種類コード（福祉用具貸与）
-          taisCode, // XXXXX-YYYYYY形式
-          String(units),
-          String(Math.round(units * 10)), // 費用額（単位数×10円概算）
-          "0", // 公費分回数
-          "0",
-          "",
-        ].join(","));
       }
-
-      // 集計情報レコード
-      lines.push([
-        "4", // レコード種別コード（集計情報）
-        "61",
-        serviceMonth,
-        officeNumber,
-        "",
-        insuredNumber,
-        "17",
-        String(totalUnits),
-        String(Math.round(totalUnits * 10)),
-        "",
-      ].join(","));
+      if (details.length === 0) continue;
+      // 給付率 (benefit_rate は 90/80/70 の給付率で保存済み)、福祉用具は単価 10 円固定
+      const benefitRate = parseInt(client.benefit_rate ?? "90", 10) || 90;
+      const copayRate = Math.max(0, 100 - benefitRate) / 100;
+      const totalCost = totalUnits * 10;
+      const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
+      const userAmount = totalCost - insuranceAmount;
+      const careOffice = client.care_office_id
+        ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+        : null;
+      rows.push({
+        userName: client.name,
+        insurerNumber: client.insurer_number,
+        insuredNumber: client.insured_number ?? client.user_number,
+        birthDate: client.birth_date,
+        gender: client.gender,
+        careLevel: client.care_level,
+        certStart: client.certification_start_date,
+        certEnd: client.certification_end_date,
+        careOfficeNumber: careOffice?.office_number ?? null,
+        copayRate,
+        details,
+        totalUnits,
+        totalCost,
+        insuranceAmount,
+        userAmount,
+      });
     }
 
-    // エンドレコード
-    lines.push(["99", String(lines.length + 1)].join(","));
+    if (rows.length === 0) {
+      alert("対象月に国保連請求対象の福祉用具貸与がありません。");
+      return;
+    }
 
-    // Shift-JIS CSVとしてダウンロード（ブラウザ側でエンコード対応が必要なため UTF-8 BOM付きで代用）
-    const bom = "\uFEFF";
-    const csv = bom + lines.join("\r\n") + "\r\n";
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const result = buildFukuyoguDensou(rows, { officeNumber, year: y, month: m });
+    const allWarnings = [...preWarnings, ...result.warnings];
+    if (allWarnings.length > 0) {
+      const list = allWarnings.slice(0, 12).join("\n・");
+      const ok = window.confirm(
+        `以下の項目が不足しています (伝送ソフトの取込チェックでエラーになる可能性があります):\n\n・${list}${allWarnings.length > 12 ? `\n…他 ${allWarnings.length - 12} 件` : ""}\n\nこのままファイルを出力しますか？`,
+      );
+      if (!ok) return;
+    }
+
+    // Shift_JIS で出力 (仕様: 伝送ファイルの文字コードはシフト JIS)
+    const sjis = Encoding.convert(Encoding.stringToCode(result.content), {
+      to: "SJIS",
+      from: "UNICODE",
+    });
+    const blob = new Blob([new Uint8Array(sjis)], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `FKYUFU${serviceMonth}.csv`;
+    a.download = result.fileName;
     a.click();
     URL.revokeObjectURL(url);
   };
