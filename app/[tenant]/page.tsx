@@ -23086,7 +23086,7 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
                           )}
                           {loan ? (
                             <span className={`text-[11px] px-2 py-0.5 rounded-full shrink-0 ${overdue ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-700"}`}>
-                              貸出中: {loan.client_name} 様
+                              貸出中: {loan.client_name.replace(/[\s　]*様$/, "")} 様
                               {loan.taken_date && ` / 持出 ${loan.taken_date}`}
                               {loan.taken_by && ` (${loan.taken_by})`}
                               {loan.due_date && ` / 返却予定 ${loan.due_date}${overdue ? " 超過" : ""}`}
@@ -23175,7 +23175,7 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
               <h3 className="font-semibold text-gray-800">返却 — {returnTarget.unit.unit_no} {returnTarget.unit.product_name}</h3>
               <button onClick={() => setReturnTarget(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg"><X size={18} /></button>
             </div>
-            <p className="text-xs text-gray-500">貸出先: {returnTarget.loan.client_name} 様{returnTarget.loan.taken_date && ` (持出 ${returnTarget.loan.taken_date})`}</p>
+            <p className="text-xs text-gray-500">貸出先: {returnTarget.loan.client_name.replace(/[\s　]*様$/, "")} 様{returnTarget.loan.taken_date && ` (持出 ${returnTarget.loan.taken_date})`}</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-500">返却日</label>
@@ -23281,7 +23281,7 @@ function DemoUnitsTab({ tenantId }: { tenantId: string }) {
                 historyLoans.map((l) => (
                   <div key={l.id} className="border border-gray-100 rounded-xl px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-gray-800 truncate">{l.client_name} 様</span>
+                      <span className="text-sm font-medium text-gray-800 truncate">{l.client_name.replace(/[\s　]*様$/, "")} 様</span>
                       {l.returned_date ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 shrink-0">返却済</span>
                       ) : (

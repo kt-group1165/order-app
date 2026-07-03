@@ -272,7 +272,7 @@ export default function MobileDemoPage() {
         )}
       </div>
 
-      <div className="p-4 max-w-lg mx-auto space-y-2 pb-16">
+      <div className="p-4 max-w-6xl mx-auto space-y-4 pb-16">
         {units === null ? (
           <p className="text-sm text-gray-400 text-center py-12">読み込み中...</p>
         ) : (
@@ -283,7 +283,22 @@ export default function MobileDemoPage() {
                 {allUnits.length === 0 ? "デモ機がありません" : "条件に合うデモ機がありません"}
               </p>
             )}
-            {filtered.map((u) => {
+            {(() => {
+              // カテゴリごとにグループ化して見出し + グリッド表示 (縦一列の間延び防止)
+              const groups: [string, typeof filtered][] = [];
+              const gIdx = new Map<string, number>();
+              for (const u of filtered) {
+                const c = u.category || "未分類";
+                if (!gIdx.has(c)) { gIdx.set(c, groups.length); groups.push([c, []]); }
+                groups[gIdx.get(c)!][1].push(u);
+              }
+              return groups.map(([cat, us]) => (
+                <div key={cat}>
+                  <h3 className="text-xs font-semibold text-gray-500 mb-2">
+                    {cat}<span className="text-gray-300 ml-1">({us.length})</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 items-start">
+            {us.map((u) => {
               const loan = loanByUnit.get(u.id) ?? null;
               const overdue = loan ? isOverdue(loan) : false;
               const isCheckoutOpen = checkoutTarget?.id === u.id;
@@ -297,10 +312,9 @@ export default function MobileDemoPage() {
                         {u.product_name}
                         {u.color && <span className="font-normal text-xs text-gray-400 ml-1">{u.color}</span>}
                       </p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">{u.category || "未分類"}</p>
                       {loan ? (
                         <p className={`text-xs mt-1 ${overdue ? "text-red-600" : "text-amber-700"}`}>
-                          貸出中: {loan.client_name} 様
+                          貸出中: {loan.client_name.replace(/[\s　]*様$/, "")} 様
                           {loan.taken_date && ` / 持出 ${loan.taken_date}`}
                           {loan.due_date && ` / 返却予定 ${loan.due_date}${overdue ? " (超過)" : ""}`}
                         </p>
@@ -392,6 +406,10 @@ export default function MobileDemoPage() {
                 </div>
               );
             })}
+                  </div>
+                </div>
+              ));
+            })()}
           </>
         )}
       </div>
