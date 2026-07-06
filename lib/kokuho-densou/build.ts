@@ -36,7 +36,8 @@ const CARE_LEVEL_CODE: Record<string, string> = {
 };
 
 // 種目 (equipment.category) → 福祉用具貸与サービスコード (6 桁 = 種類17 + 項目4桁)
-// (page.tsx の JISSEKI_SERVICE_CODES と同値。スペース無しに正規化)
+// コード値は公式マスタ kaigo_service_codes (system=介護, 17xxxx) で検証済み (連番 1001-1013)。
+// ※ page.tsx の旧 JISSEKI_SERVICE_CODES は 歩行補助つえ以降が誤り (171014-16 はマスタに存在しない)。
 export const FUKUYOGU_SERVICE_CODES: Record<string, string> = {
   車いす: "171001",
   車椅子: "171001",
@@ -49,11 +50,12 @@ export const FUKUYOGU_SERVICE_CODES: Record<string, string> = {
   手すり: "171007",
   スロープ: "171008",
   歩行器: "171009",
-  歩行補助つえ: "171012",
-  徘徊感知機器: "171014",
-  認知症老人徘徊感知機器: "171014",
-  移動用リフト: "171015",
-  自動排せつ処理装置: "171016",
+  歩行補助つえ: "171010",
+  徘徊感知機器: "171011",
+  認知症老人徘徊感知機器: "171011",
+  移動用リフト: "171012",
+  自動排泄処理装置: "171013",
+  自動排せつ処理装置: "171013",
 };
 
 /** 種目名から福祉用具貸与のサービスコード (6 桁) を引く。未一致は null */
