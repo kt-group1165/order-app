@@ -10097,6 +10097,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [rentalGridClient, setRentalGridClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [kanaFilter, setKanaFilter] = useState<string | null>(null);
+  const [kokuhoOnly, setKokuhoOnly] = useState(true); // true=国保連提出対象(月遅れ除く)のみ / false=全件
   const [showRentalGridView, setShowRentalGridView] = useState(false);
   const [gridSelectedClient, setGridSelectedClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [gridKanaFilter, setGridKanaFilter] = useState<string | null>(null);
@@ -10139,6 +10140,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       entries.map(({ client, items, flag }) => ({ type: "rebill" as const, client, items, flag, month }))
     ),
   ];
+
+  // 国保対象フィルタ: ON なら月遅れ(自動+手動)の当月行を除外。再請求(過去月)行は国保連提出対象なので常に残す。
+  const displayRows = kokuhoOnly
+    ? allRows.filter((r) => r.type === "rebill" || !(autoLateClients.has(r.client.id) || lateFlags.has(r.client.id)))
+    : allRows;
 
   if (subTab === "sales") {
     return (
@@ -10212,7 +10218,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         <div className="w-px h-5 bg-gray-300 mx-1" />
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">明細書</button>
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">請求書</button>
-        <button className="border border-blue-500 rounded bg-blue-100 px-2.5 py-1 text-blue-800 font-semibold">国保対象</button>
+        <button
+          onClick={() => setKokuhoOnly(v => !v)}
+          title="国保連提出対象(月遅れを除く)のみ表示 ⇔ 全件表示 を切替"
+          className={`border rounded px-2.5 py-1 font-semibold transition-colors ${kokuhoOnly ? "border-blue-500 bg-blue-100 text-blue-800" : "border-gray-400 bg-white text-gray-700 hover:bg-gray-50"}`}
+        >{kokuhoOnly ? "国保対象のみ" : "全件表示"}</button>
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">管理帳票</button>
         {selectedClientIds.size > 0 && (
           <>
@@ -10332,9 +10342,9 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
             {/* 行 */}
             <div className="flex-1 overflow-y-auto">
-              {allRows.length === 0 ? (
+              {displayRows.length === 0 ? (
                 <p className="text-gray-400 text-center py-10">{billingMonth}のアクティブレンタル（介護）がありません</p>
-              ) : allRows.map((row, idx) => {
+              ) : displayRows.map((row, idx) => {
                 if (row.type === "rebill") {
                   const [ry, rm] = row.month.split("-").map(Number);
                   return (
@@ -10672,6 +10682,14 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   const [careManagersMap, setCareManagersMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [loading, setLoading] = useState(true);
 
+  // 取得対象は月非依存 (全件ロード→クライアント側で月フィルタ)。
+  // 月ナビや orderItems の参照変化で毎回全再取得していたのを、
+  // 品目コード集合が変わった時だけ再取得するよう安定キー化 (初期ロード最適化)。
+  const productCodesKey = useMemo(
+    () => [...new Set(orderItems.map((i) => i.product_code))].sort().join(","),
+    [orderItems],
+  );
+
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -10717,7 +10735,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         setLoading(false);
       }
     })();
-  }, [tenantId, month, orderItems]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 月非依存。品目コード集合(productCodesKey)変化時のみ再取得
+  }, [tenantId, productCodesKey]);
 
   // 居宅名 / ケアマネ名：care_office_id 優先、なければテキスト
   const getCareOfficeName = (c: Client): string =>
