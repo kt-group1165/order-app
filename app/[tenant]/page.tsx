@@ -9965,7 +9965,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   };
 
   // 伝送データ生成 (国保連 正式インタフェース: 7111 請求書 + 7131 様式第二 / Shift_JIS)
-  const generateTransferData = () => {
+  const generateTransferData = async () => {
     const [y, m] = billingMonth.split("-").map(Number);
     // 選択中の事業所の事業所番号を優先、なければテナントの番号にフォールバック
     const currentOffice = offices.find(o => o.id === currentOfficeId);
@@ -9980,6 +9980,32 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       ...Array.from(lateFlags.keys()),
     ]);
     const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
+
+    // 公費 (生保 等) 情報を当月分だけ取得。生保(法別12)は本人負担を公費が全額負担する前提 (v1)。
+    const monthStart = `${billingMonth}-01`;
+    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
+    {
+      const clientIds = billingGroups.map((g) => g.client.id);
+      const { data: kohiData, error: kohiErr } = await supabase
+        .from("client_public_expenses")
+        .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
+        .eq("tenant_id", tenantId)
+        .in("client_id", clientIds);
+      if (kohiErr) {
+        console.error("公費取得失敗:", kohiErr.message);
+        alert(`公費情報の取得に失敗しました: ${kohiErr.message}`);
+        return;
+      }
+      for (const k of kohiData ?? []) {
+        if (!k.hohei_code) continue;
+        if (k.valid_start && k.valid_start > monthEnd) continue;
+        if (k.valid_end && k.valid_end < monthStart) continue;
+        if (!kohiByClient.has(k.client_id)) {
+          kohiByClient.set(k.client_id, { hobetsu: k.hohei_code, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number });
+        }
+      }
+    }
 
     // 明細行 → 利用者ごとの請求行を組む
     const rows: FukuyoguSeikyuRow[] = [];
@@ -10007,10 +10033,14 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       const copayRate = Math.max(0, 100 - benefitRate) / 100;
       const totalCost = totalUnits * 10;
       const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
-      const userAmount = totalCost - insuranceAmount;
+      const rawUserAmount = totalCost - insuranceAmount;
       const careOffice = client.care_office_id
         ? careOffices.find((co) => co.id === client.care_office_id) ?? null
         : null;
+      // 公費 (生保 等): 本人負担分(1割)を公費へ振替、本人負担は 0 とする (v1 = 全額公費前提)
+      const kohi = kohiByClient.get(client.id);
+      const userAmount = kohi ? 0 : rawUserAmount;
+      const kohiAmount = kohi ? rawUserAmount : null;
       rows.push({
         userName: client.name,
         insurerNumber: client.insurer_number,
@@ -10027,6 +10057,10 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         totalCost,
         insuranceAmount,
         userAmount,
+        kohiHobetsu: kohi?.hobetsu ?? null,
+        kohiFutansha: kohi?.futansha ?? null,
+        kohiJukyusha: kohi?.jukyusha ?? null,
+        kohiAmount,
       });
     }
 
