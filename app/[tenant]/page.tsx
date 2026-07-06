@@ -22397,6 +22397,21 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
   const [listError, setListError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  // 一覧検索: 利用者名・事業所・日付・出席者・検討内容 等を横断部分一致
+  const filteredNotes = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return notes;
+    return notes.filter((n) => {
+      const hay = [
+        n.client_name, n.office_label, n.creator_name, n.meeting_date, n.created_date,
+        n.meeting_place, n.discussed_items, n.discussion_content, n.conclusion, n.remaining_issues,
+        ...(Array.isArray(n.attendees) ? n.attendees.flatMap((a) => [a.affiliation, a.name]) : []),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }, [notes, search]);
 
   // ── 編集フォーム state ──
   const todayStr = new Date().toISOString().split("T")[0];
@@ -22547,10 +22562,26 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
   if (view === "list") {
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center justify-between">
-          <h2 className="font-semibold text-gray-800">サービス担当者会議の要点 (第4表)</h2>
+        <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center justify-between gap-3">
+          <h2 className="font-semibold text-gray-800 shrink-0">サービス担当者会議の要点 (第4表)</h2>
+          <div className="relative flex-1 max-w-xs ml-auto">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="利用者名・事業所・日付・内容で検索"
+              className="w-full border border-gray-200 rounded-lg pl-8 pr-7 py-1.5 text-xs outline-none focus:border-emerald-400"
+            />
+            {search && (
+              <button onClick={() => setSearch("")} title="クリア"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                <X size={13} />
+              </button>
+            )}
+          </div>
           <button onClick={startNew}
-            className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg">
+            className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg shrink-0">
             <Plus size={14} /> 新規作成
           </button>
         </div>
@@ -22564,12 +22595,15 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
           </div>
         ) : notes.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-16">会議録がありません。「新規作成」から作成してください</p>
+        ) : filteredNotes.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-16">「{search}」に一致する会議録がありません</p>
         ) : (
           <div className="flex-1 overflow-y-auto p-4">
             <div className="max-w-4xl mx-auto space-y-1">
-              {notes.map((n) => (
+              {filteredNotes.map((n) => (
                 <div key={n.id}
                   onClick={() => startEdit(n)}
+                  title="クリックで編集"
                   className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 flex items-center justify-between cursor-pointer hover:border-emerald-300 transition-colors">
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="text-sm font-medium text-gray-800 truncate">{n.client_name || "(利用者名なし)"}<span className="font-normal text-gray-400 ml-0.5">様</span></span>
@@ -22577,13 +22611,21 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
                     {n.meeting_date && <span className="text-xs text-gray-500 shrink-0">開催日: {n.meeting_date}</span>}
                     {n.created_date && <span className="text-xs text-gray-400 shrink-0">作成: {n.created_date}</span>}
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(n); }}
-                    disabled={deletingId === n.id}
-                    className="shrink-0 p-1.5 text-gray-300 hover:text-red-500 rounded-lg disabled:opacity-50"
-                    title="削除">
-                    {deletingId === n.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startEdit(n); }}
+                      className="p-1.5 text-gray-300 hover:text-emerald-500 rounded-lg"
+                      title="編集">
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(n); }}
+                      disabled={deletingId === n.id}
+                      className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg disabled:opacity-50"
+                      title="削除">
+                      {deletingId === n.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
