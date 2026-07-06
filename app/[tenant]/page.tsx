@@ -9936,6 +9936,35 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     return base;
   };
 
+  // 指定年月(ym="YYYY-MM")での単位数計算 (返戻・過誤の過去月伝送用)。
+  // getUnits の billingMonth 依存を外した版。過去月は単位上書きを読まない(未ロードのため)。
+  const computeUnitsForMonth = (item: OrderItem, clientId: string, ym: string): number => {
+    const eq = equipment.find((e) => e.product_code === item.product_code);
+    const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    const [yy, mm] = ym.split("-").map(Number);
+    const daysInMonth = new Date(yy, mm, 0).getDate();
+    const monthEnd = new Date(yy, mm, 0, 23, 59, 59);
+    const clientHosp = hospitalizations.filter((h) => h.client_id === clientId);
+    const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
+    const rentalStart = item.rental_start_date ? parseLocalDate(item.rental_start_date) : null;
+    const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
+    if (!rentalStart) return base;
+    let billingDays = 0, firstHalf = false, secondHalf = false;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(yy, mm - 1, d);
+      if (date < rentalStart || date > rentalEnd) continue;
+      const inHosp = clientHosp.some((h) => {
+        const admit = parseLocalDate(h.admission_date);
+        const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
+        return date >= admit && date <= discharge;
+      });
+      if (!inHosp) { billingDays++; if (d <= 15) firstHalf = true; else secondHalf = true; }
+    }
+    if (billingDays === 0) return 0;
+    if (firstHalf !== secondHalf) return Math.round(base / 2);
+    return base;
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
     const n = parseInt(value, 10);
@@ -10124,6 +10153,121 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     return Array.from(result.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [rebillFlags, billingMonth, orderItems, orders, clients]);
 
+  // 返戻・過誤の過去月別 伝送ファイル生成 (サービス提供年月ごとに 1 ファイル)。
+  // 返戻=補正して再請求 / 過誤=取下げ後の再請求。いずれも当該月の通常請求として出力する
+  // (過誤の取下げ(取消)処理自体は国保連側の別手続き)。
+  const generateRebillTransferData = async () => {
+    const currentOffice = offices.find((o) => o.id === currentOfficeId);
+    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
+    const officeNumber = rawOfficeNumber.replace(/-/g, "");
+    if (currentOfficeId && !currentOffice?.business_number) {
+      alert(`事業所「${currentOffice?.name ?? ""}」に事業所番号が設定されていません。設定タブで登録してください。`);
+      return;
+    }
+    if (rebillByMonth.length === 0) {
+      alert("返戻・過誤の対象がありません。");
+      return;
+    }
+    const allWarnings: string[] = [];
+    let fileCount = 0;
+    for (const [ym, entries] of rebillByMonth) {
+      const [yy, mm] = ym.split("-").map(Number);
+      // 公費 (当該月有効分)
+      const monthStart = `${ym}-01`;
+      const monthEnd = new Date(yy, mm, 0).toISOString().split("T")[0];
+      const clientIds = entries.map((e) => e.client.id);
+      const { data: kohiData, error: kohiErr } = await supabase
+        .from("client_public_expenses")
+        .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
+        .eq("tenant_id", tenantId)
+        .in("client_id", clientIds);
+      if (kohiErr) {
+        console.error("公費取得失敗:", kohiErr.message);
+        alert(`公費情報の取得に失敗しました: ${kohiErr.message}`);
+        return;
+      }
+      const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
+      for (const k of kohiData ?? []) {
+        if (!k.hohei_code) continue;
+        if (k.valid_start && k.valid_start > monthEnd) continue;
+        if (k.valid_end && k.valid_end < monthStart) continue;
+        if (!kohiByClient.has(k.client_id)) {
+          kohiByClient.set(k.client_id, { hobetsu: k.hohei_code, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number });
+        }
+      }
+      const rows: FukuyoguSeikyuRow[] = [];
+      for (const { client, items } of entries) {
+        const details: FukuyoguDetailLine[] = [];
+        let totalUnits = 0;
+        for (const item of items) {
+          const eq = equipment.find((e) => e.product_code === item.product_code);
+          const unitPer = computeUnitsForMonth(item, client.id, ym);
+          const count = item.quantity;
+          const units = unitPer * count;
+          if (units <= 0) continue;
+          const code = fukuyoguServiceCode(eq?.category);
+          if (!code) {
+            allWarnings.push(`[${ym}] ${client.name}: 種目「${eq?.category ?? "未設定"}」のサービスコードが不明です`);
+            continue;
+          }
+          details.push({ serviceCode: code, unitPer, count, units });
+          totalUnits += units;
+        }
+        if (details.length === 0) continue;
+        const benefitRate = parseInt(client.benefit_rate ?? "90", 10) || 90;
+        const copayRate = Math.max(0, 100 - benefitRate) / 100;
+        const totalCost = totalUnits * 10;
+        const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
+        const rawUserAmount = totalCost - insuranceAmount;
+        const careOffice = client.care_office_id
+          ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+          : null;
+        const kohi = kohiByClient.get(client.id);
+        rows.push({
+          userName: client.name,
+          insurerNumber: client.insurer_number,
+          insuredNumber: client.insured_number ?? client.user_number,
+          birthDate: client.birth_date,
+          gender: client.gender,
+          careLevel: client.care_level,
+          certStart: client.certification_start_date,
+          certEnd: client.certification_end_date,
+          careOfficeNumber: careOffice?.office_number ?? null,
+          copayRate,
+          details,
+          totalUnits,
+          totalCost,
+          insuranceAmount,
+          userAmount: kohi ? 0 : rawUserAmount,
+          kohiHobetsu: kohi?.hobetsu ?? null,
+          kohiFutansha: kohi?.futansha ?? null,
+          kohiJukyusha: kohi?.jukyusha ?? null,
+          kohiAmount: kohi ? rawUserAmount : null,
+        });
+      }
+      if (rows.length === 0) continue;
+      const result = buildFukuyoguDensou(rows, { officeNumber, year: yy, month: mm });
+      allWarnings.push(...result.warnings.map((w) => `[${ym}] ${w}`));
+      const sjis = Encoding.convert(Encoding.stringToCode(result.content), { to: "SJIS", from: "UNICODE" });
+      const blob = new Blob([new Uint8Array(sjis)], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = result.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      fileCount++;
+    }
+    if (fileCount === 0) {
+      alert("返戻・過誤の出力対象がありませんでした。");
+      return;
+    }
+    alert(
+      `返戻・過誤の伝送ファイルを ${fileCount} 件(月別)出力しました。` +
+      (allWarnings.length > 0 ? `\n\n⚠ 不足項目 (取込前に確認):\n・${allWarnings.slice(0, 10).join("\n・")}${allWarnings.length > 10 ? `\n…他 ${allWarnings.length - 10} 件` : ""}` : ""),
+    );
+  };
+
   const [y, m] = billingMonth.split("-").map(Number);
   const prevMonth = () => { const d = new Date(y, m - 2, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
@@ -10270,6 +10414,13 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         )}
         <div className="ml-auto flex items-center gap-2">
           <span className="text-amber-600 text-xs">※ 被保険者証情報は別途ほのぼので補完</span>
+          {rebillByMonth.length > 0 && (
+            <button onClick={generateRebillTransferData}
+              title="返戻・過誤の対象をサービス提供年月ごとに 1 ファイルずつ出力"
+              className="border border-orange-500 rounded bg-orange-50 px-3 py-1 text-orange-700 font-semibold hover:bg-orange-100 flex items-center gap-1.5">
+              <Download size={13} />返戻過誤 伝送({rebillByMonth.length}月分)
+            </button>
+          )}
           <button onClick={generateTransferData}
             className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
             <Download size={13} />CSV出力
