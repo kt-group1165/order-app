@@ -331,16 +331,16 @@ export default function MobileMeetingPage() {
                         開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
                       </p>
                     </button>
-                    <div className="flex flex-col shrink-0 divide-y divide-gray-100 border-l border-gray-100">
+                    <div className="flex items-center gap-2 shrink-0 pl-1 pr-3">
                       <button
                         onClick={() => startEdit(n)}
-                        className="flex-1 px-4 flex items-center justify-center text-xs font-medium text-emerald-700 active:bg-emerald-50"
+                        className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-1.5 text-xs font-medium text-emerald-700 active:bg-emerald-100"
                       >
                         編集
                       </button>
                       <button
                         onClick={() => handleDelete(n)}
-                        className="flex-1 px-4 flex items-center justify-center text-xs font-medium text-red-600 active:bg-red-50"
+                        className="rounded-full border border-red-300 bg-red-50 px-4 py-1.5 text-xs font-medium text-red-600 active:bg-red-100"
                       >
                         削除
                       </button>
