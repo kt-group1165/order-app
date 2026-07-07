@@ -104,10 +104,8 @@ export async function POST(req: Request) {
     }
   }
 
-  const row = {
-    tenant_id: TENANT_ID,
-    office_id: office?.id ?? null,
-    office_label: office?.label ?? null,
+  // 内容フィールド (新規/更新 共通)。office_id/office_label は新規時のみ設定
+  const content = {
     client_name: clientName,
     creator_name: s(body.creator_name),
     created_date: s(body.created_date),
@@ -123,7 +121,28 @@ export async function POST(req: Request) {
   };
 
   const admin = createAdminClient();
-  const { error } = await admin.from("service_meeting_notes").insert(row);
+
+  // id あり → 既存レコードの更新 (編集)。office 指定時はその事業所分に限定。
+  // office_id/office_label は変更しない (共通URL からの更新で消さないため)。
+  const editId = typeof body.id === "string" && body.id.trim() ? body.id.trim() : null;
+  if (editId) {
+    let upd = admin
+      .from("service_meeting_notes")
+      .update({ ...content, updated_at: new Date().toISOString() })
+      .eq("id", editId)
+      .eq("tenant_id", TENANT_ID);
+    if (office) upd = upd.eq("office_id", office.id);
+    const { error } = await upd;
+    if (error) {
+      console.error("meeting-submit update failed:", error.message);
+      return NextResponse.json({ error: `更新に失敗しました: ${error.message}` }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, id: editId });
+  }
+
+  const { error } = await admin
+    .from("service_meeting_notes")
+    .insert({ tenant_id: TENANT_ID, office_id: office?.id ?? null, office_label: office?.label ?? null, ...content });
   if (error) {
     console.error("meeting-submit insert failed:", error.message);
     return NextResponse.json({ error: `保存に失敗しました: ${error.message}` }, { status: 500 });

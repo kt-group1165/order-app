@@ -70,6 +70,8 @@ export default function MobileMeetingPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null); // 編集中の会議録 id (null=新規)
+  const [listSearch, setListSearch] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -80,6 +82,7 @@ export default function MobileMeetingPage() {
   }, []);
 
   const resetForm = () => {
+    setEditingId(null);
     setClientName("");
     setCreatorName("");
     setCreatedDate(todayStr());
@@ -93,6 +96,30 @@ export default function MobileMeetingPage() {
     setRemainingIssues(DEFAULTS.remaining_issues);
     setDone(false);
     setError("");
+  };
+
+  // 既存の会議録を編集フォームに読み込む
+  const startEdit = (n: SavedNote) => {
+    setEditingId(n.id);
+    setClientName(n.client_name ?? "");
+    setCreatorName(n.creator_name ?? "");
+    setCreatedDate(n.created_date ?? todayStr());
+    setMeetingDate(n.meeting_date ?? "");
+    setMeetingTime(n.meeting_time ?? "");
+    setMeetingPlace(n.meeting_place ?? "自宅");
+    const rows = Array.isArray(n.attendees) ? n.attendees : [];
+    setAttendees(Array.from({ length: 6 }, (_, i) => ({
+      affiliation: rows[i]?.affiliation ?? "",
+      name: rows[i]?.name ?? "",
+    })));
+    setDiscussedItems(n.discussed_items ?? "");
+    setDiscussionContent(n.discussion_content ?? "");
+    setConclusion(n.conclusion ?? "");
+    setRemainingIssues([n.remaining_issues, n.next_meeting].filter(Boolean).join("\n"));
+    setError("");
+    setDone(false);
+    setDetail(null);
+    setView("form");
   };
 
   const loadNotes = async (k: string) => {
@@ -130,6 +157,7 @@ export default function MobileMeetingPage() {
         body: JSON.stringify({
           key,
           office,
+          id: editingId,
           client_name: clientName,
           creator_name: creatorName,
           created_date: createdDate,
@@ -170,7 +198,7 @@ export default function MobileMeetingPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 gap-4">
         <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center text-2xl">✓</div>
-        <p className="text-base font-semibold text-gray-800">送信しました</p>
+        <p className="text-base font-semibold text-gray-800">{editingId ? "更新しました" : "送信しました"}</p>
         <p className="text-xs text-gray-500">担当者会議録として保存されました。</p>
         <button onClick={resetForm} className="mt-2 px-6 py-3 bg-emerald-500 text-white text-sm font-medium rounded-xl">
           続けて入力する
@@ -217,12 +245,20 @@ export default function MobileMeetingPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <button onClick={() => setDetail(null)} className="text-sm text-emerald-700 font-medium">← 一覧に戻る</button>
-                <button
-                  onClick={() => printMeetingNoteSheet()}
-                  className="px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-xl"
-                >
-                  印刷
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => detail && startEdit(detail)}
+                    className="px-4 py-2 bg-emerald-500 text-white text-sm font-medium rounded-xl"
+                  >
+                    編集
+                  </button>
+                  <button
+                    onClick={() => printMeetingNoteSheet()}
+                    className="px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-xl"
+                  >
+                    印刷
+                  </button>
+                </div>
               </div>
               {/* 第4表プレビュー (A4 横想定。狭い画面では横スクロール) */}
               <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 overflow-x-auto">
@@ -239,18 +275,40 @@ export default function MobileMeetingPage() {
               {notes.length === 0 && !listError && (
                 <p className="text-sm text-gray-400 text-center py-12">まだ会議録がありません</p>
               )}
-              {notes.map((n) => (
-                <button
-                  key={n.id}
-                  onClick={() => setDetail(n)}
-                  className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 active:bg-gray-50"
-                >
-                  <p className="text-sm font-semibold text-gray-800">{n.client_name} 様</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
-                  </p>
-                </button>
-              ))}
+              {notes.length > 0 && (
+                <input
+                  type="text"
+                  value={listSearch}
+                  onChange={(e) => setListSearch(e.target.value)}
+                  placeholder="利用者名・日付・内容で検索"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base outline-none focus:border-emerald-400 bg-white"
+                />
+              )}
+              {(() => {
+                const q = listSearch.trim().toLowerCase();
+                const filtered = q
+                  ? notes.filter((n) => [
+                      n.client_name, n.creator_name, n.meeting_date, n.created_date, n.meeting_place,
+                      n.discussed_items, n.discussion_content, n.conclusion, n.remaining_issues,
+                      ...(Array.isArray(n.attendees) ? n.attendees.flatMap((a) => [a.affiliation, a.name]) : []),
+                    ].filter(Boolean).join(" ").toLowerCase().includes(q))
+                  : notes;
+                if (notes.length > 0 && filtered.length === 0) {
+                  return <p className="text-sm text-gray-400 text-center py-12">「{listSearch}」に一致する会議録がありません</p>;
+                }
+                return filtered.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => setDetail(n)}
+                    className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 active:bg-gray-50"
+                  >
+                    <p className="text-sm font-semibold text-gray-800">{n.client_name} 様</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
+                    </p>
+                  </button>
+                ));
+              })()}
             </>
           )}
         </div>
@@ -265,6 +323,12 @@ export default function MobileMeetingPage() {
     <div className="min-h-screen bg-gray-50">
       {header}
       <div className="p-4 space-y-4 max-w-lg mx-auto pb-28">
+        {editingId && (
+          <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+            <span className="text-xs text-amber-700 font-medium">既存の会議録を編集中</span>
+            <button onClick={resetForm} className="text-xs text-amber-700 underline">新規に切替</button>
+          </div>
+        )}
         <div>
           <label className={labelCls}>利用者名 *</label>
           <input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="例：山田 太郎" className={inputCls} />
@@ -346,7 +410,7 @@ export default function MobileMeetingPage() {
             disabled={sending}
             className="w-full py-3.5 bg-emerald-500 text-white text-base font-semibold rounded-xl disabled:opacity-50"
           >
-            {sending ? "送信中..." : "送信する"}
+            {sending ? (editingId ? "更新中..." : "送信中...") : (editingId ? "更新する" : "送信する")}
           </button>
         </div>
       </div>
