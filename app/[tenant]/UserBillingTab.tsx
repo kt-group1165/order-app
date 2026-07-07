@@ -792,10 +792,10 @@ export default function UserBillingTab({
 
   const statusBadge = (status: BillingUserInvoiceStatus | "未確定") => {
     if (status === "入金完")
-      return <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[11px] font-semibold">入金完</span>;
+      return <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-semibold">入金完</span>;
     if (status === "確定")
-      return <span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[11px] font-semibold">確定</span>;
-    return <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px] font-semibold">未確定</span>;
+      return <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-semibold">確定</span>;
+    return <span className="inline-block whitespace-nowrap px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-[10px] font-semibold">未確定</span>;
   };
 
   return (
