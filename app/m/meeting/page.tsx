@@ -146,6 +146,27 @@ export default function MobileMeetingPage() {
     if (key) loadNotes(key);
   };
 
+  // 会議録の削除 (確認警告付き)。
+  const handleDelete = async (n: SavedNote) => {
+    if (!key) return;
+    if (!window.confirm(`${n.client_name} 様の会議録（開催日 ${n.meeting_date ?? "―"}）を削除します。\nこの操作は取り消せません。よろしいですか？`)) return;
+    try {
+      const res = await fetch(
+        `/api/meeting-submit?key=${encodeURIComponent(key)}&id=${encodeURIComponent(n.id)}${office ? `&office=${encodeURIComponent(office)}` : ""}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setListError(data.error ?? "削除に失敗しました");
+        return;
+      }
+      setNotes((prev) => (prev ? prev.filter((x) => x.id !== n.id) : prev));
+      if (detail?.id === n.id) setDetail(null);
+    } catch {
+      setListError("通信エラーが発生しました");
+    }
+  };
+
   const handleSubmit = async () => {
     if (!clientName.trim()) { setError("利用者名を入力してください"); return; }
     setSending(true);
@@ -297,16 +318,34 @@ export default function MobileMeetingPage() {
                   return <p className="text-sm text-gray-400 text-center py-12">「{listSearch}」に一致する会議録がありません</p>;
                 }
                 return filtered.map((n) => (
-                  <button
+                  <div
                     key={n.id}
-                    onClick={() => setDetail(n)}
-                    className="w-full text-left bg-white rounded-2xl border border-gray-200 px-4 py-3 active:bg-gray-50"
+                    className="flex items-stretch bg-white rounded-2xl border border-gray-200 overflow-hidden"
                   >
-                    <p className="text-sm font-semibold text-gray-800">{n.client_name} 様</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
-                    </p>
-                  </button>
+                    <button
+                      onClick={() => setDetail(n)}
+                      className="flex-1 min-w-0 text-left px-4 py-3 active:bg-gray-50"
+                    >
+                      <p className="text-sm font-semibold text-gray-800 truncate">{n.client_name} 様</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        開催日 {n.meeting_date ?? "―"}　作成 {n.created_date ?? n.created_at.slice(0, 10)}
+                      </p>
+                    </button>
+                    <div className="flex flex-col shrink-0 divide-y divide-gray-100 border-l border-gray-100">
+                      <button
+                        onClick={() => startEdit(n)}
+                        className="flex-1 px-4 flex items-center justify-center text-xs font-medium text-emerald-700 active:bg-emerald-50"
+                      >
+                        編集
+                      </button>
+                      <button
+                        onClick={() => handleDelete(n)}
+                        className="flex-1 px-4 flex items-center justify-center text-xs font-medium text-red-600 active:bg-red-50"
+                      >
+                        削除
+                      </button>
+                    </div>
+                  </div>
                 ));
               })()}
             </>

@@ -9783,6 +9783,12 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [lateFlags, setLateFlagsState] = useState<Map<string, BillingLateFlag>>(new Map()); // key: clientId (= flag.month は提出月)
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  // 月遅/返戻/過誤 フラグは即保存せずローカルに貯め、「保存」ボタンで一括反映する。
+  // savedRef = 最後に DB と同期した状態 (保存時に diff を計算するための基準)。
+  const [isDirty, setIsDirty] = useState(false);
+  const [savingFlags, setSavingFlags] = useState(false);
+  const savedRebillRef = useRef<Map<string, BillingRebillFlag>>(new Map());
+  const savedLateRef = useRef<Map<string, BillingLateFlag>>(new Map());
 
   // 月遅れ自動判定：保険証のcertification_statusが「申請中」の利用者
   const autoLateClients = useMemo(() => {
@@ -9869,34 +9875,44 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       const lm = new Map<string, BillingLateFlag>();
       late.forEach((l) => lm.set(l.client_id, l));
       setLateFlagsState(lm);
+      savedRebillRef.current = new Map(rm);
+      savedLateRef.current = new Map(lm);
+      setIsDirty(false);
     }).catch(console.error).finally(() => setLoading(false));
   }, [tenantId, billingMonth]);
 
-  // 月遅れフラグのトグル (手動 mark)
-  const toggleLateFlag = async (clientId: string) => {
-    const existing = lateFlags.get(clientId);
-    if (existing) {
-      await removeLateFlag(tenantId, clientId, billingMonth);
-      setLateFlagsState((prev) => { const m = new Map(prev); m.delete(clientId); return m; });
-    } else {
-      await setLateFlag(tenantId, clientId, billingMonth);
-      setLateFlagsState((prev) => new Map(prev).set(clientId, {
-        id: "", tenant_id: tenantId, client_id: clientId, month: billingMonth, created_at: ""
-      }));
-    }
+  // 未保存で画面(ブラウザ)を離れようとしたら警告
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
+  // 月遅れフラグのトグル (手動 mark) — ローカルのみ更新、DB反映は「保存」ボタン
+  const toggleLateFlag = (clientId: string) => {
+    setLateFlagsState((prev) => {
+      const m = new Map(prev);
+      if (m.has(clientId)) m.delete(clientId);
+      else m.set(clientId, { id: "", tenant_id: tenantId, client_id: clientId, month: billingMonth, created_at: "" });
+      return m;
+    });
+    setIsDirty(true);
   };
 
-  // チェックした利用者を過誤/返戻で確定
-  const handleConfirm = async (type: "返戻" | "過誤") => {
-    const promises = Array.from(selectedClientIds).map(clientId =>
-      setRebillFlag(tenantId, clientId, billingMonth, type)
-    );
-    await Promise.all(promises);
-    const rebill = await getRebillFlags(tenantId);
-    const rm = new Map<string, BillingRebillFlag>();
-    rebill.forEach((r) => rm.set(`${r.client_id}-${r.month}`, r));
-    setRebillFlagsState(rm);
+  // チェックした利用者を過誤/返戻で確定 — ローカルのみ更新、DB反映は「保存」ボタン
+  const handleConfirm = (type: "返戻" | "過誤") => {
+    setRebillFlagsState((prev) => {
+      const m = new Map(prev);
+      for (const clientId of selectedClientIds) {
+        m.set(`${clientId}-${billingMonth}`, {
+          id: "", tenant_id: tenantId, client_id: clientId, month: billingMonth, flag_type: type, created_at: ""
+        });
+      }
+      return m;
+    });
     setSelectedClientIds(new Set());
+    setIsDirty(true);
   };
 
   const getUnits = (item: OrderItem, clientId: string) => {
@@ -9979,17 +9995,61 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     }
   };
 
-  const toggleRebillFlag = async (clientId: string, month: string, type: "返戻" | "過誤") => {
+  const toggleRebillFlag = (clientId: string, month: string, type: "返戻" | "過誤") => {
     const key = `${clientId}-${month}`;
-    const existing = rebillFlags.get(key);
-    if (existing && existing.flag_type === type) {
-      await removeRebillFlag(tenantId, clientId, month);
-      setRebillFlagsState((prev) => { const m = new Map(prev); m.delete(key); return m; });
-    } else {
-      await setRebillFlag(tenantId, clientId, month, type);
-      setRebillFlagsState((prev) => new Map(prev).set(key, {
-        id: "", tenant_id: tenantId, client_id: clientId, month, flag_type: type, created_at: ""
-      }));
+    setRebillFlagsState((prev) => {
+      const m = new Map(prev);
+      const existing = m.get(key);
+      if (existing && existing.flag_type === type) m.delete(key);
+      else m.set(key, { id: "", tenant_id: tenantId, client_id: clientId, month, flag_type: type, created_at: "" });
+      return m;
+    });
+    setIsDirty(true);
+  };
+
+  // 返戻 select 用: ローカルのみ更新
+  const setRebillLocal = (clientId: string, month: string, type: "返戻" | null) => {
+    const key = `${clientId}-${month}`;
+    setRebillFlagsState((prev) => {
+      const m = new Map(prev);
+      if (type === null) { if (m.get(key)?.flag_type === "返戻") m.delete(key); }
+      else m.set(key, { id: "", tenant_id: tenantId, client_id: clientId, month, flag_type: type, created_at: "" });
+      return m;
+    });
+    setIsDirty(true);
+  };
+
+  // 貯めた 月遅/返戻/過誤 フラグを DB に一括反映 (snapshot との diff)
+  const handleSaveFlags = async () => {
+    setSavingFlags(true);
+    try {
+      const savedLate = savedLateRef.current;
+      const savedRebill = savedRebillRef.current;
+      const ops: Promise<void>[] = [];
+      // 月遅れ: 追加 / 削除
+      for (const [clientId, f] of lateFlags) {
+        if (!savedLate.has(clientId)) ops.push(setLateFlag(tenantId, clientId, f.month || billingMonth));
+      }
+      for (const [clientId, f] of savedLate) {
+        if (!lateFlags.has(clientId)) ops.push(removeLateFlag(tenantId, clientId, f.month || billingMonth));
+      }
+      // 返戻/過誤: 追加・変更 / 削除
+      for (const [key, f] of rebillFlags) {
+        const prev = savedRebill.get(key);
+        if (!prev || prev.flag_type !== f.flag_type) ops.push(setRebillFlag(tenantId, f.client_id, f.month, f.flag_type));
+      }
+      for (const [key, f] of savedRebill) {
+        if (!rebillFlags.has(key)) ops.push(removeRebillFlag(tenantId, f.client_id, f.month));
+      }
+      await Promise.all(ops);
+      savedLateRef.current = new Map(lateFlags);
+      savedRebillRef.current = new Map(rebillFlags);
+      setIsDirty(false);
+    } catch (e) {
+      console.error("フラグ保存失敗:", e);
+      alert("保存に失敗しました: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSavingFlags(false);
     }
   };
 
@@ -10271,6 +10331,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const [y, m] = billingMonth.split("-").map(Number);
   const prevMonth = () => { const d = new Date(y, m - 2, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const nextMonth = () => { const d = new Date(y, m, 1); setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
+  // 未保存の変更があるまま画面遷移する前に確認する
+  const confirmLeave = () => !isDirty || window.confirm("保存されていない変更があります。破棄して移動しますか？");
+  const guardedPrevMonth = () => { if (confirmLeave()) prevMonth(); };
+  const guardedNextMonth = () => { if (confirmLeave()) nextMonth(); };
+  const guardedSetSubTab = (id: BillingSubTab) => { if (confirmLeave()) setSubTab(id); };
 
   const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [rentalGridClient, setRentalGridClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
@@ -10380,13 +10445,13 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
   return (
     <div className="flex flex-col h-full bg-white text-sm">
-      <BillingSubTabNav active={subTab} onChange={setSubTab} />
+      <BillingSubTabNav active={subTab} onChange={guardedSetSubTab} />
       {/* ── ツールバー ── */}
       <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
-          <button onClick={prevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={14} /></button>
+          <button onClick={guardedPrevMonth} className="text-gray-500 hover:text-gray-800"><ChevronLeft size={14} /></button>
           <span className="font-semibold text-gray-800 px-1.5">R{y - 2018}/{m}</span>
-          <button onClick={nextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
+          <button onClick={guardedNextMonth} className="text-gray-500 hover:text-gray-800"><ChevronRight size={14} /></button>
         </div>
         <span className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 font-medium">請求分</span>
         <button
@@ -10413,6 +10478,14 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
           </>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleSaveFlags}
+            disabled={savingFlags || !isDirty}
+            title="月遅/返戻/過誤 の変更を保存"
+            className={`border rounded px-3 py-1 font-semibold transition-colors ${
+              isDirty ? "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700" : "border-gray-300 bg-white text-gray-400"
+            }`}
+          >{savingFlags ? "保存中…" : isDirty ? "保存 *" : "保存済"}</button>
           <span className="text-amber-600 text-xs">※ 被保険者証情報は別途ほのぼので補完</span>
           {rebillByMonth.length > 0 && (
             <button onClick={generateRebillTransferData}
@@ -10495,8 +10568,10 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
           {/* ── メインテーブル ── */}
           <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200">
+            {/* 行 (ヘッダーは sticky にしてスクロール内へ配置。本文とスクロールバー幅を共有し列を一致させる) */}
+            <div className="flex-1 overflow-y-auto">
             {/* ヘッダー行: 対象 / 申請中 / 状態 / 提出月 / 請求月 / サービス事業所 / 被保険者番号 / 利用者名 / 月遅 / 返戻 / 過誤 */}
-            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 shrink-0">
+            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
               <div className="px-1 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
@@ -10525,8 +10600,6 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
               <div className="px-2 py-2 border-l border-gray-200 text-center">過誤</div>
             </div>
 
-            {/* 行 */}
-            <div className="flex-1 overflow-y-auto">
               {displayRows.length === 0 ? (
                 <p className="text-gray-400 text-center py-10">{billingMonth}のアクティブレンタル（介護）がありません</p>
               ) : displayRows.map((row, idx) => {
@@ -10534,7 +10607,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                   const [ry, rm] = row.month.split("-").map(Number);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
+                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
                       <div className="px-1 py-2" />
                       <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
@@ -10592,7 +10665,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_48px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
+                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
@@ -10621,7 +10694,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                     <div className="px-2 py-2 border-l border-gray-100 text-gray-700 truncate" title={careOfficeName}>{careOfficeName || "—"}</div>
                     <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-700">{client.user_number ?? "—"}</div>
                     <div className="px-2 py-2 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-1.5 min-w-0">
-                      <span className="truncate">{client.name}</span>
+                      <span className="flex-1 truncate">{client.name}</span>
                       <button
                         onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
                         className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -10631,27 +10704,22 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                         className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
                       >請求書</button>
                     </div>
-                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleLateFlag(client.id); }}>
-                      {isLate && (
-                        <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">月遅</span>
-                      )}
+                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+                      <select
+                        value={isLate ? "月遅" : ""}
+                        disabled={isAutoLate}
+                        onChange={() => toggleLateFlag(client.id)}
+                        title={isAutoLate ? "保険証が申請中のため自動で月遅れ扱い(解除不可)" : "月遅れ"}
+                        className={`w-full text-[11px] border rounded px-0.5 py-0.5 bg-white disabled:bg-yellow-50 disabled:text-yellow-700 disabled:border-yellow-300 ${isLate ? "border-yellow-400 text-yellow-700 font-semibold" : "border-gray-300 text-gray-500"}`}
+                      >
+                        <option value=""></option>
+                        <option value="月遅">月遅</option>
+                      </select>
                     </div>
                     <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
                       <select
                         value={flag?.flag_type === "返戻" ? "返戻" : ""}
-                        onChange={e => {
-                          if (e.target.value === "返戻") {
-                            void setRebillFlag(tenantId, client.id, billingMonth, "返戻").then(() => {
-                              setRebillFlagsState(prev => new Map(prev).set(`${client.id}-${billingMonth}`, {
-                                id: "", tenant_id: tenantId, client_id: client.id, month: billingMonth, flag_type: "返戻", created_at: ""
-                              }));
-                            });
-                          } else if (flag?.flag_type === "返戻") {
-                            void removeRebillFlag(tenantId, client.id, billingMonth).then(() => {
-                              setRebillFlagsState(prev => { const mm = new Map(prev); mm.delete(`${client.id}-${billingMonth}`); return mm; });
-                            });
-                          }
-                        }}
+                        onChange={e => setRebillLocal(client.id, billingMonth, e.target.value === "返戻" ? "返戻" : null)}
                         className={`w-full text-[11px] border rounded px-1 py-0.5 bg-white ${flag?.flag_type === "返戻" ? "border-red-400 text-red-600 font-semibold" : "border-gray-300 text-gray-500"}`}
                       >
                         <option value=""></option>

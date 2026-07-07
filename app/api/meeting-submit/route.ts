@@ -150,3 +150,40 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok: true });
 }
+
+// 会議録の削除。キー + id 検証付き。office 指定時はその事業所分に限定。
+export async function DELETE(req: Request) {
+  const formKey = process.env.MEETING_FORM_KEY;
+  if (!formKey) {
+    return NextResponse.json(
+      { error: "サーバー側の設定が未完了です (MEETING_FORM_KEY 未設定)" },
+      { status: 503 }
+    );
+  }
+  const url = new URL(req.url);
+  if (url.searchParams.get("key") !== formKey) {
+    return NextResponse.json({ error: "キーが正しくありません" }, { status: 403 });
+  }
+  const id = url.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "id が指定されていません" }, { status: 400 });
+  }
+  const officeSlug = url.searchParams.get("office");
+  const office = officeSlug ? OFFICES[officeSlug] : null;
+  if (officeSlug && !office) {
+    return NextResponse.json({ error: "事業所の指定が正しくありません" }, { status: 400 });
+  }
+  const admin = createAdminClient();
+  let del = admin
+    .from("service_meeting_notes")
+    .delete()
+    .eq("id", id)
+    .eq("tenant_id", TENANT_ID);
+  if (office) del = del.eq("office_id", office.id);
+  const { error } = await del;
+  if (error) {
+    console.error("meeting-submit delete failed:", error.message);
+    return NextResponse.json({ error: `削除に失敗しました: ${error.message}` }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true });
+}
