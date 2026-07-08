@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Upload, Loader2, CheckCircle2, Trash2, X, Search, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { Upload, Loader2, CheckCircle2, Trash2, X, Search, FileSpreadsheet, AlertCircle, Download } from "lucide-react";
 import {
   getCeilingPrices,
   upsertCeilingPrices,
@@ -25,6 +25,11 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  // 商品別 価格推移ビュー
+  const [view, setView] = useState<"list" | "pivot">("list");
+  const [metric, setMetric] = useState<"ceiling" | "average">("ceiling"); // 既定=上限価格
+  const [carryForward, setCarryForward] = useState(false); // 既定=公表値のみ (true=実効値/据え置き補完)
+  const [onlyMulti, setOnlyMulti] = useState(true); // 推移あり(2回以上公表)のみ
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,6 +81,92 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
       alert("削除に失敗しました: " + (e instanceof Error ? e.message : String(e)));
     }
   };
+
+  // ── 商品別 価格推移: TAIS で集約し 公表月を列に ──────────────────────
+  const allMonthsAsc = useMemo(() => {
+    const s = new Set(rows.map((r) => r.effective_from));
+    return Array.from(s).sort();
+  }, [rows]);
+
+  type PivotRow = {
+    tais: string;
+    name: string | null;
+    corp: string | null;
+    model: string | null;
+    count: number;
+    ceil: Map<string, number>;
+    avg: Map<string, number | null>;
+  };
+
+  const pivotRows = useMemo(() => {
+    const map = new Map<string, PivotRow>();
+    // 名称類は最新月の値を採用するため effective_from 昇順で上書き
+    const sorted = [...rows].sort((a, b) => a.effective_from.localeCompare(b.effective_from));
+    for (const r of sorted) {
+      let p = map.get(r.tais_code);
+      if (!p) {
+        p = { tais: r.tais_code, name: null, corp: null, model: null, count: 0, ceil: new Map(), avg: new Map() };
+        map.set(r.tais_code, p);
+      }
+      p.ceil.set(r.effective_from, r.ceiling_price);
+      p.avg.set(r.effective_from, r.average_price);
+      p.count++;
+      if (r.product_name) p.name = r.product_name;
+      if (r.corp_name) p.corp = r.corp_name;
+      if (r.model_number) p.model = r.model_number;
+    }
+    return Array.from(map.values()).sort((a, b) => a.tais.localeCompare(b.tais));
+  }, [rows]);
+
+  const pivotFiltered = useMemo(() => {
+    let ps = pivotRows;
+    if (onlyMulti) ps = ps.filter((p) => p.count >= 2);
+    const q = search.trim().toLowerCase();
+    if (q) ps = ps.filter((p) => [p.tais, p.name, p.corp, p.model].filter(Boolean).join(" ").toLowerCase().includes(q));
+    return ps;
+  }, [pivotRows, onlyMulti, search]);
+
+  // 1商品の各月セル (shown=表示値, dir=前回比)
+  const computeCells = useCallback(
+    (p: PivotRow) => {
+      let last: number | null = null;
+      return allMonthsAsc.map((m) => {
+        const published = p.ceil.has(m);
+        const raw = published ? (metric === "ceiling" ? p.ceil.get(m)! : p.avg.get(m) ?? null) : null;
+        let shown: number | null;
+        let dir: "up" | "down" | null = null;
+        if (raw != null) {
+          if (last != null && raw !== last) dir = raw > last ? "up" : "down";
+          last = raw;
+          shown = raw;
+        } else {
+          shown = carryForward ? last : null;
+        }
+        return { m, shown, dir };
+      });
+    },
+    [allMonthsAsc, metric, carryForward]
+  );
+
+  const exportPivotCSV = () => {
+    const esc = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const header = ["商品コード", "法人名", "商品名", "型番", ...allMonthsAsc.map(ymOf)];
+    const lines = [header.map(esc).join(",")];
+    for (const p of pivotFiltered) {
+      const cells = computeCells(p);
+      const row = [p.tais, p.corp ?? "", p.name ?? "", p.model ?? "", ...cells.map((c) => (c.shown != null ? String(c.shown) : ""))];
+      lines.push(row.map((v) => esc(String(v))).join(","));
+    }
+    const csv = "﻿" + lines.join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `上限価格推移_${metric === "ceiling" ? "上限" : "平均"}_${carryForward ? "実効値" : "公表値"}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const PIVOT_ROW_CAP = 300;
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -139,10 +230,25 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
         </div>
       </div>
 
-      {/* 右: 一覧 */}
+      {/* 右: 取込一覧 / 商品別推移 */}
       <div className="flex flex-col flex-1 min-w-0">
-        <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 shrink-0">
-          <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
+        <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 shrink-0 flex-wrap">
+          {/* ビュー切替 */}
+          <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 shrink-0">
+            {([["list", "取込一覧"], ["pivot", "商品別推移"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  view === v ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* 検索 */}
+          <div className="flex-1 min-w-[8rem] flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
             <Search size={14} className="text-gray-400 shrink-0" />
             <input
               value={search}
@@ -156,55 +262,185 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
               </button>
             )}
           </div>
-          <span className="text-xs text-gray-400 shrink-0">{filtered.length}件</span>
+          {view === "pivot" && (
+            <>
+              {/* 上限 / 平均 */}
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 shrink-0">
+                {([["ceiling", "上限"], ["average", "平均"]] as const).map(([mv, label]) => (
+                  <button
+                    key={mv}
+                    onClick={() => setMetric(mv)}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md ${
+                      metric === mv ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* 公表値 / 実効値 */}
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 shrink-0">
+                {([[false, "公表値"], [true, "実効値"]] as const).map(([cv, label]) => (
+                  <button
+                    key={String(cv)}
+                    onClick={() => setCarryForward(cv)}
+                    title={cv ? "据え置き月も前回価格で補完して表示" : "公表された月のみ表示"}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md ${
+                      carryForward === cv ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setOnlyMulti((v) => !v)}
+                title="2回以上公表された(推移のある)商品だけ表示"
+                className={`px-2.5 py-1 text-xs font-medium rounded-lg border shrink-0 ${
+                  onlyMulti ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-gray-200 text-gray-500"
+                }`}
+              >
+                推移ありのみ
+              </button>
+              <button
+                onClick={exportPivotCSV}
+                className="flex items-center gap-1 bg-gray-600 text-white text-xs font-medium px-2.5 py-1 rounded-lg hover:bg-gray-700 shrink-0"
+              >
+                <Download size={13} />
+                CSV
+              </button>
+            </>
+          )}
+          <span className="text-xs text-gray-400 shrink-0 ml-auto">
+            {view === "list" ? filtered.length : pivotFiltered.length}件
+          </span>
         </div>
 
-        <div className="flex-1 overflow-auto">
-          {loading ? (
-            <div className="flex justify-center py-16">
-              <Loader2 size={22} className="animate-spin text-emerald-400" />
-            </div>
-          ) : filtered.length === 0 ? (
-            <p className="text-gray-400 text-center py-16 text-sm">該当データがありません</p>
-          ) : (
-            <table className="w-full text-xs">
-              <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold">商品コード(TAIS)</th>
-                  <th className="px-3 py-2 text-left font-semibold">法人名</th>
-                  <th className="px-3 py-2 text-left font-semibold">商品名</th>
-                  <th className="px-3 py-2 text-left font-semibold">型番</th>
-                  <th className="px-3 py-2 text-right font-semibold">平均価格</th>
-                  <th className="px-3 py-2 text-right font-semibold">上限価格</th>
-                  <th className="px-3 py-2 text-left font-semibold">適用月</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filtered.map((r) => (
-                  <tr key={r.id} className="hover:bg-gray-50">
-                    <td className="px-3 py-1.5 font-mono text-gray-700">{r.tais_code}</td>
-                    <td className="px-3 py-1.5 text-gray-600 max-w-[10rem] truncate" title={r.corp_name ?? ""}>
-                      {r.corp_name ?? "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-800 max-w-[16rem] truncate" title={r.product_name ?? ""}>
-                      {r.product_name ?? "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-500 max-w-[10rem] truncate" title={r.model_number ?? ""}>
-                      {r.model_number ?? "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">
-                      {r.average_price != null ? `¥${r.average_price.toLocaleString()}` : "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-semibold text-gray-800 tabular-nums">
-                      ¥{r.ceiling_price.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-500">{ymOf(r.effective_from)}</td>
+        {loading ? (
+          <div className="flex-1 flex justify-center py-16">
+            <Loader2 size={22} className="animate-spin text-emerald-400" />
+          </div>
+        ) : view === "list" ? (
+          <div className="flex-1 overflow-auto">
+            {filtered.length === 0 ? (
+              <p className="text-gray-400 text-center py-16 text-sm">該当データがありません</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">商品コード(TAIS)</th>
+                    <th className="px-3 py-2 text-left font-semibold">法人名</th>
+                    <th className="px-3 py-2 text-left font-semibold">商品名</th>
+                    <th className="px-3 py-2 text-left font-semibold">型番</th>
+                    <th className="px-3 py-2 text-right font-semibold">平均価格</th>
+                    <th className="px-3 py-2 text-right font-semibold">上限価格</th>
+                    <th className="px-3 py-2 text-left font-semibold">適用月</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map((r) => (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">{r.tais_code}</td>
+                      <td className="px-3 py-1.5 text-gray-600 max-w-[10rem] truncate" title={r.corp_name ?? ""}>
+                        {r.corp_name ?? "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-800 max-w-[16rem] truncate" title={r.product_name ?? ""}>
+                        {r.product_name ?? "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-500 max-w-[10rem] truncate" title={r.model_number ?? ""}>
+                        {r.model_number ?? "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">
+                        {r.average_price != null ? `¥${r.average_price.toLocaleString()}` : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-semibold text-gray-800 tabular-nums">
+                        ¥{r.ceiling_price.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-500">{ymOf(r.effective_from)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ) : (
+          /* ── 商品別 価格推移 (TAIS×公表月ピボット) ── */
+          <div className="flex-1 overflow-auto">
+            {pivotFiltered.length === 0 ? (
+              <p className="text-gray-400 text-center py-16 text-sm">該当商品がありません</p>
+            ) : (
+              <table className="text-xs border-separate border-spacing-0">
+                <thead>
+                  <tr>
+                    <th
+                      className="sticky top-0 left-0 z-30 bg-gray-100 text-gray-600 font-semibold text-left px-3 py-2 border-b border-r border-gray-200"
+                      style={{ minWidth: 120 }}
+                    >
+                      商品コード
+                    </th>
+                    <th
+                      className="sticky top-0 z-20 bg-gray-100 text-gray-600 font-semibold text-left px-3 py-2 border-b border-r border-gray-200"
+                      style={{ left: 120, minWidth: 200 }}
+                    >
+                      商品名
+                    </th>
+                    {allMonthsAsc.map((m) => (
+                      <th
+                        key={m}
+                        className="sticky top-0 z-20 bg-gray-100 text-gray-500 font-semibold text-right px-2 py-2 border-b border-gray-200 whitespace-nowrap"
+                        style={{ minWidth: 72 }}
+                      >
+                        {ymOf(m)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pivotFiltered.slice(0, PIVOT_ROW_CAP).map((p) => {
+                    const cells = computeCells(p);
+                    return (
+                      <tr key={p.tais} className="group">
+                        <td
+                          className="sticky left-0 z-10 bg-white group-hover:bg-gray-50 font-mono text-gray-700 px-3 py-1.5 border-b border-r border-gray-100"
+                          style={{ minWidth: 120 }}
+                        >
+                          {p.tais}
+                        </td>
+                        <td
+                          className="sticky z-10 bg-white group-hover:bg-gray-50 text-gray-800 px-3 py-1.5 border-b border-r border-gray-100 max-w-[200px] truncate"
+                          style={{ left: 120, minWidth: 200 }}
+                          title={[p.name, p.corp, p.model].filter(Boolean).join(" / ")}
+                        >
+                          {p.name ?? "—"}
+                        </td>
+                        {cells.map((c) => (
+                          <td
+                            key={c.m}
+                            className="text-right px-2 py-1.5 border-b border-gray-100 tabular-nums whitespace-nowrap group-hover:bg-gray-50"
+                          >
+                            {c.shown != null ? (
+                              <span className={c.dir === "up" ? "text-red-600" : c.dir === "down" ? "text-blue-600" : "text-gray-700"}>
+                                {c.dir === "up" ? "▲" : c.dir === "down" ? "▼" : ""}
+                                {c.shown.toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-gray-200">·</span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {pivotFiltered.length > PIVOT_ROW_CAP && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border-t border-amber-200 px-3 py-2 sticky bottom-0">
+                {pivotFiltered.length}件中 先頭 {PIVOT_ROW_CAP}件 を表示中。検索で絞り込むか、CSV出力で全件確認してください。
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {showImport && (
