@@ -73,6 +73,7 @@ import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareMan
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import UserBillingTab from "./UserBillingTab";
+import CeilingPriceTab from "./CeilingPriceTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
@@ -1725,6 +1726,7 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierPrices, setSupplierPrices] = useState<EquipmentPrice[]>([]);
   const [showSupplierPriceUpdate, setShowSupplierPriceUpdate] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState<"master" | "ceiling">("master");
 
   const handleDeleteAll = async () => {
     if (deleteConfirm === "idle") { setDeleteConfirm("confirm1"); return; }
@@ -1967,8 +1969,34 @@ function EquipmentTab({ tenantId }: { tenantId: string }) {
     );
   }
 
+  const subTabBar = (
+    <div className="bg-white border-b border-gray-200 px-3 pt-2 flex gap-1 shrink-0">
+      {([["master", "用具マスタ"], ["ceiling", "上限・平均価格管理"]] as const).map(([id, label]) => (
+        <button
+          key={id}
+          onClick={() => setActiveSubTab(id)}
+          className={`px-3 py-1.5 text-xs font-medium rounded-t-lg border-b-2 transition-colors ${
+            activeSubTab === id ? "border-emerald-500 text-emerald-600" : "border-transparent text-gray-400 hover:text-gray-600"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (activeSubTab === "ceiling") {
+    return (
+      <div className="flex flex-col h-full">
+        {subTabBar}
+        <CeilingPriceTab tenantId={tenantId} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full">
+      {subTabBar}
       {/* Search + Import */}
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
         <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
