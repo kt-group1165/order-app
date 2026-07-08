@@ -19,6 +19,14 @@ function ymOf(eff: string): string {
   return eff.slice(0, 7);
 }
 
+// 商品別推移ビューの行仮想化パラメータ (px)
+const PV_ROW_H = 30;
+const PV_HEAD_H = 34;
+const PV_COL_W = 82;
+const PV_TAIS_W = 116;
+const PV_NAME_W = 200;
+const PV_OVERSCAN = 8;
+
 export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
   const [rows, setRows] = useState<EquipmentPriceCeiling[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +38,9 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
   const [metric, setMetric] = useState<"ceiling" | "average">("ceiling"); // 既定=上限価格
   const [carryForward, setCarryForward] = useState(false); // 既定=公表値のみ (true=実効値/据え置き補完)
   const [onlyMulti, setOnlyMulti] = useState(true); // 推移あり(2回以上公表)のみ
+  const pivotScrollRef = useRef<HTMLDivElement>(null);
+  const [pvScrollTop, setPvScrollTop] = useState(0);
+  const [pvViewH, setPvViewH] = useState(600);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +57,13 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount 時の async fetch (既存 EquipmentTab と同パターン)
     load();
   }, [load]);
+
+  // 推移ビューを開いた時にスクロール枠の高さを測る (仮想化の可視行数用)
+  useEffect(() => {
+    if (view === "pivot" && pivotScrollRef.current) {
+      setPvViewH(pivotScrollRef.current.clientHeight);
+    }
+  }, [view]);
 
   // 適用月ごとの件数 (降順)
   const months = useMemo(() => {
@@ -165,8 +183,6 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
     a.click();
     URL.revokeObjectURL(a.href);
   };
-
-  const PIVOT_ROW_CAP = 300;
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -364,80 +380,99 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
             )}
           </div>
         ) : (
-          /* ── 商品別 価格推移 (TAIS×公表月ピボット) ── */
-          <div className="flex-1 overflow-auto">
+          /* ── 商品別 価格推移 (TAIS×公表月ピボット, 行仮想化) ── */
+          <div
+            ref={pivotScrollRef}
+            onScroll={(e) => {
+              setPvScrollTop(e.currentTarget.scrollTop);
+              setPvViewH(e.currentTarget.clientHeight);
+            }}
+            className="flex-1 overflow-auto"
+          >
             {pivotFiltered.length === 0 ? (
               <p className="text-gray-400 text-center py-16 text-sm">該当商品がありません</p>
             ) : (
-              <table className="text-xs border-separate border-spacing-0">
-                <thead>
-                  <tr>
-                    <th
-                      className="sticky top-0 left-0 z-30 bg-gray-100 text-gray-600 font-semibold text-left px-3 py-2 border-b border-r border-gray-200"
-                      style={{ minWidth: 120 }}
+              (() => {
+                const totalW = PV_TAIS_W + PV_NAME_W + allMonthsAsc.length * PV_COL_W;
+                const first = Math.max(0, Math.floor((pvScrollTop - PV_HEAD_H) / PV_ROW_H) - PV_OVERSCAN);
+                const visCount = Math.ceil(pvViewH / PV_ROW_H) + PV_OVERSCAN * 2;
+                const slice = pivotFiltered.slice(first, first + visCount);
+                return (
+                  <div style={{ width: totalW, position: "relative" }}>
+                    {/* ヘッダー (sticky top) */}
+                    <div
+                      className="sticky top-0 z-20 flex bg-gray-100 border-b border-gray-200 text-gray-600 font-semibold text-xs"
+                      style={{ height: PV_HEAD_H, width: totalW }}
                     >
-                      商品コード
-                    </th>
-                    <th
-                      className="sticky top-0 z-20 bg-gray-100 text-gray-600 font-semibold text-left px-3 py-2 border-b border-r border-gray-200"
-                      style={{ left: 120, minWidth: 200 }}
-                    >
-                      商品名
-                    </th>
-                    {allMonthsAsc.map((m) => (
-                      <th
-                        key={m}
-                        className="sticky top-0 z-20 bg-gray-100 text-gray-500 font-semibold text-right px-2 py-2 border-b border-gray-200 whitespace-nowrap"
-                        style={{ minWidth: 72 }}
+                      <div
+                        className="sticky left-0 z-10 bg-gray-100 flex items-center px-3 border-r border-gray-200"
+                        style={{ width: PV_TAIS_W }}
                       >
-                        {ymOf(m)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pivotFiltered.slice(0, PIVOT_ROW_CAP).map((p) => {
-                    const cells = computeCells(p);
-                    return (
-                      <tr key={p.tais} className="group">
-                        <td
-                          className="sticky left-0 z-10 bg-white group-hover:bg-gray-50 font-mono text-gray-700 px-3 py-1.5 border-b border-r border-gray-100"
-                          style={{ minWidth: 120 }}
+                        商品コード
+                      </div>
+                      <div
+                        className="sticky z-10 bg-gray-100 flex items-center px-3 border-r border-gray-200"
+                        style={{ left: PV_TAIS_W, width: PV_NAME_W }}
+                      >
+                        商品名
+                      </div>
+                      {allMonthsAsc.map((m) => (
+                        <div
+                          key={m}
+                          className="flex items-center justify-end px-2 text-gray-500 whitespace-nowrap shrink-0"
+                          style={{ width: PV_COL_W }}
                         >
-                          {p.tais}
-                        </td>
-                        <td
-                          className="sticky z-10 bg-white group-hover:bg-gray-50 text-gray-800 px-3 py-1.5 border-b border-r border-gray-100 max-w-[200px] truncate"
-                          style={{ left: 120, minWidth: 200 }}
-                          title={[p.name, p.corp, p.model].filter(Boolean).join(" / ")}
-                        >
-                          {p.name ?? "—"}
-                        </td>
-                        {cells.map((c) => (
-                          <td
-                            key={c.m}
-                            className="text-right px-2 py-1.5 border-b border-gray-100 tabular-nums whitespace-nowrap group-hover:bg-gray-50"
+                          {ymOf(m)}
+                        </div>
+                      ))}
+                    </div>
+                    {/* 本体 (可視分のみ絶対配置) */}
+                    <div style={{ height: pivotFiltered.length * PV_ROW_H, position: "relative" }}>
+                      {slice.map((p, i) => {
+                        const idx = first + i;
+                        const cells = computeCells(p);
+                        return (
+                          <div
+                            key={p.tais}
+                            className="flex absolute text-xs group"
+                            style={{ top: idx * PV_ROW_H, height: PV_ROW_H, width: totalW }}
                           >
-                            {c.shown != null ? (
-                              <span className={c.dir === "up" ? "text-red-600" : c.dir === "down" ? "text-blue-600" : "text-gray-700"}>
-                                {c.dir === "up" ? "▲" : c.dir === "down" ? "▼" : ""}
-                                {c.shown.toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-gray-200">·</span>
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-            {pivotFiltered.length > PIVOT_ROW_CAP && (
-              <p className="text-[11px] text-amber-700 bg-amber-50 border-t border-amber-200 px-3 py-2 sticky bottom-0">
-                {pivotFiltered.length}件中 先頭 {PIVOT_ROW_CAP}件 を表示中。検索で絞り込むか、CSV出力で全件確認してください。
-              </p>
+                            <div
+                              className="sticky left-0 z-10 bg-white group-hover:bg-gray-50 flex items-center px-3 font-mono text-gray-700 border-b border-r border-gray-100 shrink-0"
+                              style={{ width: PV_TAIS_W }}
+                            >
+                              {p.tais}
+                            </div>
+                            <div
+                              className="sticky z-10 bg-white group-hover:bg-gray-50 flex items-center px-3 text-gray-800 border-b border-r border-gray-100 shrink-0"
+                              style={{ left: PV_TAIS_W, width: PV_NAME_W }}
+                              title={[p.name, p.corp, p.model].filter(Boolean).join(" / ")}
+                            >
+                              <span className="truncate">{p.name ?? "—"}</span>
+                            </div>
+                            {cells.map((c) => (
+                              <div
+                                key={c.m}
+                                className="flex items-center justify-end px-2 tabular-nums whitespace-nowrap border-b border-gray-100 group-hover:bg-gray-50 shrink-0"
+                                style={{ width: PV_COL_W }}
+                              >
+                                {c.shown != null ? (
+                                  <span className={c.dir === "up" ? "text-red-600" : c.dir === "down" ? "text-blue-600" : "text-gray-700"}>
+                                    {c.dir === "up" ? "▲" : c.dir === "down" ? "▼" : ""}
+                                    {c.shown.toLocaleString()}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-200">·</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()
             )}
           </div>
         )}
