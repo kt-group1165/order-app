@@ -54,11 +54,13 @@ export async function POST(req: NextRequest) {
   const ws = wb.worksheets[0];
   if (!ws) return NextResponse.json({ error: "シートが見つかりません" }, { status: 400 });
 
-  // 適用月: 上部セル (A1〜A6) のテキストから「令和N年M月」を探す
+  // 適用月: 上部セル (A1〜A6) のテキストから「令和N年M月」を探す。
+  // 公表回によって全角数字 (令和７年７月) のことがあるので半角へ正規化してから照合。
+  const toHalf = (s: string) => s.replace(/[０-９]/g, (d) => String("０１２３４５６７８９".indexOf(d)));
   let effectiveFrom: string | null = null;
   let monthLabel = "";
   for (let r = 1; r <= 6; r++) {
-    const t = cellText(ws, r, 1);
+    const t = toHalf(cellText(ws, r, 1));
     const mm = t.match(/令和\s*(\d+)\s*年\s*(\d+)\s*月/);
     if (mm) {
       const y = 2018 + parseInt(mm[1], 10);
