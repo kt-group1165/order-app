@@ -14417,22 +14417,49 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     if (!form.name?.trim()) return;
     setSaving(true);
     try {
-      // opendata 選択で法人番号があれば partner_companies へ upsert して紐付ける
+      // opendata 選択で法人情報があれば partner_companies へ find-or-create して紐付ける
       // (テーブル/列 未適用: 42P01/PGRST205/42703/PGRST204 等で失敗しても法人リンクなしで作成は続行)
+      // 名寄せキー: ①法人番号 (13桁として妥当な場合のみ。opendata には Excel 経由で
+      // "3.04E+12" 状に壊れた値が混在) → ②法人名 (trim 一致)
       let partnerCompanyId: string | null = null;
       if (pickedCorp) {
-        const { data: pc, error: pcError } = await supabase
-          .from("partner_companies")
-          .upsert(
-            { corp_number: pickedCorp.corp_number, name: pickedCorp.corp_name, source: "opendata" },
-            { onConflict: "corp_number" }
-          )
-          .select("id")
-          .single();
-        if (pcError) {
-          console.warn(`partner_companies upsert 失敗 (法人リンクなしで続行): [${pcError.code}] ${pcError.message}`);
-        } else {
-          partnerCompanyId = pc.id;
+        try {
+          const validNumber = /^\d{13}$/.test(pickedCorp.corp_number ?? "") ? pickedCorp.corp_number : null;
+          const corpName = pickedCorp.corp_name?.trim() || null;
+          let found: string | null = null;
+          if (validNumber) {
+            const { data, error } = await supabase
+              .from("partner_companies").select("id").eq("corp_number", validNumber).maybeSingle();
+            if (error) throw error;
+            if (data?.id) found = data.id;
+          }
+          if (!found && corpName) {
+            const { data, error } = await supabase
+              .from("partner_companies").select("id, corp_number").eq("name", corpName).limit(1);
+            if (error) throw error;
+            if (data?.[0]?.id) {
+              found = data[0].id;
+              if (validNumber && !data[0].corp_number) {
+                // 名前で先に作られた行に正しい法人番号を補完 (best effort)
+                const { error: fillError } = await supabase
+                  .from("partner_companies").update({ corp_number: validNumber }).eq("id", found);
+                if (fillError) console.warn(`corp_number 補完失敗: ${fillError.message}`);
+              }
+            }
+          }
+          if (!found && (validNumber || corpName)) {
+            const { data, error } = await supabase
+              .from("partner_companies")
+              .insert({ corp_number: validNumber, name: corpName ?? `法人番号 ${validNumber}`, source: "opendata" })
+              .select("id")
+              .single();
+            if (error) throw error;
+            found = data.id;
+          }
+          partnerCompanyId = found;
+        } catch (pcErr) {
+          const pe = pcErr as { code?: string; message?: string };
+          console.warn(`partner_companies 連携失敗 (法人リンクなしで続行): [${pe.code}] ${pe.message}`);
         }
       }
       await upsertCareOffice(tenantId, {
@@ -14524,6 +14551,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
 
       // 千葉県分のみ抽出
       const chibaRows = lines.slice(1).map(parseCsvLine).filter((r) => r[iPref] === "千葉県");
+      let corpNumberDropped = 0; // Excel 破損等で捨てた法人番号の件数 (取込完了時に警告)
       const rows = chibaRows
         .map((r) => ({
           office_number: (r[iOfficeNum] ?? "").trim(),
@@ -14537,7 +14565,14 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
           phone_number: (r[iPhone] ?? "").trim() || null,
           fax_number: (r[iFax] ?? "").trim() || null,
           corp_name: iCorp >= 0 ? (r[iCorp] ?? "").trim() || null : null,
-          corp_number: iCorpNum >= 0 ? (r[iCorpNum] ?? "").trim() || null : null,
+          // 法人番号は 13 桁のみ有効。Excel で開いた CSV は "3.04E+12" 状に壊れるため
+          // 不正値は null にする (法人の名寄せは corp_name で fallback される)
+          corp_number: (() => {
+            const v = iCorpNum >= 0 ? (r[iCorpNum] ?? "").trim() : "";
+            if (/^\d{13}$/.test(v)) return v;
+            if (v) corpNumberDropped++;
+            return null;
+          })(),
           url: iUrl >= 0 ? (r[iUrl] ?? "").trim() || null : null,
           latitude: iLat >= 0 && r[iLat] ? Number(r[iLat]) : null,
           longitude: iLng >= 0 && r[iLng] ? Number(r[iLng]) : null,
@@ -14554,7 +14589,12 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
         if (error) throw error;
         inserted += batch.length;
       }
-      alert(`取込完了\n千葉県 ${inserted} 件をオープンデータに登録しました。\n「＋ 事業所追加」から検索して選択できます。`);
+      alert(
+        `取込完了\n千葉県 ${inserted} 件をオープンデータに登録しました。\n「＋ 事業所追加」から検索して選択できます。` +
+        (corpNumberDropped > 0
+          ? `\n\n⚠️ 法人番号が 13 桁でない行が ${corpNumberDropped} 件あり、法人番号は保存しませんでした (法人名で名寄せされます)。\nCSV を Excel で開いて保存すると法人番号が壊れます。厚労省サイトの CSV をそのまま取込んでください。`
+          : "")
+      );
     } catch (e) {
       const msg = (e as { message?: string })?.message ?? String(e);
       alert(`取込に失敗しました\n${msg}`);
@@ -14572,7 +14612,7 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   }>>([]);
   const [opendataSearching, setOpendataSearching] = useState(false);
   // opendata 候補選択時の法人情報 (保存時に partner_companies へ upsert して紐付ける)
-  const [pickedCorp, setPickedCorp] = useState<{ corp_number: string; corp_name: string } | null>(null);
+  const [pickedCorp, setPickedCorp] = useState<{ corp_number: string | null; corp_name: string | null } | null>(null);
 
   async function searchOpendata(q: string) {
     setOpendataQuery(q);
@@ -14622,9 +14662,10 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       fax_number: row.fax_number ?? "",
       office_number: row.office_number,
     }));
-    // 法人番号・法人名が揃っていれば保存時に partner_companies へ紐付け
+    // 法人名 or 法人番号があれば保存時に partner_companies へ紐付け
+    // (法人番号は Excel 経由で壊れていることがあるため、法人名だけでも連携する)
     setPickedCorp(
-      row.corp_number && row.corp_name
+      row.corp_number || row.corp_name
         ? { corp_number: row.corp_number, corp_name: row.corp_name }
         : null
     );
