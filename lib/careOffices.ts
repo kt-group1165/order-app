@@ -12,6 +12,8 @@ export type CareOffice = {
   notes: string | null;
   // 厚労省介護サービス情報公表システムの事業所番号（10桁）
   office_number: string | null;
+  // 取引先法人 (partner_companies) への紐付け。DB 未適用環境では列が無く undefined になり得る
+  partner_company_id: string | null;
   created_at: string;
 };
 
@@ -29,7 +31,11 @@ export async function getCareOffices(tenantId: string): Promise<CareOffice[]> {
 
 export async function upsertCareOffice(
   tenantId: string,
-  office: Omit<CareOffice, "id" | "tenant_id" | "created_at"> & { id?: string }
+  // partner_company_id は optional: 未指定なら列に触れない (DB 未適用環境でも壊れない・既存リンクを保持)
+  office: Omit<CareOffice, "id" | "tenant_id" | "created_at" | "partner_company_id"> & {
+    id?: string;
+    partner_company_id?: string | null;
+  }
 ): Promise<CareOffice> {
   const { data, error } = await supabase
     .from("care_offices")

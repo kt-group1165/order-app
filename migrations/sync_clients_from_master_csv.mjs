@@ -180,8 +180,8 @@ async function main() {
 
   // ─── Level 2: CSV 内 異常検出 ─────────────────────────────────────────
   const warnings = [];
-  const sharedAddresses = [...addressCount.entries()].filter(([_, n]) => n >= W.SHARED_ADDRESS_THRESHOLD);
-  const sharedPhones = [...phoneCount.entries()].filter(([_, n]) => n >= W.SHARED_PHONE_THRESHOLD);
+  const sharedAddresses = [...addressCount.entries()].filter(([, n]) => n >= W.SHARED_ADDRESS_THRESHOLD);
+  const sharedPhones = [...phoneCount.entries()].filter(([, n]) => n >= W.SHARED_PHONE_THRESHOLD);
 
   if (sharedAddresses.length > 0) {
     warnings.push(`⚠️  Level 2: 同じ住所が ${W.SHARED_ADDRESS_THRESHOLD}+ 行で共有 (= office address 埋込疑い)`);

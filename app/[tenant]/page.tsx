@@ -14403,18 +14403,38 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
     setEditingId(office.id);
     setForm({ ...office });
     setAddingNew(false);
+    setPickedCorp(null);
   };
 
   const startNew = () => {
     setAddingNew(true);
     setEditingId(null);
     setForm({ name: "", fax_number: "", phone_number: "", address: "", email: "", office_number: "" });
+    setPickedCorp(null);
   };
 
   const handleSave = async () => {
     if (!form.name?.trim()) return;
     setSaving(true);
     try {
+      // opendata 選択で法人番号があれば partner_companies へ upsert して紐付ける
+      // (テーブル/列 未適用: 42P01/PGRST205/42703/PGRST204 等で失敗しても法人リンクなしで作成は続行)
+      let partnerCompanyId: string | null = null;
+      if (pickedCorp) {
+        const { data: pc, error: pcError } = await supabase
+          .from("partner_companies")
+          .upsert(
+            { corp_number: pickedCorp.corp_number, name: pickedCorp.corp_name, source: "opendata" },
+            { onConflict: "corp_number" }
+          )
+          .select("id")
+          .single();
+        if (pcError) {
+          console.warn(`partner_companies upsert 失敗 (法人リンクなしで続行): [${pcError.code}] ${pcError.message}`);
+        } else {
+          partnerCompanyId = pc.id;
+        }
+      }
       await upsertCareOffice(tenantId, {
         id: editingId ?? undefined,
         name: form.name!,
@@ -14424,12 +14444,22 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
         email: form.email ?? null,
         notes: form.notes ?? null,
         office_number: form.office_number?.trim() || null,
+        // 未指定 (undefined) なら列に触れない: DB 未適用でも壊れず、既存リンクも保持される
+        ...(partnerCompanyId ? { partner_company_id: partnerCompanyId } : {}),
       });
       setEditingId(null);
       setAddingNew(false);
       setForm({});
+      setPickedCorp(null);
       await load();
-    } catch { alert("保存に失敗しました"); } finally { setSaving(false); }
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      if (err?.code === "23505") {
+        alert("この事業所番号は既に登録されています");
+      } else {
+        alert(`保存に失敗しました${err?.message ? `\n${err.message}` : ""}`);
+      }
+    } finally { setSaving(false); }
   };
 
   const handleDelete = async (id: string, name: string) => {
@@ -14538,27 +14568,35 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
   const [opendataQuery, setOpendataQuery] = useState("");
   const [opendataResults, setOpendataResults] = useState<Array<{
     office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null; city: string | null;
+    corp_name: string | null; corp_number: string | null;
   }>>([]);
   const [opendataSearching, setOpendataSearching] = useState(false);
+  // opendata 候補選択時の法人情報 (保存時に partner_companies へ upsert して紐付ける)
+  const [pickedCorp, setPickedCorp] = useState<{ corp_number: string; corp_name: string } | null>(null);
 
   async function searchOpendata(q: string) {
     setOpendataQuery(q);
     if (q.trim().length < 2) { setOpendataResults([]); return; }
     setOpendataSearching(true);
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("care_offices_opendata")
-        .select("office_number, name, address, phone_number, fax_number, city")
+        .select("office_number, name, address, phone_number, fax_number, city, corp_name, corp_number")
         .eq("prefecture", "千葉県")
         .ilike("name", `%${q.trim()}%`)
         .limit(30);
+      if (error) {
+        console.error("opendata 検索に失敗:", error.message);
+        setOpendataResults([]);
+        return;
+      }
       setOpendataResults((data ?? []) as typeof opendataResults);
     } finally {
       setOpendataSearching(false);
     }
   }
 
-  function pickOpendata(row: { office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null }) {
+  function pickOpendata(row: { office_number: string; name: string; address: string | null; phone_number: string | null; fax_number: string | null; corp_name: string | null; corp_number: string | null }) {
     // 既存の事業所番号と異なる場合は警告
     // 編集中は元の office.office_number も参照（form がまだ未反映の可能性）
     const existingFromForm = (form.office_number ?? "").trim();
@@ -14584,6 +14622,12 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       fax_number: row.fax_number ?? "",
       office_number: row.office_number,
     }));
+    // 法人番号・法人名が揃っていれば保存時に partner_companies へ紐付け
+    setPickedCorp(
+      row.corp_number && row.corp_name
+        ? { corp_number: row.corp_number, corp_name: row.corp_name }
+        : null
+    );
     setOpendataQuery("");
     setOpendataResults([]);
   }
