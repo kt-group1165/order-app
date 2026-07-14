@@ -6249,15 +6249,25 @@ function ClientDetail({
   const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
   // 居宅/ケアマネマスタ（ドロップダウン用）
-  const [careOfficesList, setCareOfficesList] = useState<Array<{ id: string; name: string }>>([]);
+  const [careOfficesList, setCareOfficesList] = useState<Array<{ id: string; name: string; self_office_id?: string | null }>>([]);
   const [careManagersList, setCareManagersList] = useState<Array<{ id: string; care_office_id: string; name: string }>>([]);
   useEffect(() => {
     (async () => {
-      const [offRes, mgrRes] = await Promise.all([
-        supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId).order("name"),
-        supabase.from("care_managers").select("id, care_office_id, name").eq("tenant_id", tenantId).eq("active", true).order("name"),
-      ]);
-      setCareOfficesList((offRes.data ?? []) as Array<{ id: string; name: string }>);
+      // self_office_id (自社紐づけ) 込みで取得。列未適用 DB では旧 select に fallback
+      type OffRow = { id: string; name: string; self_office_id?: string | null };
+      let offData: OffRow[] = [];
+      const withSelf = await supabase.from("care_offices").select("id, name, self_office_id").eq("tenant_id", tenantId).order("name");
+      if (!withSelf.error) {
+        offData = (withSelf.data ?? []) as OffRow[];
+      } else if (["42703", "PGRST204", "PGRST205"].includes(withSelf.error.code ?? "")) {
+        const plain = await supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId).order("name");
+        if (plain.error) console.error("care_offices fetch failed:", plain.error.message);
+        else offData = (plain.data ?? []) as OffRow[];
+      } else {
+        console.error("care_offices fetch failed:", withSelf.error.message);
+      }
+      const mgrRes = await supabase.from("care_managers").select("id, care_office_id, name").eq("tenant_id", tenantId).eq("active", true).order("name");
+      setCareOfficesList(offData);
       setCareManagersList((mgrRes.data ?? []) as Array<{ id: string; care_office_id: string; name: string }>);
     })();
   }, [tenantId]);
@@ -7123,9 +7133,18 @@ function ClientDetail({
                   className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400 bg-white"
                 >
                   <option value="">—</option>
-                  {careOfficesList.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
+                  {careOfficesList.some((o) => o.self_office_id) && (
+                    <optgroup label="自社グループ">
+                      {careOfficesList.filter((o) => o.self_office_id).map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="他社">
+                    {careOfficesList.filter((o) => !o.self_office_id).map((o) => (
+                      <option key={o.id} value={o.id}>{o.name}</option>
+                    ))}
+                  </optgroup>
                   <option value="__ADD__">＋ 新規追加...</option>
                 </select>
               ) : (
