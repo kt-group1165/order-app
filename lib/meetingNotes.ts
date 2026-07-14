@@ -30,12 +30,18 @@ export type ServiceMeetingNote = {
   updated_at?: string;
 };
 
-export async function listMeetingNotes(tenantId: string): Promise<ServiceMeetingNote[]> {
-  const { data, error } = await supabase
+// officeId 指定時はその事業所分のみ (他タブと同じ「自事業所」絞り込み)。
+// null/undefined は全事業所 (office 無し=旧データ含む)。
+export async function listMeetingNotes(
+  tenantId: string,
+  officeId?: string | null,
+): Promise<ServiceMeetingNote[]> {
+  let q = supabase
     .from("service_meeting_notes")
     .select("*")
-    .eq("tenant_id", tenantId)
-    .order("created_at", { ascending: false });
+    .eq("tenant_id", tenantId);
+  if (officeId) q = q.eq("office_id", officeId);
+  const { data, error } = await q.order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as ServiceMeetingNote[];
 }
@@ -59,6 +65,8 @@ export async function saveMeetingNote(note: ServiceMeetingNote): Promise<Service
     next_meeting: note.next_meeting || null,
   };
   if (note.id) {
+    // 更新: office_id/office_label は変更しない (作成時の事業所を保持。
+    // meeting-submit API の編集と同じ挙動)
     const { data, error } = await supabase
       .from("service_meeting_notes")
       .update({ ...payload, updated_at: new Date().toISOString() })
@@ -68,9 +76,10 @@ export async function saveMeetingNote(note: ServiceMeetingNote): Promise<Service
     if (error) throw error;
     return data as ServiceMeetingNote;
   }
+  // 新規: 作成時の自事業所を付与 (未指定なら NULL=共通)
   const { data, error } = await supabase
     .from("service_meeting_notes")
-    .insert(payload)
+    .insert({ ...payload, office_id: note.office_id ?? null, office_label: note.office_label ?? null })
     .select()
     .single();
   if (error) throw error;

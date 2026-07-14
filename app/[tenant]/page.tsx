@@ -476,7 +476,7 @@ export default function TenantPage({
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
-        {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} />}
+        {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} currentOfficeId={currentOfficeId} currentOfficeName={currentOfficeName} officeViewAll={officeViewAll} />}
         {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "settings" && <SettingsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeChange={handleOfficeChange} onViewModeChange={handleOfficeViewModeChange} />}
       </div>
@@ -22722,7 +22722,7 @@ function emptyMeetingAttendees(): MeetingAttendee[] {
   return Array.from({ length: 6 }, () => ({ affiliation: "", name: "" }));
 }
 
-function MeetingNotesTab({ tenantId }: { tenantId: string }) {
+function MeetingNotesTab({ tenantId, currentOfficeId, currentOfficeName, officeViewAll }: { tenantId: string; currentOfficeId: string | null; currentOfficeName: string | null; officeViewAll: boolean }) {
   const [view, setView] = useState<"list" | "edit" | "preview">("list");
   const [notes, setNotes] = useState<ServiceMeetingNote[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22764,14 +22764,16 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
     setLoading(true);
     setListError(null);
     try {
-      setNotes(await listMeetingNotes(tenantId));
+      // 他タブと同様: 自事業所のみ (officeViewAll=false) は currentOfficeId で絞り込む
+      const officeFilter = officeViewAll ? null : currentOfficeId;
+      setNotes(await listMeetingNotes(tenantId, officeFilter));
     } catch (e) {
       console.error("meeting notes load failed:", e);
       setListError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, currentOfficeId, officeViewAll]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { loadNotes(); }, [loadNotes]);
@@ -22832,6 +22834,9 @@ function MeetingNotesTab({ tenantId }: { tenantId: string }) {
         id: editingId ?? undefined,
         tenant_id: tenantId,
         client_id: null, // 将来の利用者連動用 (現状は手入力運用)
+        // 新規時のみ反映 (update 側は office を変更しない)。自事業所を付与
+        office_id: currentOfficeId,
+        office_label: currentOfficeName,
         client_name: clientName.trim(),
         creator_name: creatorName,
         created_date: createdDate,
