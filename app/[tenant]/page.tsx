@@ -72,6 +72,7 @@ import {
 import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
+import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 import UserBillingTab from "./UserBillingTab";
 import CeilingPriceTab from "./CeilingPriceTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
@@ -10229,6 +10230,125 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
     URL.revokeObjectURL(url);
   };
 
+  // ケアプランデータ連携 V4.1: 第6表実績 (UPJSK) を送信先の居宅介護支援事業所ごとに 1 ファイル出力
+  const generateCareplanJissekiCsv = () => {
+    const [y, m] = billingMonth.split("-").map(Number);
+    const currentOffice = offices.find(o => o.id === currentOfficeId);
+    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
+    const senderOfficeNumber = rawOfficeNumber.replace(/-/g, "");
+    if (!senderOfficeNumber) {
+      alert("送信元の事業所番号が設定されていません。設定タブで登録してください。");
+      return;
+    }
+    const senderOfficeName = currentOffice?.name || tenantInfo?.name || "";
+    const monthStartIso = `${billingMonth}-01`;
+
+    // 実績票の送信単位 = サービス種類コード + 事業所番号ごと → 担当居宅事業所ごとにグルーピング
+    const byCareOffice = new Map<string, { officeName: string; officeNumber: string; users: FukuyoguJissekiUser[] }>();
+    const preWarnings: string[] = [];
+    for (const { client, items } of clientGroups) {
+      const careOffice = client.care_office_id
+        ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+        : null;
+      if (!careOffice) {
+        preWarnings.push(`${client.name}: 居宅介護支援事業所がマスタ未紐付けのためスキップしました`);
+        continue;
+      }
+      const receiverNumber = (careOffice.office_number ?? "").replace(/-/g, "");
+      if (!receiverNumber) {
+        preWarnings.push(`${client.name}: 居宅「${careOffice.name}」の事業所番号が未登録のためスキップしました`);
+        continue;
+      }
+      const jissekiItems: FukuyoguJissekiUser["items"] = [];
+      for (const item of items) {
+        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const code = fukuyoguServiceCode(eq?.category);
+        if (!code) {
+          preWarnings.push(`${client.name}: 種目「${eq?.category ?? "未設定"}」(${eq?.name ?? item.product_code}) の福祉用具貸与サービスコードが不明です`);
+          continue;
+        }
+        const units = getUnits(item, client.id);
+        if (units <= 0) continue; // 全月入院等は実績なし
+        // サービス利用日 = 月内の貸与開始日 (前月以前からの継続は月初日)
+        const serviceDate =
+          item.rental_start_date && item.rental_start_date > monthStartIso
+            ? item.rental_start_date
+            : monthStartIso;
+        jissekiItems.push({
+          serviceCode: code,
+          units,
+          quantity: item.quantity,
+          taisCode: eq?.tais_code ?? null,
+          todokedeCode: null, // equipment_master に届出コード列は無し (TAIS のみ)
+          equipmentName: eq?.name ?? item.product_code,
+          serviceDate,
+        });
+      }
+      if (jissekiItems.length === 0) continue;
+      if (!byCareOffice.has(receiverNumber)) {
+        byCareOffice.set(receiverNumber, { officeName: careOffice.name, officeNumber: receiverNumber, users: [] });
+      }
+      byCareOffice.get(receiverNumber)!.users.push({
+        name: client.name,
+        insurerNumber: client.insurer_number,
+        insuredNumber: client.insured_number ?? client.user_number,
+        planStaffName: client.care_manager || careOffice.name,
+        items: jissekiItems,
+      });
+    }
+
+    if (byCareOffice.size === 0) {
+      alert(
+        "対象月にケアプラン連携で送信できる福祉用具貸与の実績がありません。" +
+          (preWarnings.length > 0 ? `\n\n・${preWarnings.slice(0, 12).join("\n・")}` : ""),
+      );
+      return;
+    }
+
+    // ビルド (警告収集) → 確認 → 事業所ごとに 1 ファイルずつダウンロード
+    const results: { content: string; fileName: string; officeName: string; recordCount: number }[] = [];
+    const allWarnings = [...preWarnings];
+    for (const g of byCareOffice.values()) {
+      const result = buildFukuyoguJissekiCsv(g.users, {
+        year: y,
+        month: m,
+        senderOfficeNumber,
+        senderOfficeName,
+        receiverOfficeNumber: g.officeNumber,
+      });
+      allWarnings.push(...result.warnings);
+      if (result.content) {
+        results.push({ content: result.content, fileName: result.fileName, officeName: g.officeName, recordCount: result.recordCount });
+      }
+    }
+    if (results.length === 0) {
+      alert("出力対象の実績レコードがありませんでした。\n\n・" + allWarnings.slice(0, 12).join("\n・"));
+      return;
+    }
+    if (allWarnings.length > 0) {
+      const list = allWarnings.slice(0, 12).join("\n・");
+      const ok = window.confirm(
+        `以下の項目が不足しています (連携システムの取込チェックでエラーになる可能性があります):\n\n・${list}${allWarnings.length > 12 ? `\n…他 ${allWarnings.length - 12} 件` : ""}\n\nこのままファイルを出力しますか？`,
+      );
+      if (!ok) return;
+    }
+    for (const r of results) {
+      const sjis = Encoding.convert(Encoding.stringToCode(r.content), { to: "SJIS", from: "UNICODE" });
+      const blob = new Blob([new Uint8Array(sjis)], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    alert(
+      `ケアプラン連携の実績ファイル (UPJSK) を ${results.length} 件出力しました。\n` +
+        results.map((r) => `・${r.officeName} (${r.recordCount} 明細)`).join("\n") +
+        "\n\nケアプランデータ連携システム (専用ソフト) にアップロードしてください。",
+    );
+  };
+
   // 過去月の再請求グループ（返戻・過誤フラグがある月ごとに集計）
   const rebillByMonth = useMemo(() => {
     const result = new Map<string, Array<{ client: Client; items: OrderItem[]; flag: BillingRebillFlag }>>();
@@ -10541,6 +10661,11 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
               <Download size={13} />返戻過誤 伝送({rebillByMonth.length}月分)
             </button>
           )}
+          <button onClick={generateCareplanJissekiCsv}
+            title="ケアプランデータ連携 V4.1 の第6表実績 (UPJSK) を担当居宅事業所ごとに出力"
+            className="border border-teal-500 rounded bg-teal-50 px-3 py-1 text-teal-700 font-semibold hover:bg-teal-100 flex items-center gap-1.5">
+            <Download size={13} />ケアプラン連携
+          </button>
           <button onClick={generateTransferData}
             className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
             <Download size={13} />CSV出力
