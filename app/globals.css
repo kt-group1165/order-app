@@ -21,9 +21,13 @@ body {
 
 /* ===================================================================
    印刷用 (出勤簿)
-   .print-area は画面では非表示。window.print() 時のみ A4 横 1 枚として出す。
+   .print-area は画面では非表示。window.print() 時のみ A4 縦 1 枚として出す。
    body 全体を visibility:hidden にしてから .print-area だけ可視に戻すことで、
    ヘッダー・タブ・ボトムナビを印刷対象から外す。
+
+   1 枚に収める前提の寸法計算 (A4 縦 297mm - 余白 12mm = 285mm):
+     見出し ~15mm + 表ヘッダ ~5mm + 31 行 × 5mm = 155mm + 集計行 5mm
+     + 脚注 ~15mm ≈ 195mm → 余裕を残して必ず 1 枚に入る。
    =================================================================== */
 .print-area {
   display: none;
@@ -31,8 +35,8 @@ body {
 
 @media print {
   @page {
-    size: A4 landscape;
-    margin: 8mm;
+    size: A4 portrait;
+    margin: 6mm;
   }
 
   body * {
@@ -46,7 +50,7 @@ body {
     top: 0;
     width: 100%;
     color: #000;
-    font-size: 9pt;
+    font-size: 8pt;
   }
 
   .print-area,
@@ -56,21 +60,21 @@ body {
 
   .print-head {
     position: relative;
-    margin-bottom: 4mm;
+    margin-bottom: 3mm;
   }
 
   .print-head h1 {
     text-align: center;
-    font-size: 16pt;
+    font-size: 14pt;
     font-weight: 700;
     letter-spacing: 0.2em;
-    margin-bottom: 3mm;
+    margin-bottom: 2mm;
   }
 
   .print-meta {
     display: flex;
-    gap: 10mm;
-    font-size: 10pt;
+    gap: 8mm;
+    font-size: 9pt;
   }
 
   /* 確認印欄 (右上) */
@@ -78,10 +82,10 @@ body {
     position: absolute;
     right: 0;
     top: 0;
-    width: 18mm;
-    height: 18mm;
+    width: 14mm;
+    height: 14mm;
     border: 1px solid #000;
-    font-size: 7pt;
+    font-size: 6pt;
     text-align: center;
     padding-top: 1mm;
   }
@@ -90,18 +94,20 @@ body {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
+    page-break-inside: avoid;
   }
 
   .print-table th,
   .print-table td {
     border: 1px solid #000;
-    padding: 0.4mm 1mm;
+    padding: 0.3mm 0.8mm;
     text-align: center;
-    font-size: 8pt;
-    line-height: 1.25;
-    /* 31 行を 1 枚に収めるため行高を詰める */
-    height: 5.2mm;
+    font-size: 7pt;
+    line-height: 1.2;
+    /* 31 行 + ヘッダ + 集計で ~165mm。1 枚に収まる行高 */
+    height: 5mm;
     overflow: hidden;
+    white-space: nowrap;
   }
 
   .print-table th {
@@ -118,15 +124,15 @@ body {
     print-color-adjust: exact;
   }
 
-  /* 備考だけ左寄せ + 広め */
+  /* 備考だけ左寄せ + 広め (残り幅を全部使う) */
   .print-table .print-note {
     text-align: left;
-    width: 22%;
+    width: 24%;
   }
 
   .print-foot {
-    margin-top: 2mm;
-    font-size: 9pt;
+    margin-top: 1.5mm;
+    font-size: 8pt;
   }
 
   .print-foot.print-strong {
@@ -134,15 +140,7 @@ body {
   }
 
   .print-foot.print-note-small {
-    font-size: 7.5pt;
+    font-size: 6.5pt;
     color: #333;
-  }
-
-  /* 印刷はページ分割させない (1 か月 = 1 枚) */
-  .print-table {
-    page-break-inside: auto;
-  }
-  .print-table tr {
-    page-break-inside: avoid;
   }
 }
