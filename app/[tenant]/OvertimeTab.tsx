@@ -229,8 +229,8 @@ function RequestListView({ rows, onReload }: { rows: OvertimeRequest[]; onReload
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-3">
-      <table className="w-full text-sm bg-white">
+    <div className="flex-1 overflow-y-auto overflow-x-auto p-3">
+      <table className="w-full min-w-[640px] text-sm bg-white">
         <thead className="bg-gray-50 text-xs text-gray-600">
           <tr>
             <th className="text-left px-3 py-2">対象日</th>
@@ -458,7 +458,8 @@ function SummaryView({ rows, onReload }: { rows: OvertimeRequest[]; onReload: ()
         </span>
       </div>
 
-      <table className="w-full text-sm bg-white">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[560px] text-sm bg-white">
         <thead className="bg-gray-50 text-xs text-gray-600">
           <tr>
             <th className="text-left px-3 py-2">氏名</th>
@@ -485,6 +486,7 @@ function SummaryView({ rows, onReload }: { rows: OvertimeRequest[]; onReload: ()
           )}
         </tbody>
       </table>
+      </div>
 
       {/* 実績未記録の承認済み申請 → 実績時間入力 */}
       {agg.some((a) => a.approvedRows.some((r) => r.actual_minutes === null)) && (
