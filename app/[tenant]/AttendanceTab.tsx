@@ -857,13 +857,15 @@ export default function AttendanceTab({
 // 自己入力 URL 管理モーダル
 // =====================================================================
 
-type StaffUrl = { employee_id: string; name: string; url: string | null };
+type StaffUrl = { employee_id: string; name: string; url: string | null; disabled: boolean };
 
 function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; onClose: () => void }) {
   const [staff, setStaff] = useState<StaffUrl[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [settingsAvailable, setSettingsAvailable] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -877,6 +879,7 @@ function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; 
           return;
         }
         setStaff(json.staff ?? []);
+        setSettingsAvailable(json.settings_available !== false);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -895,6 +898,34 @@ function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; 
     } catch {
       // clipboard 不許可環境: prompt で手動コピーさせる
       window.prompt("この URL をコピーしてください", s.url);
+    }
+  };
+
+  const handleAction = async (s: StaffUrl, action: "disable" | "enable" | "reissue") => {
+    if (action === "reissue" && !window.confirm(`${s.name} の URL を再発行しますか？\n配布済みの旧 URL は使えなくなります。`)) {
+      return;
+    }
+    setBusyId(s.employee_id);
+    try {
+      const res = await fetch("/api/attendance-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee_id: s.employee_id, action }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        alert(json.error ?? `エラー (${res.status})`);
+        return;
+      }
+      setStaff((prev) =>
+        prev.map((p) =>
+          p.employee_id === s.employee_id ? { ...p, disabled: json.disabled, url: json.url } : p,
+        ),
+      );
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -924,22 +955,57 @@ function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; 
           ) : (
             <div className="space-y-1.5">
               {staff.map((s) => (
-                <div key={s.employee_id} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
-                  <span className="text-sm text-gray-700 w-28 shrink-0 truncate">{s.name}</span>
-                  <span className="flex-1 min-w-0 text-[10px] text-gray-400 truncate font-mono">
-                    {s.url ?? "発行不可 (サーバー設定未完了)"}
-                  </span>
-                  <button
-                    onClick={() => handleCopy(s)}
-                    disabled={!s.url}
-                    className="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
-                  >
-                    {copiedId === s.employee_id ? (
-                      <><Check size={12} className="text-emerald-600" />コピー済</>
+                <div
+                  key={s.employee_id}
+                  className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${
+                    s.disabled ? "border-gray-200 bg-gray-50 opacity-70" : "border-gray-200"
+                  }`}
+                >
+                  <span className="text-sm text-gray-700 w-24 shrink-0 truncate">{s.name}</span>
+                  <span className="flex-1 min-w-0 text-[10px] truncate font-mono">
+                    {s.disabled ? (
+                      <span className="text-red-400 font-sans">無効化中 (URL は使えません)</span>
                     ) : (
-                      <><Copy size={12} />コピー</>
+                      <span className="text-gray-400">{s.url ?? "発行不可 (サーバー設定未完了)"}</span>
                     )}
-                  </button>
+                  </span>
+                  {!s.disabled && (
+                    <button
+                      onClick={() => handleCopy(s)}
+                      disabled={!s.url || busyId === s.employee_id}
+                      className="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
+                    >
+                      {copiedId === s.employee_id ? (
+                        <><Check size={12} className="text-emerald-600" />コピー済</>
+                      ) : (
+                        <><Copy size={12} />コピー</>
+                      )}
+                    </button>
+                  )}
+                  {settingsAvailable && (
+                    <>
+                      <button
+                        onClick={() => handleAction(s, s.disabled ? "enable" : "disable")}
+                        disabled={busyId === s.employee_id}
+                        className={`text-[11px] px-2 py-1 rounded border shrink-0 disabled:opacity-40 ${
+                          s.disabled
+                            ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50"
+                            : "border-red-200 text-red-500 hover:bg-red-50"
+                        }`}
+                        title={s.disabled ? "同じ URL を再び使えるようにする" : "URL を使えなくする (URL 自体は変わらない)"}
+                      >
+                        {busyId === s.employee_id ? "…" : s.disabled ? "有効化" : "無効化"}
+                      </button>
+                      <button
+                        onClick={() => handleAction(s, "reissue")}
+                        disabled={busyId === s.employee_id}
+                        className="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0 disabled:opacity-40"
+                        title="旧 URL を失効させて新しい URL を発行する"
+                      >
+                        再発行
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -947,7 +1013,11 @@ function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; 
         </div>
 
         <div className="px-4 py-2.5 border-t border-gray-100 text-[10px] text-gray-400">
-          URL を無効化したい場合は、サーバーの ATTENDANCE_FORM_SECRET を変更してください (全員分が一斉に無効になります)。
+          {settingsAvailable ? (
+            <>無効化 = URL を止める (有効化で同じ URL が復活)。再発行 = 旧 URL を失効させて新 URL に切替。全員一斉に止めたい場合はサーバーの ATTENDANCE_FORM_SECRET を変更。</>
+          ) : (
+            <span className="text-amber-600">個別の無効化には attendance_url_settings テーブルの適用が必要です (migrations/attendance_url_settings.sql)。</span>
+          )}
         </div>
       </div>
     </div>

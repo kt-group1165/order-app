@@ -27,11 +27,30 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
       { status: 503 },
     );
   }
-  const employeeId = token ? verifyAttendanceToken(token) : null;
-  if (!employeeId) {
+  const payload = token ? verifyAttendanceToken(token) : null;
+  if (!payload) {
     return NextResponse.json({ error: "URL が正しくありません" }, { status: 403 });
   }
+  const employeeId = payload.employeeId;
   const admin = createAdminClient();
+
+  // 個別制御 (無効化 / 再発行)。row 無し = 有効 / version 1。
+  // table 未 apply (42P01) は全員デフォルト扱いにフォールバックする (それ以外の error は 500)。
+  const { data: setting, error: settingErr } = await admin
+    .from("attendance_url_settings")
+    .select("disabled, token_version")
+    .eq("employee_id", employeeId)
+    .maybeSingle();
+  if (settingErr && settingErr.code !== "42P01") {
+    console.error("attendance-self settings fetch failed:", settingErr.message);
+    return NextResponse.json({ error: `設定の取得に失敗: ${settingErr.message}` }, { status: 500 });
+  }
+  const disabled = setting?.disabled ?? false;
+  const currentVersion = (setting?.token_version as number | null) ?? 1;
+  if (disabled || payload.version !== currentVersion) {
+    return NextResponse.json({ error: "この URL は無効です" }, { status: 403 });
+  }
+
   const { data, error } = await admin
     .from("payroll_employees")
     .select("id, name, office_id, employment_status")
