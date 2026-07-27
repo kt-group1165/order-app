@@ -44,11 +44,13 @@ export async function proxy(request: NextRequest) {
   //  - /m/*                     : スマホ入力ページ (URL 共有キー方式。書込は
   //                               /api/meeting-submit が MEETING_FORM_KEY を検証)
   //  - /api/meeting-submit      : 同上 (service_role 使用前にキー検証)
+  //  - /api/attendance-self     : 出勤簿 自己入力 (個人 HMAC トークン検証。/m/attendance 用)
   const isPublic =
     pathname.startsWith("/login") ||
     pathname === "/api/login" ||
     pathname.startsWith("/m/") ||
     pathname === "/api/meeting-submit" ||
+    pathname === "/api/attendance-self" ||
     pathname === "/api/demo";
 
   if (!user && !isPublic) {

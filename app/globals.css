@@ -18,3 +18,131 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ===================================================================
+   印刷用 (出勤簿)
+   .print-area は画面では非表示。window.print() 時のみ A4 横 1 枚として出す。
+   body 全体を visibility:hidden にしてから .print-area だけ可視に戻すことで、
+   ヘッダー・タブ・ボトムナビを印刷対象から外す。
+   =================================================================== */
+.print-area {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .print-area {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    color: #000;
+    font-size: 9pt;
+  }
+
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+
+  .print-head {
+    position: relative;
+    margin-bottom: 4mm;
+  }
+
+  .print-head h1 {
+    text-align: center;
+    font-size: 16pt;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    margin-bottom: 3mm;
+  }
+
+  .print-meta {
+    display: flex;
+    gap: 10mm;
+    font-size: 10pt;
+  }
+
+  /* 確認印欄 (右上) */
+  .print-seal {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 18mm;
+    height: 18mm;
+    border: 1px solid #000;
+    font-size: 7pt;
+    text-align: center;
+    padding-top: 1mm;
+  }
+
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .print-table th,
+  .print-table td {
+    border: 1px solid #000;
+    padding: 0.4mm 1mm;
+    text-align: center;
+    font-size: 8pt;
+    line-height: 1.25;
+    /* 31 行を 1 枚に収めるため行高を詰める */
+    height: 5.2mm;
+    overflow: hidden;
+  }
+
+  .print-table th {
+    background: #eee;
+    font-weight: 600;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print-table tfoot td {
+    font-weight: 700;
+    background: #f5f5f5;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 備考だけ左寄せ + 広め */
+  .print-table .print-note {
+    text-align: left;
+    width: 22%;
+  }
+
+  .print-foot {
+    margin-top: 2mm;
+    font-size: 9pt;
+  }
+
+  .print-foot.print-strong {
+    font-weight: 700;
+  }
+
+  .print-foot.print-note-small {
+    font-size: 7.5pt;
+    color: #333;
+  }
+
+  /* 印刷はページ分割させない (1 か月 = 1 枚) */
+  .print-table {
+    page-break-inside: auto;
+  }
+  .print-table tr {
+    page-break-inside: avoid;
+  }
+}

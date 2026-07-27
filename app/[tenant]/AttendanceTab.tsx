@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X } from "lucide-react";
 import {
   getAttendanceOffice,
   getAttendanceEmployees,
@@ -18,16 +18,48 @@ import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
   formatHM,
+  minutesBetween,
   type AttendanceRecord,
 } from "@/lib/attendance/attendance-calc";
 import { isJapaneseHoliday, getJapaneseHolidayName } from "@/lib/attendance/japan-holidays";
+import {
+  exportAttendanceCsv,
+  parseAttendanceCsv,
+  type AttendanceCsvRow,
+} from "@/lib/attendance/attendance-csv";
 
-// 月間の時間外労働 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
-// 法定休日労働・深夜割増は 36協定の「時間外労働時間」とは別枠なので、この合計には含めない。
+// 月間の時間外 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
+// 「通常残業を何時間できるか」を基準にした枠。
 const MONTHLY_OVERTIME_LIMIT_HOURS = 35;
 const MONTHLY_OVERTIME_LIMIT_MIN = MONTHLY_OVERTIME_LIMIT_HOURS * 60;
 
+// 割増率 (労基法 §37)。法定休日労働・深夜も枠を消費するが、割増率が違うぶん
+// 通常残業に換算してから引く。
+//   換算係数 = その労働の割増率 ÷ 通常残業の割増率
+//   例) 法定休日 8h → 8h × (1.35 / 1.25) = 8:38 を消費
+//       深夜 4h    → 4h × (0.25 / 1.25) = 0:48 を消費 (深夜は上乗せぶんのみ)
+// このため「消費した実時間 + 残り」は 35:00 にはならない。残りは常に
+// 「あと通常残業を何時間できるか」を指す。
+const RATE_OVERTIME = 1.25;
+const RATE_HOLIDAY = 1.35;
+const RATE_MIDNIGHT_EXTRA = 0.25;
+
+/** 法定休日労働の分数を、通常残業の分数に換算 */
+function holidayToOvertimeEquiv(min: number): number {
+  return Math.round(min * (RATE_HOLIDAY / RATE_OVERTIME));
+}
+
+/** 深夜労働の分数を、上乗せぶんだけ通常残業の分数に換算 */
+function midnightToOvertimeEquiv(min: number): number {
+  return Math.round(min * (RATE_MIDNIGHT_EXTRA / RATE_OVERTIME));
+}
+
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
+// 拘束 6 時間以上の日に自動で入れる休憩 (労基法 §34 は 6h 超で 45 分・8h 超で 60 分だが、
+// 運用上は 6 時間以上なら一律 60 分を既定値にする)。手入力済みの行は上書きしない。
+const DEFAULT_BREAK_THRESHOLD_MIN = 6 * 60;
+const DEFAULT_BREAK_MINUTES = 60;
 
 // =====================================================================
 // 型
@@ -133,9 +165,11 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
 export default function AttendanceTab({
   tenantId,
   currentOfficeId,
+  currentOfficeName,
 }: {
   tenantId: string;
   currentOfficeId: string | null;
+  currentOfficeName: string | null;
 }) {
   const [month, setMonth] = useState<string>(currentMonth);
   const [office, setOffice] = useState<AttendanceOffice | null>(null);
@@ -147,8 +181,10 @@ export default function AttendanceTab({
   const [companyHolidays, setCompanyHolidays] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const weekStart = office?.work_week_start ?? 0;
+  const employeeName = employees.find((e) => e.id === employeeId)?.name ?? "";
 
   // ─── 事業所解決 + 職員一覧 ──────────────────────────────────────────
   useEffect(() => {
@@ -251,18 +287,39 @@ export default function AttendanceTab({
     return calcMonthlySummary(all, weekStart, month, companyHolidays);
   }, [rows, neighbors, weekStart, month, companyHolidays]);
 
-  /** 36協定でいう時間外労働 (法定内残業・法定休日労働・深夜割増は含まない) */
+  /** 通常残業 (1日8h超 + 週40h超) の実時間 */
   const overtimeTotal = summary.total_daily_overtime + summary.total_weekly_overtime;
-  const remaining = MONTHLY_OVERTIME_LIMIT_MIN - overtimeTotal;
+  /** 法定休日労働・深夜を通常残業に換算した消費分 */
+  const holidayEquiv = holidayToOvertimeEquiv(summary.total_holiday);
+  const midnightEquiv = midnightToOvertimeEquiv(summary.total_midnight);
+  /** 35h 枠の消費合計 (通常残業換算) */
+  const consumed = overtimeTotal + holidayEquiv + midnightEquiv;
+  /** あと何時間 通常残業できるか */
+  const remaining = MONTHLY_OVERTIME_LIMIT_MIN - consumed;
   const overLimit = remaining < 0;
-  const ratio = Math.min(1, overtimeTotal / MONTHLY_OVERTIME_LIMIT_MIN);
+  const ratio = Math.min(1, consumed / MONTHLY_OVERTIME_LIMIT_MIN);
   const nearLimit = !overLimit && ratio >= 0.8;
+  const hasEquiv = holidayEquiv > 0 || midnightEquiv > 0;
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
 
   // ─── 編集 ───────────────────────────────────────────────────────────
   const patchRow = (idx: number, patch: Partial<RowState>) => {
-    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch, dirty: true } : r)));
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== idx) return r;
+        const next = { ...r, ...patch, dirty: true };
+        // 出退勤を入れて拘束 6 時間以上になったら、休憩が未入力の行に既定の 60 分を入れる。
+        // 既に休憩が入っている行は上書きしない (0 に戻したい運用もあるため、明示入力を尊重)。
+        const timeChanged = "start_time" in patch || "end_time" in patch;
+        if (timeChanged && next.start_time && next.end_time && next.break_minutes === 0) {
+          if (minutesBetween(next.start_time, next.end_time) >= DEFAULT_BREAK_THRESHOLD_MIN) {
+            next.break_minutes = DEFAULT_BREAK_MINUTES;
+          }
+        }
+        return next;
+      }),
+    );
   };
 
   // ─── 保存 ───────────────────────────────────────────────────────────
@@ -314,6 +371,83 @@ export default function AttendanceTab({
     }
   };
 
+  // ─── CSV 出力 ───────────────────────────────────────────────────────
+  const handleExportCsv = () => {
+    try {
+      exportAttendanceCsv({
+        rows: rows.map((r) => ({
+          work_date: r.work_date,
+          start_time: r.start_time,
+          end_time: r.end_time,
+          break_minutes: r.break_minutes,
+          is_legal_holiday: r.is_legal_holiday,
+          paid_leave_type: r.paid_leave_type,
+          note: r.note,
+          business_km: r.business_km,
+        })),
+        staffName: employeeName,
+        month,
+      });
+    } catch (e) {
+      alert(`CSV 出力に失敗: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  // ─── CSV 取込 ───────────────────────────────────────────────────────
+  const handleCsvFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 同じ file を続けて選べるよう input は即座にリセット
+    if (csvInputRef.current) csvInputRef.current.value = "";
+    if (!file) return;
+
+    const result = await parseAttendanceCsv(file, month);
+    if (!result.success) {
+      const head = result.errors.slice(0, 5).join("\n");
+      const rest = result.errors.length > 5 ? `\n… 他 ${result.errors.length - 5} 件` : "";
+      alert(`CSV 取込に失敗しました\n\n${head || "データがありません"}${rest}`);
+      return;
+    }
+    if (result.detectedMonth && result.detectedMonth !== month) {
+      alert(`CSV の月 (${result.detectedMonth}) が表示中の月 (${month}) と一致しません`);
+      return;
+    }
+
+    const byDate = new Map<string, AttendanceCsvRow>(result.rows.map((r) => [r.work_date, r]));
+    let applied = 0;
+    setRows((prev) =>
+      prev.map((r) => {
+        const c = byDate.get(r.work_date);
+        if (!c) return r;
+        applied++;
+        return {
+          ...r,
+          start_time: c.start_time,
+          end_time: c.end_time,
+          break_minutes: c.break_minutes,
+          is_legal_holiday: c.is_legal_holiday,
+          paid_leave_type: c.paid_leave_type,
+          business_km: c.business_km,
+          note: c.note,
+          dirty: true,
+        };
+      }),
+    );
+    // 取込は入力欄への反映まで。DB へは「保存」を押した時点で書く。
+    alert(`${applied} 日分を取込みました。内容を確認して「保存」を押してください。`);
+  };
+
+  // ─── 印刷 ───────────────────────────────────────────────────────────
+  const handlePrint = () => {
+    if (!employeeId) {
+      alert("職員を選択してください");
+      return;
+    }
+    window.print();
+  };
+
+  // ─── 自己入力 URL 管理 ─────────────────────────────────────────────
+  const [showUrlModal, setShowUrlModal] = useState(false);
+
   // ─── 表示 ───────────────────────────────────────────────────────────
   if (!currentOfficeId) {
     return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">事業所を選択してください</div>;
@@ -353,14 +487,59 @@ export default function AttendanceTab({
           ))}
         </select>
 
-        <button
-          onClick={handleSave}
-          disabled={saving || dirtyCount === 0 || !employeeId}
-          className="ml-auto text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1 disabled:opacity-40"
-        >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-          保存{dirtyCount > 0 ? ` (${dirtyCount})` : ""}
-        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={handleExportCsv}
+            disabled={!employeeId}
+            className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
+            title="表示中の出勤簿を CSV (Shift-JIS) でダウンロード"
+          >
+            <Download size={14} />
+            CSV 出力
+          </button>
+          <button
+            onClick={() => csvInputRef.current?.click()}
+            disabled={!employeeId}
+            className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
+            title="編集済 CSV (Shift-JIS) を取込んで入力欄に反映"
+          >
+            <Upload size={14} />
+            CSV 取込
+          </button>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={handleCsvFile}
+          />
+          <button
+            onClick={handlePrint}
+            disabled={!employeeId}
+            className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
+            title="出勤簿を A4 横で印刷"
+          >
+            <Printer size={14} />
+            印刷
+          </button>
+          <button
+            onClick={() => setShowUrlModal(true)}
+            disabled={!office}
+            className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
+            title="スタッフ本人が自分の出勤簿を入力するための個人 URL を発行・管理"
+          >
+            <Link2 size={14} />
+            URL 管理
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || dirtyCount === 0 || !employeeId}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1 disabled:opacity-40"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            保存{dirtyCount > 0 ? ` (${dirtyCount})` : ""}
+          </button>
+        </div>
       </div>
 
       {/* 残業サマリー */}
@@ -371,18 +550,18 @@ export default function AttendanceTab({
       >
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-[11px] text-gray-500">今月の時間外</span>
-            <span className={`text-xl font-bold tabular-nums ${overLimit ? "text-red-600" : "text-gray-800"}`}>
-              {formatHM(overtimeTotal)}
+            <span className="text-[11px] text-gray-500">{overLimit ? "超過" : "あと残業できる時間"}</span>
+            <span className={`text-2xl font-bold tabular-nums ${overLimit ? "text-red-600" : nearLimit ? "text-amber-600" : "text-emerald-600"}`}>
+              {formatHM(Math.abs(remaining))}
             </span>
-            <span className="text-[11px] text-gray-400">/ {MONTHLY_OVERTIME_LIMIT_HOURS}:00</span>
           </div>
 
           <div className="flex items-baseline gap-1.5">
-            <span className="text-[11px] text-gray-500">{overLimit ? "超過" : "残り"}</span>
-            <span className={`text-xl font-bold tabular-nums ${overLimit ? "text-red-600" : nearLimit ? "text-amber-600" : "text-emerald-600"}`}>
-              {formatHM(Math.abs(remaining))}
+            <span className="text-[11px] text-gray-500">消費</span>
+            <span className={`text-xl font-bold tabular-nums ${overLimit ? "text-red-600" : "text-gray-800"}`}>
+              {formatHM(consumed)}
             </span>
+            <span className="text-[11px] text-gray-400">/ {MONTHLY_OVERTIME_LIMIT_HOURS}:00</span>
           </div>
 
           {overLimit && (
@@ -400,11 +579,29 @@ export default function AttendanceTab({
 
           <div className="ml-auto flex items-center gap-3 text-[11px] text-gray-500 tabular-nums">
             <span>実労働 {formatHM(summary.total_work)}</span>
-            <span>深夜 {formatHM(summary.total_midnight)}</span>
-            <span>法定休日 {formatHM(summary.total_holiday)}</span>
             <span>有給 {summary.total_paid_leave_days} 日</span>
             {summary.total_absence > 0 && <span className="text-red-500">欠勤 {formatHM(summary.total_absence)}</span>}
           </div>
+        </div>
+
+        {/* 消費の内訳 (実時間 → 通常残業への換算後) */}
+        <div className="mt-1 flex items-center gap-3 text-[11px] text-gray-500 tabular-nums flex-wrap">
+          <span className="text-gray-400">内訳</span>
+          <span>
+            通常残業 <span className="text-gray-700 font-medium">{formatHM(overtimeTotal)}</span>
+          </span>
+          <span className={summary.total_holiday > 0 ? "" : "text-gray-300"}>
+            法定休日 {formatHM(summary.total_holiday)}
+            {summary.total_holiday > 0 && (
+              <span className="text-gray-700 font-medium"> → {formatHM(holidayEquiv)}</span>
+            )}
+          </span>
+          <span className={summary.total_midnight > 0 ? "" : "text-gray-300"}>
+            深夜 {formatHM(summary.total_midnight)}
+            {summary.total_midnight > 0 && (
+              <span className="text-gray-700 font-medium"> → {formatHM(midnightEquiv)}</span>
+            )}
+          </span>
         </div>
 
         {/* 進捗バー */}
@@ -415,7 +612,8 @@ export default function AttendanceTab({
           />
         </div>
         <p className="mt-1 text-[10px] text-gray-400">
-          時間外 = 1日8時間超 + 週40時間超。法定休日労働と深夜割増は 36協定の時間外には含めていません。
+          通常残業 = 1日8時間超 + 週40時間超。法定休日 (×1.35) と深夜 (+0.25) は割増率の比で通常残業 (×1.25) に換算して枠を消費します。
+          {hasEquiv && "このため実時間の合計と残り時間を足しても 35:00 にはなりません。残りは「あと通常残業できる時間」です。"}
         </p>
       </div>
 
@@ -564,6 +762,194 @@ export default function AttendanceTab({
           </table>
         </div>
       )}
+
+      {/* 印刷用 (画面には出ない。globals.css の @media print で表示に切替わる) */}
+      <div className="print-area">
+        <div className="print-head">
+          <h1>出　勤　簿</h1>
+          <div className="print-meta">
+            <span>{currentOfficeName ?? ""}</span>
+            <span>{month.replace("-", "年")}月分</span>
+            <span>氏名：{employeeName}</span>
+          </div>
+          <div className="print-seal">確認印</div>
+        </div>
+
+        <table className="print-table">
+          <thead>
+            <tr>
+              <th>日付</th>
+              <th>曜日</th>
+              <th>出勤</th>
+              <th>退勤</th>
+              <th>休憩</th>
+              <th>実労働</th>
+              <th>時間外</th>
+              <th>深夜</th>
+              <th>法定休日</th>
+              <th>有給</th>
+              <th>出張km</th>
+              <th className="print-note">備考</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const d = dailies[i];
+              const overtime = (d?.daily_overtime ?? 0) + (d?.weekly_overtime ?? 0);
+              const worked = (d?.work_minutes ?? 0) > 0;
+              return (
+                <tr key={r.work_date}>
+                  <td>{parseInt(r.work_date.slice(8), 10)}</td>
+                  <td>{WEEK_DAY_LABELS[r.dow]}</td>
+                  <td>{r.start_time}</td>
+                  <td>{r.end_time}</td>
+                  <td>{r.break_minutes > 0 ? formatHM(r.break_minutes) : ""}</td>
+                  <td>{worked ? formatHM(d.work_minutes) : ""}</td>
+                  <td>{overtime > 0 ? formatHM(overtime) : ""}</td>
+                  <td>{(d?.midnight_overtime ?? 0) > 0 ? formatHM(d.midnight_overtime) : ""}</td>
+                  <td>{(d?.holiday_work ?? 0) > 0 ? formatHM(d.holiday_work) : ""}</td>
+                  <td>{r.paid_leave_type === "full" ? "○" : r.paid_leave_type === "half" ? "半" : ""}</td>
+                  <td>{r.business_km}</td>
+                  <td className="print-note">{r.note}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={5}>月合計</td>
+              <td>{formatHM(summary.total_work)}</td>
+              <td>{formatHM(overtimeTotal)}</td>
+              <td>{formatHM(summary.total_midnight)}</td>
+              <td>{formatHM(summary.total_holiday)}</td>
+              <td>{summary.total_paid_leave_days} 日</td>
+              <td />
+              <td className="print-note" />
+            </tr>
+          </tfoot>
+        </table>
+
+        <p className="print-foot">
+          通常残業 {formatHM(overtimeTotal)}
+          ／ 法定休日 {formatHM(summary.total_holiday)}（換算 {formatHM(holidayEquiv)}）
+          ／ 深夜 {formatHM(summary.total_midnight)}（換算 {formatHM(midnightEquiv)}）
+          {summary.total_absence > 0 && `　欠勤 ${formatHM(summary.total_absence)}`}
+        </p>
+        <p className="print-foot print-strong">
+          消費計 {formatHM(consumed)} ／ 月上限 {MONTHLY_OVERTIME_LIMIT_HOURS}:00
+          （{remaining >= 0 ? `あと残業できる時間 ${formatHM(remaining)}` : `超過 ${formatHM(-remaining)}`}）
+        </p>
+        <p className="print-foot print-note-small">
+          通常残業は 1 日 8 時間超および週 40 時間超の合計。法定休日 (×1.35) と深夜 (+0.25) は
+          通常残業 (×1.25) との割増率比で換算して上限枠を消費するため、実時間の合計と残り時間の和は
+          {MONTHLY_OVERTIME_LIMIT_HOURS}:00 になりません。
+        </p>
+      </div>
+
+      {showUrlModal && office && (
+        <StaffUrlModal payrollOfficeId={office.id} onClose={() => setShowUrlModal(false)} />
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// 自己入力 URL 管理モーダル
+// =====================================================================
+
+type StaffUrl = { employee_id: string; name: string; url: string | null };
+
+function StaffUrlModal({ payrollOfficeId, onClose }: { payrollOfficeId: string; onClose: () => void }) {
+  const [staff, setStaff] = useState<StaffUrl[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/attendance-url?payroll_office_id=${payrollOfficeId}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(json.error ?? `エラー (${res.status})`);
+          return;
+        }
+        setStaff(json.staff ?? []);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [payrollOfficeId]);
+
+  const handleCopy = async (s: StaffUrl) => {
+    if (!s.url) return;
+    try {
+      await navigator.clipboard.writeText(s.url);
+      setCopiedId(s.employee_id);
+      setTimeout(() => setCopiedId((prev) => (prev === s.employee_id ? null : prev)), 1500);
+    } catch {
+      // clipboard 不許可環境: prompt で手動コピーさせる
+      window.prompt("この URL をコピーしてください", s.url);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+          <Link2 size={16} className="text-emerald-600" />
+          <h3 className="text-sm font-semibold text-gray-700 flex-1">出勤簿 自己入力 URL</h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 text-gray-400">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="px-4 py-2 text-[11px] text-gray-500 border-b border-gray-50">
+          各スタッフに自分の URL を渡すと、スマホから本人が自分の出勤簿だけを入力できます。
+          URL はこの画面を開くたびに同じものが表示されます (個人ごとに固定)。
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3">
+          {loading ? (
+            <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin text-emerald-400" /></div>
+          ) : error ? (
+            <div className="text-xs text-red-600 py-4 text-center">{error}</div>
+          ) : staff.length === 0 ? (
+            <div className="text-xs text-gray-400 py-4 text-center">在籍職員がいません</div>
+          ) : (
+            <div className="space-y-1.5">
+              {staff.map((s) => (
+                <div key={s.employee_id} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
+                  <span className="text-sm text-gray-700 w-28 shrink-0 truncate">{s.name}</span>
+                  <span className="flex-1 min-w-0 text-[10px] text-gray-400 truncate font-mono">
+                    {s.url ?? "発行不可 (サーバー設定未完了)"}
+                  </span>
+                  <button
+                    onClick={() => handleCopy(s)}
+                    disabled={!s.url}
+                    className="text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
+                  >
+                    {copiedId === s.employee_id ? (
+                      <><Check size={12} className="text-emerald-600" />コピー済</>
+                    ) : (
+                      <><Copy size={12} />コピー</>
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="px-4 py-2.5 border-t border-gray-100 text-[10px] text-gray-400">
+          URL を無効化したい場合は、サーバーの ATTENDANCE_FORM_SECRET を変更してください (全員分が一斉に無効になります)。
+        </div>
+      </div>
     </div>
   );
 }
