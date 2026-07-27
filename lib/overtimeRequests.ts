@@ -1,8 +1,9 @@
 import { supabase, OvertimeRequest } from "./supabase";
 
 // 残業許可申請書 + 承認ワークフロー (残業許可制)。
-// RLS: SELECT は自事業所が見える人全員、UPDATE は本人(pending中のみ)/事業所管理者で分岐。
-// (apps/order-app/supabase/migrations/create_overtime_requests.sql)
+// RLS: SELECT は本人の申請のみ/事業所管理者は事業所全体、UPDATE は本人(pending中のみ)/事業所管理者で分岐。
+// (apps/order-app/supabase/migrations/create_overtime_requests.sql,
+//  overtime_requests_read_own_or_admin.sql)
 
 export type NewOvertimeRequest = {
   tenantId: string;
