@@ -256,6 +256,34 @@ export type DocTask = {
   merged_into_task_id: string | null;
 };
 
+// 残業許可申請書 + 承認ワークフロー (残業許可制)
+export type OvertimeStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+export type OvertimeRequest = {
+  id: string;
+  tenant_id: string;
+  office_id: string;
+  member_id: string;
+  member_name: string;
+  submitted_by: string;
+  target_date: string; // YYYY-MM-DD
+  scheduled_end_time: string | null; // HH:MM:SS
+  overtime_start_time: string; // HH:MM:SS
+  overtime_end_time: string; // HH:MM:SS
+  planned_minutes: number;
+  work_content: string | null;
+  reason: string;
+  status: OvertimeStatus;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_reason: string | null;
+  actual_minutes: number | null;
+  actual_recorded_by: string | null;
+  actual_recorded_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 // 個別援助計画書 要素 (発生事象を時系列で蓄積)
 // 用具追加/解約・保険情報更新/区分変更/居宅変更を 1 行ずつ INSERT し、UI で
 // 複数チェックして 1 計画書にまとめる。doc_tasks とは別系統。

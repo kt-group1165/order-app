@@ -43,6 +43,7 @@ import {
   Trash2,
   Pencil,
   History,
+  Clock,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
@@ -75,6 +76,7 @@ import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type 
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 import UserBillingTab from "./UserBillingTab";
 import CeilingPriceTab from "./CeilingPriceTab";
+import OvertimeTab from "./OvertimeTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
@@ -289,7 +291,7 @@ const toDateInput = (s: string | null | undefined): string => {
   return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 };
 
-type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "notifications" | "settings";
+type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "overtime" | "notifications" | "settings";
 
 // ホーム(メニュー一覧)画面
 function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: (t: Tab) => void }) {
@@ -300,6 +302,7 @@ function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: 
     { id: "doc-tasks", icon: FileWarning, label: "書類タスク", desc: "期限・不足書類の管理" },
     { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
     { id: "staff", icon: Users, label: "職員", desc: "スタッフ管理" },
+    { id: "overtime", icon: Clock, label: "残業管理", desc: "残業許可申請・承認・残業時間管理表" },
     { id: "meeting-notes", icon: ClipboardCheck, label: "担当者会議録", desc: "サービス担当者会議の要点(第4表)" },
     { id: "demo-units", icon: Package, label: "デモ機管理", desc: "特定福祉用具のデモ貸出状況" },
     { id: "billing", icon: CreditCard, label: "請求", desc: "月次請求・売上帳票・損益" },
@@ -476,6 +479,7 @@ export default function TenantPage({
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
+        {activeTab === "overtime" && <OvertimeTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} currentOfficeId={currentOfficeId} currentOfficeName={currentOfficeName} officeViewAll={officeViewAll} />}
         {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
@@ -22463,7 +22467,7 @@ function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: stri
           const collected: typeof members = [];
           for (let i = 0; i < memberIds.length; i += CHUNK) {
             const slice = memberIds.slice(i, i + CHUNK);
-            let q = supabase.from("members").select("*").eq("tenant_id", tenantId).in("id", slice);
+            let q = supabase.from("members").select("*").eq("tenant_id", tenantId).is("deleted_at", null).in("id", slice);
             if (!includeInactive) q = q.eq("status", "active");
             const { data, error } = await q;
             if (error) {
