@@ -596,10 +596,13 @@ export default function AttendanceTab({
               <span className="text-gray-700 font-medium"> → {formatHM(holidayEquiv)}</span>
             )}
           </span>
-          <span className={summary.total_midnight > 0 ? "" : "text-gray-300"}>
-            深夜 {formatHM(summary.total_midnight)}
+          <span
+            className={summary.total_midnight > 0 ? "" : "text-gray-300"}
+            title="深夜の時間帯そのものは通常残業側で消費済み。深夜手当 (+0.25) の上乗せぶんだけを追加で消費します"
+          >
+            深夜上乗せ {formatHM(summary.total_midnight)}分
             {summary.total_midnight > 0 && (
-              <span className="text-gray-700 font-medium"> → {formatHM(midnightEquiv)}</span>
+              <span className="text-gray-700 font-medium"> → +{formatHM(midnightEquiv)}</span>
             )}
           </span>
         </div>
