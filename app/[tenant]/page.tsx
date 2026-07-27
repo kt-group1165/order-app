@@ -44,6 +44,7 @@ import {
   Pencil,
   History,
   Clock,
+  CalendarClock,
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
@@ -77,6 +78,7 @@ import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/carepla
 import UserBillingTab from "./UserBillingTab";
 import CeilingPriceTab from "./CeilingPriceTab";
 import OvertimeTab from "./OvertimeTab";
+import AttendanceTab from "./AttendanceTab";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import { invalidateCache } from "@/lib/cache";
@@ -291,7 +293,7 @@ const toDateInput = (s: string | null | undefined): string => {
   return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 };
 
-type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "overtime" | "notifications" | "settings";
+type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "overtime" | "attendance" | "notifications" | "settings";
 
 // ホーム(メニュー一覧)画面
 function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: (t: Tab) => void }) {
@@ -303,6 +305,7 @@ function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: 
     { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
     { id: "staff", icon: Users, label: "職員", desc: "スタッフ管理" },
     { id: "overtime", icon: Clock, label: "残業管理", desc: "残業許可申請・承認・残業時間管理表" },
+    { id: "attendance", icon: CalendarClock, label: "出勤簿", desc: "日次の出退勤入力・月次残業時間の集計" },
     { id: "meeting-notes", icon: ClipboardCheck, label: "担当者会議録", desc: "サービス担当者会議の要点(第4表)" },
     { id: "demo-units", icon: Package, label: "デモ機管理", desc: "特定福祉用具のデモ貸出状況" },
     { id: "billing", icon: CreditCard, label: "請求", desc: "月次請求・売上帳票・損益" },
@@ -480,6 +483,7 @@ export default function TenantPage({
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "overtime" && <OvertimeTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
+        {activeTab === "attendance" && <AttendanceTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} currentOfficeId={currentOfficeId} currentOfficeName={currentOfficeName} officeViewAll={officeViewAll} />}
         {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
