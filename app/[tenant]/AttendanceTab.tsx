@@ -769,7 +769,7 @@ export default function AttendanceTab({
       ) : (
         // padding を付けると sticky ヘッダー/フッターの外側に行が透けるので余白なし
         <div className="flex-1 overflow-auto">
-          <table className="w-full min-w-[1080px] text-sm bg-white">
+          <table className="w-full min-w-[1240px] text-sm bg-white">
             <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-2 w-24">日付</th>
@@ -785,7 +785,7 @@ export default function AttendanceTab({
                     <th className="text-right px-2 py-2 w-20">手当</th>
                   </>
                 )}
-                <th className="text-left px-2 py-2 w-32" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
+                <th className="text-left px-2 py-2 w-60" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
                 <th className="text-left px-2 py-2">備考</th>
                 <th className="text-right px-2 py-2 w-20">実労働</th>
                 <th className="text-right px-2 py-2 w-20">時間外</th>
@@ -893,12 +893,12 @@ export default function AttendanceTab({
                       </>
                     )}
                     <td className="px-2 py-1">
-                      <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1">
                         <input
                           type="date"
                           value={r.substitute_for_date}
                           onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
-                          className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs"
+                          className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-0.5 text-xs"
                           title="この休みの元になった出勤日 (1つ目)"
                         />
                         {(r.substitute_for_date || r.substitute_for_date2) && (
@@ -906,7 +906,7 @@ export default function AttendanceTab({
                             type="date"
                             value={r.substitute_for_date2}
                             onChange={(e) => patchRow(i, { substitute_for_date2: e.target.value })}
-                            className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs"
+                            className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-0.5 text-xs"
                             title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
                           />
                         )}
