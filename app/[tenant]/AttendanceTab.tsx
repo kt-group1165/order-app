@@ -17,6 +17,7 @@ import {
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
+  extendedMonthRange,
   formatHM,
   minutesBetween,
   type AttendanceRecord,
@@ -55,6 +56,32 @@ function midnightToOvertimeEquiv(min: number): number {
 }
 
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
+// 出勤簿の稼働開始月。これより前の月へは移動できない。
+// 開始月に限り、前月 (2026-06) 最終週のうち開始月の初週に属する日を
+// 「編集可能な行」としてグリッド先頭に出す (週 40h 残業の計算材料。月合計には含めない)。
+const FIRST_MONTH = "2026-07";
+
+/**
+ * 開始月の初週に属する前月側の日付 (YYYY-MM-DD) を返す。
+ * 開始月以外は空。週起算 (weekStart) により 0〜6 日になる。
+ */
+function prevMonthTailDates(month: string, weekStart: number): string[] {
+  if (month !== FIRST_MONTH) return [];
+  const { start } = extendedMonthRange(month, weekStart);
+  const monthStart = `${month}-01`;
+  if (!start || start >= monthStart) return [];
+  const out: string[] = [];
+  const [y, m, d] = start.split("-").map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  for (let i = 0; i < 7; i++) {
+    const s = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, "0")}-${String(cur.getUTCDate()).padStart(2, "0")}`;
+    if (s >= monthStart) break;
+    out.push(s);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
 
 // 拘束 6 時間以上の日に自動で入れる休憩 (労基法 §34 は 6h 超で 45 分・8h 超で 60 分だが、
 // 運用上は 6 時間以上なら一律 60 分を既定値にする)。手入力済みの行は上書きしない。
@@ -171,7 +198,10 @@ export default function AttendanceTab({
   currentOfficeId: string | null;
   currentOfficeName: string | null;
 }) {
-  const [month, setMonth] = useState<string>(currentMonth);
+  const [month, setMonth] = useState<string>(() => {
+    const m = currentMonth();
+    return m < FIRST_MONTH ? FIRST_MONTH : m;
+  });
   const [office, setOffice] = useState<AttendanceOffice | null>(null);
   const [officeMissing, setOfficeMissing] = useState(false);
   const [employees, setEmployees] = useState<AttendanceEmployee[]>([]);
@@ -219,10 +249,16 @@ export default function AttendanceTab({
   }, [currentOfficeId]);
 
   // ─── 出勤簿 row 読込 ────────────────────────────────────────────────
+  // 開始月 (FIRST_MONTH) では前月最終週の日も編集可能な行として先頭に足す。
+  // 保存先は同じ table (work_date が前月なだけ) なので、既存の extended fetch で
+  // 拾われ、週 40h 計算に自動で乗る。月合計は calcMonthlySummary の monthFilter で
+  // 当月分しか積まれないため汚染しない。
   const load = useCallback(async () => {
     const days = daysOfMonth(month);
+    const prevDays = prevMonthTailDates(month, weekStart);
+    const allDays = [...prevDays, ...days];
     if (!employeeId) {
-      setRows(days.map(emptyRow));
+      setRows(allDays.map(emptyRow));
       setNeighbors([]);
       return;
     }
@@ -232,9 +268,14 @@ export default function AttendanceTab({
         getAttendanceRecords(employeeId, month, weekStart),
         getCompanyHolidays(tenantId, month, weekStart),
       ]);
-      const byDate = new Map(res.currentMonthRows.map((r) => [r.work_date, r]));
+      const prevSet = new Set(prevDays);
+      const byDate = new Map(
+        [...res.currentMonthRows, ...res.neighborRows.filter((r) => prevSet.has(r.work_date))].map(
+          (r) => [r.work_date, r],
+        ),
+      );
       setRows(
-        days.map((d) => {
+        allDays.map((d) => {
           const db = byDate.get(d);
           if (!db) return emptyRow(d);
           return {
@@ -258,11 +299,12 @@ export default function AttendanceTab({
           };
         }),
       );
-      setNeighbors(res.neighborRecords);
+      // 前月最終週は編集行に昇格させたので、calc 用 neighbor からは除外 (二重計上防止)
+      setNeighbors(res.neighborRecords.filter((n) => !prevSet.has(n.work_date)));
       setCompanyHolidays(holidays);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
-      setRows(days.map(emptyRow));
+      setRows(allDays.map(emptyRow));
       setNeighbors([]);
     } finally {
       setLoading(false);
@@ -375,7 +417,8 @@ export default function AttendanceTab({
   const handleExportCsv = () => {
     try {
       exportAttendanceCsv({
-        rows: rows.map((r) => ({
+        // 前月最終週の行 (開始月のみ存在) は当月の CSV に含めない
+        rows: rows.filter((r) => r.work_date.startsWith(month)).map((r) => ({
           work_date: r.work_date,
           start_time: r.start_time,
           end_time: r.end_time,
@@ -461,13 +504,19 @@ export default function AttendanceTab({
         <h2 className="font-semibold text-gray-700">出勤簿</h2>
 
         <div className="flex items-center gap-1 ml-2">
-          <button onClick={() => setMonth((m) => shiftMonth(m, -1))} className="p-1 rounded hover:bg-gray-100 text-gray-500" title="前月">
+          <button
+            onClick={() => setMonth((m) => (shiftMonth(m, -1) < FIRST_MONTH ? m : shiftMonth(m, -1)))}
+            disabled={month <= FIRST_MONTH}
+            className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30"
+            title={month <= FIRST_MONTH ? `${FIRST_MONTH} より前はありません` : "前月"}
+          >
             <ChevronLeft size={16} />
           </button>
           <input
             type="month"
             value={month}
-            onChange={(e) => setMonth(e.target.value)}
+            min={FIRST_MONTH}
+            onChange={(e) => setMonth(e.target.value < FIRST_MONTH ? FIRST_MONTH : e.target.value)}
             className="text-xs border border-gray-300 rounded px-2 py-1"
           />
           <button onClick={() => setMonth((m) => shiftMonth(m, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500" title="次月">
@@ -648,8 +697,17 @@ export default function AttendanceTab({
               </tr>
             </thead>
             <tbody>
+              {rows.some((r) => !r.work_date.startsWith(month)) && (
+                <tr className="bg-sky-50 border-b border-sky-100">
+                  <td colSpan={12} className="px-2 py-1 text-[11px] text-sky-700">
+                    前月 ({parseInt(rows[0].work_date.slice(5, 7), 10)}月) 最終週 —
+                    週40時間の残業計算にのみ使います。月合計・印刷・CSV には含まれません
+                  </td>
+                </tr>
+              )}
               {rows.map((r, i) => {
                 const d = dailies[i];
+                const isPrevMonth = !r.work_date.startsWith(month);
                 const holidayName = getJapaneseHolidayName(r.work_date);
                 const isCompanyHoliday = companyHolidays.has(r.work_date);
                 const isRed = r.dow === 0 || isJapaneseHoliday(r.work_date);
@@ -657,11 +715,13 @@ export default function AttendanceTab({
                 return (
                   <tr
                     key={r.work_date}
-                    className={`border-b border-gray-100 ${r.dirty ? "bg-emerald-50/60" : isCompanyHoliday ? "bg-amber-50/50" : "hover:bg-gray-50"}`}
+                    className={`border-b border-gray-100 ${r.dirty ? "bg-emerald-50/60" : isPrevMonth ? "bg-sky-50/40" : isCompanyHoliday ? "bg-amber-50/50" : "hover:bg-gray-50"}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap">
                       <span className={isRed ? "text-red-600" : r.dow === 6 ? "text-blue-600" : "text-gray-700"}>
-                        {parseInt(r.work_date.slice(8), 10)}日 ({WEEK_DAY_LABELS[r.dow]})
+                        {isPrevMonth
+                          ? `${parseInt(r.work_date.slice(5, 7), 10)}/${parseInt(r.work_date.slice(8), 10)} (${WEEK_DAY_LABELS[r.dow]})`
+                          : `${parseInt(r.work_date.slice(8), 10)}日 (${WEEK_DAY_LABELS[r.dow]})`}
                       </span>
                       {(holidayName || isCompanyHoliday) && (
                         <span className="ml-1 text-[10px] text-gray-400" title={holidayName ?? "会社休日"}>
@@ -797,6 +857,8 @@ export default function AttendanceTab({
           </thead>
           <tbody>
             {rows.map((r, i) => {
+              // 前月最終週の行 (開始月のみ) は印刷に含めない
+              if (!r.work_date.startsWith(month)) return null;
               const d = dailies[i];
               const overtime = (d?.daily_overtime ?? 0) + (d?.weekly_overtime ?? 0);
               const worked = (d?.work_minutes ?? 0) > 0;

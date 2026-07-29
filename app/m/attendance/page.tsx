@@ -11,6 +11,7 @@ import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle 
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
+  extendedMonthRange,
   formatHM,
   minutesBetween,
   type AttendanceRecord,
@@ -31,6 +32,27 @@ const DEFAULT_BREAK_THRESHOLD_MIN = 6 * 60;
 const DEFAULT_BREAK_MINUTES = 60;
 
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
+// 稼働開始月 (AttendanceTab.tsx と同一)。これより前へは移動不可。
+// 開始月のみ、初週に属する前月 (6月) の日を編集行として先頭に出す (週40h 計算用)。
+const FIRST_MONTH = "2026-07";
+
+function prevMonthTailDates(month: string, weekStart: number): string[] {
+  if (month !== FIRST_MONTH) return [];
+  const { start } = extendedMonthRange(month, weekStart);
+  const monthStart = `${month}-01`;
+  if (!start || start >= monthStart) return [];
+  const out: string[] = [];
+  const [y, m, d] = start.split("-").map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  for (let i = 0; i < 7; i++) {
+    const s = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, "0")}-${String(cur.getUTCDate()).padStart(2, "0")}`;
+    if (s >= monthStart) break;
+    out.push(s);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
 
 type DbRow = {
   id?: string;
@@ -136,7 +158,10 @@ function SelfAttendanceInner() {
   const searchParams = useSearchParams();
   const token = searchParams.get("t");
 
-  const [month, setMonth] = useState<string>(currentMonth);
+  const [month, setMonth] = useState<string>(() => {
+    const m = currentMonth();
+    return m < FIRST_MONTH ? FIRST_MONTH : m;
+  });
   const [name, setName] = useState<string>("");
   const [weekStart, setWeekStart] = useState(0);
   const [rows, setRows] = useState<RowState[]>([]);
@@ -169,12 +194,17 @@ function SelfAttendanceInner() {
       setCompanyHolidays(new Set<string>(json.company_holidays ?? []));
 
       const days = daysOfMonth(month);
+      // 開始月のみ: 初週に属する前月の日を編集行に昇格 (週40h 計算用)。
+      // byDate に入れて allDays で行化し、calc 用 neighbor からは外す (二重計上防止)。
+      const prevDays = prevMonthTailDates(month, ws);
+      const prevSet = new Set(prevDays);
+      const allDays = [...prevDays, ...days];
       const monthStart = days[0];
       const monthEnd = days[days.length - 1];
       const byDate = new Map<string, DbRow>();
       const neigh: AttendanceRecord[] = [];
       for (const r of (json.records ?? []) as DbRow[]) {
-        if (r.work_date >= monthStart && r.work_date <= monthEnd) {
+        if ((r.work_date >= monthStart && r.work_date <= monthEnd) || prevSet.has(r.work_date)) {
           byDate.set(r.work_date, r);
         } else {
           neigh.push({
@@ -193,7 +223,7 @@ function SelfAttendanceInner() {
       }
       setNeighbors(neigh);
       setRows(
-        days.map((d) => {
+        allDays.map((d) => {
           const db = byDate.get(d);
           if (!db) return emptyRow(d);
           return {
@@ -319,7 +349,11 @@ function SelfAttendanceInner() {
           <h1 className="text-sm font-semibold flex-1 truncate">出勤簿{name ? ` — ${name}` : ""}</h1>
         </div>
         <div className="flex items-center justify-center gap-2 mt-2">
-          <button onClick={() => setMonth((m) => shiftMonth(m, -1))} className="p-1 rounded hover:bg-emerald-500">
+          <button
+            onClick={() => setMonth((m) => (shiftMonth(m, -1) < FIRST_MONTH ? m : shiftMonth(m, -1)))}
+            disabled={month <= FIRST_MONTH}
+            className="p-1 rounded hover:bg-emerald-500 disabled:opacity-30"
+          >
             <ChevronLeft size={18} />
           </button>
           <span className="text-sm font-medium tabular-nums">{month.replace("-", "年")}月</span>
@@ -350,17 +384,26 @@ function SelfAttendanceInner() {
         <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-emerald-400" /></div>
       ) : (
         <div className="p-2 space-y-1">
+          {rows.some((r) => !r.work_date.startsWith(month)) && (
+            <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-1.5 text-[10px] text-sky-700">
+              下の {parseInt(rows[0].work_date.slice(5, 7), 10)}月分は前月最終週です。
+              週40時間の残業計算にだけ使い、月合計には含まれません
+            </div>
+          )}
           {rows.map((r, i) => {
             const d = dailies[i];
+            const isPrevMonth = !r.work_date.startsWith(month);
             const overtime = (d?.daily_overtime ?? 0) + (d?.weekly_overtime ?? 0);
             const holidayName = getJapaneseHolidayName(r.work_date);
             const isCompanyHoliday = companyHolidays.has(r.work_date);
             const isRed = r.dow === 0 || isJapaneseHoliday(r.work_date);
             return (
-              <div key={r.work_date} className={`bg-white rounded-xl border px-3 py-2 ${r.dirty ? "border-emerald-300" : "border-gray-200"}`}>
+              <div key={r.work_date} className={`rounded-xl border px-3 py-2 ${r.dirty ? "bg-white border-emerald-300" : isPrevMonth ? "bg-sky-50/60 border-sky-100" : "bg-white border-gray-200"}`}>
                 <div className="flex items-center gap-2">
                   <span className={`text-sm font-medium w-14 shrink-0 ${isRed ? "text-red-600" : r.dow === 6 ? "text-blue-600" : "text-gray-700"}`}>
-                    {parseInt(r.work_date.slice(8), 10)}日({WEEK_DAY_LABELS[r.dow]})
+                    {isPrevMonth
+                      ? `${parseInt(r.work_date.slice(5, 7), 10)}/${parseInt(r.work_date.slice(8), 10)}(${WEEK_DAY_LABELS[r.dow]})`
+                      : `${parseInt(r.work_date.slice(8), 10)}日(${WEEK_DAY_LABELS[r.dow]})`}
                   </span>
                   {(holidayName || isCompanyHoliday) && (
                     <span className="text-[9px] text-gray-400 shrink-0">{holidayName ?? "会社休日"}</span>
