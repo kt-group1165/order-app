@@ -1151,6 +1151,28 @@ export default function AttendanceTab({
         {/* 集計は 2 つの小表に分けて並べる (文章羅列だと読みにくいため) */}
         <div className="print-summary">
           <table className="print-sum-box">
+            <caption>勤務の集計</caption>
+            <tbody>
+              <tr>
+                <th>実労働 合計</th>
+                <td>{formatHM(summary.total_work)}</td>
+              </tr>
+              <tr>
+                <th>出勤日数</th>
+                <td>{workDays} 日</td>
+              </tr>
+              <tr>
+                <th>有給</th>
+                <td>{summary.total_paid_leave_days} 日</td>
+              </tr>
+              <tr>
+                <th>出張距離</th>
+                <td>{kmTotal.toFixed(1)} km</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table className="print-sum-box">
             <caption>時間外の集計</caption>
             <tbody>
               <tr>
@@ -1183,28 +1205,6 @@ export default function AttendanceTab({
                   <td>{formatHM(summary.total_absence)}</td>
                 </tr>
               )}
-            </tbody>
-          </table>
-
-          <table className="print-sum-box">
-            <caption>勤務の集計</caption>
-            <tbody>
-              <tr>
-                <th>実労働 合計</th>
-                <td>{formatHM(summary.total_work)}</td>
-              </tr>
-              <tr>
-                <th>出勤日数</th>
-                <td>{workDays} 日</td>
-              </tr>
-              <tr>
-                <th>有給</th>
-                <td>{summary.total_paid_leave_days} 日</td>
-              </tr>
-              <tr>
-                <th>出張距離</th>
-                <td>{kmTotal.toFixed(1)} km</td>
-              </tr>
             </tbody>
           </table>
 
