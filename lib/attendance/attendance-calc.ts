@@ -486,6 +486,19 @@ export function calcDailyListWithWeekly(
     //   - 法定休日労働日 (manual/auto) → 所定日でない (= 0h)、欠勤判定対象外
     // raw 欠勤時間 = max(0, scheduled_minutes - work_minutes)
     for (const it of list) {
+      // 完全未入力の日は欠勤にしない (2026-07-29 user 確定)。
+      // 月の途中で「これから来る平日」が欠勤として積み上がるのを防ぐ。
+      // 休んだ日を欠勤として出したい場合は 有給/代休 等を明示的に入力する運用。
+      const isUnfilled =
+        it.r.start_time === null &&
+        it.r.end_time === null &&
+        it.r.paid_leave_type === null &&
+        it.r.substitute_for_date === null;
+      if (isUnfilled) {
+        it.daily.scheduled_minutes = 0;
+        it.daily.absence_minutes = 0;
+        continue;
+      }
       if (it.r.is_legal_holiday || it.autoLegalHoliday) {
         it.daily.scheduled_minutes = 0;
         it.daily.absence_minutes = 0;
