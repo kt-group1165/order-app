@@ -36,7 +36,7 @@ const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
 // 稼働開始月 (AttendanceTab.tsx と同一)。これより前へは移動不可。
 // 開始月のみ、初週に属する前月 (6月) の日を編集行として先頭に出す (週40h 計算用)。
-const FIRST_MONTH = "2026-07";
+const FIRST_MONTH = "2026-06";
 
 function prevMonthTailDates(month: string, weekStart: number): string[] {
   if (month !== FIRST_MONTH) return [];
