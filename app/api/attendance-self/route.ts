@@ -18,6 +18,8 @@ type EmployeeCtx = {
   name: string;
   office_id: string;
   work_week_start: number;
+  /** payroll_offices.office_type。'本社' なら電話当番・土日祝対応の入力が有効 */
+  office_type: string;
 };
 
 async function resolveEmployee(token: string | null): Promise<EmployeeCtx | NextResponse> {
@@ -70,7 +72,7 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
   }
   const { data: office, error: officeErr } = await admin
     .from("payroll_offices")
-    .select("id, work_week_start")
+    .select("id, work_week_start, office_type")
     .eq("id", data.office_id)
     .maybeSingle();
   if (officeErr) {
@@ -82,6 +84,7 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
     name: data.name as string,
     office_id: data.office_id as string,
     work_week_start: (office?.work_week_start as number | null) ?? 0,
+    office_type: (office?.office_type as string | null) ?? "",
   };
 }
 
@@ -123,7 +126,11 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json({
-    employee: { name: ctx.name, work_week_start: ctx.work_week_start },
+    employee: {
+      name: ctx.name,
+      work_week_start: ctx.work_week_start,
+      office_type: ctx.office_type,
+    },
     records: recordsRes.data ?? [],
     company_holidays: (holidaysRes.data ?? []).map(
       (r: { holiday_date: string }) => r.holiday_date,
@@ -177,11 +184,23 @@ export async function POST(req: Request) {
     }
     const paidLeave =
       r.paid_leave_type === "full" || r.paid_leave_type === "half" ? r.paid_leave_type : null;
+    // 電話当番・土日祝対応は本社のみ。列未適用の環境を壊さないよう本社以外では含めない
+    const honbuFields =
+      ctx.office_type === "本社"
+        ? {
+            phone_duty: r.phone_duty === true,
+            holiday_support_count: (() => {
+              const n = Number(r.holiday_support_count);
+              return Number.isFinite(n) && n > 0 ? Math.min(99, Math.floor(n)) : 0;
+            })(),
+          }
+        : {};
     rows.push({
       tenant_id: TENANT_ID,
       office_id: ctx.office_id,
       employee_id: ctx.id,
       work_date: workDate,
+      ...honbuFields,
       start_time: time(r.start_time),
       end_time: time(r.end_time),
       break_minutes: Number.isFinite(breakMin) ? Math.max(0, Math.floor(breakMin)) : 0,

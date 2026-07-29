@@ -17,6 +17,7 @@ import {
   type AttendanceRecord,
 } from "@/lib/attendance/attendance-calc";
 import { isJapaneseHoliday, getJapaneseHolidayName } from "@/lib/attendance/japan-holidays";
+import { calcDailyAllowance, summarizeAllowance } from "@/lib/attendance/allowance";
 
 // 35h 枠と割増換算 (AttendanceTab.tsx と同一ロジック。福祉用具の運用ライン)
 const LIMIT_HOURS = 35;
@@ -66,6 +67,8 @@ type DbRow = {
   note: string | null;
   business_km: number | string | null;
   substitute_for_date: string | null;
+  phone_duty?: boolean;
+  holiday_support_count?: number;
 };
 
 type RowState = {
@@ -77,9 +80,17 @@ type RowState = {
   paid_leave_type: "full" | "half" | null;
   business_km: string;
   note: string;
+  phone_duty: boolean;
+  holiday_support_count: string;
   dirty: boolean;
   existed: boolean;
 };
+
+/** 土日祝対応 件数の入力文字列 → 0 以上の整数 */
+function parseHolidayCount(v: string): number {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 // 法定休日 = 日曜で固定 (AttendanceTab.tsx と同一運用)。手動チェック無しの自動判定。
 // 振替は管理者画面のみの機能なので、本人入力では単純に日曜 = 法定休日とする。
@@ -134,6 +145,8 @@ function emptyRow(work_date: string): RowState {
     paid_leave_type: null,
     business_km: "",
     note: "",
+    phone_duty: false,
+    holiday_support_count: "",
     dirty: false,
     existed: false,
   };
@@ -143,7 +156,8 @@ function isBlank(r: RowState): boolean {
   return (
     !r.start_time && !r.end_time && r.break_minutes === 0 &&
     r.paid_leave_type === null &&
-    !r.business_km.trim() && !r.note.trim()
+    !r.business_km.trim() && !r.note.trim() &&
+    !r.phone_duty && !parseHolidayCount(r.holiday_support_count)
   );
 }
 
@@ -168,6 +182,7 @@ function SelfAttendanceInner() {
     return m < FIRST_MONTH ? FIRST_MONTH : m;
   });
   const [name, setName] = useState<string>("");
+  const [officeType, setOfficeType] = useState<string>("");
   const [weekStart, setWeekStart] = useState(0);
   const [rows, setRows] = useState<RowState[]>([]);
   const [neighbors, setNeighbors] = useState<AttendanceRecord[]>([]);
@@ -175,6 +190,9 @@ function SelfAttendanceInner() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
+
+  /** 統括営業本部 (本社)。電話当番・土日祝対応の入力と手当計算はここだけ */
+  const isHonbu = officeType === "本社";
 
   const load = useCallback(async () => {
     if (!token) {
@@ -194,6 +212,7 @@ function SelfAttendanceInner() {
       }
       setFatal(null);
       setName(json.employee?.name ?? "");
+      setOfficeType(json.employee?.office_type ?? "");
       const ws: number = json.employee?.work_week_start ?? 0;
       setWeekStart(ws);
       setCompanyHolidays(new Set<string>(json.company_holidays ?? []));
@@ -244,6 +263,11 @@ function SelfAttendanceInner() {
             business_km:
               db.business_km === null || db.business_km === undefined ? "" : String(db.business_km),
             note: db.note ?? "",
+            phone_duty: db.phone_duty === true,
+            holiday_support_count:
+              db.holiday_support_count && db.holiday_support_count > 0
+                ? String(db.holiday_support_count)
+                : "",
             dirty: false,
             existed: true,
           };
@@ -260,6 +284,19 @@ function SelfAttendanceInner() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mount / 月変更時の async fetch
     load();
   }, [load]);
+
+  const allowance = useMemo(
+    () =>
+      summarizeAllowance(
+        rows
+          .filter((r) => r.work_date.startsWith(month))
+          .map((r) => ({
+            phone_duty: r.phone_duty,
+            holiday_support_count: parseHolidayCount(r.holiday_support_count),
+          })),
+      ),
+    [rows, month],
+  );
 
   const dailies = useMemo(() => {
     const all = [...rows.map(toRecord), ...neighbors];
@@ -309,6 +346,9 @@ function SelfAttendanceInner() {
       paid_leave_type: r.paid_leave_type,
       business_km: r.business_km.trim() || null,
       note: r.note,
+      // 本社のみ有効 (API 側で office_type 判定して無視/採用される)
+      phone_duty: r.phone_duty,
+      holiday_support_count: parseHolidayCount(r.holiday_support_count),
     }));
     const delete_dates = dirty.filter((r) => isBlank(r) && r.existed).map((r) => r.work_date);
     if (upserts.length === 0 && delete_dates.length === 0) return;
@@ -381,6 +421,7 @@ function SelfAttendanceInner() {
         </div>
         <div className="mt-1 text-[10px] text-gray-500 tabular-nums">
           実労働 {formatHM(summary.total_work)} ／ 残業 {formatHM(overtimeTotal)} ／ 深夜 {formatHM(summary.total_midnight)} ／ 法休 {formatHM(summary.total_holiday)} ／ 有給 {summary.total_paid_leave_days}日
+          {isHonbu && <> ／ 手当 ¥{allowance.totalPay.toLocaleString()}</>}
         </div>
       </div>
 
@@ -460,6 +501,37 @@ function SelfAttendanceInner() {
                     {(d?.work_minutes ?? 0) > 0 ? formatHM(d.work_minutes) : ""}
                   </span>
                 </div>
+                {isHonbu && (
+                  <div className="flex items-center gap-2 mt-1.5 text-[11px]">
+                    <label className="flex items-center gap-1 text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={r.phone_duty}
+                        onChange={(e) => patchRow(i, { phone_duty: e.target.checked })}
+                        className="accent-emerald-600"
+                      />
+                      電話当番
+                    </label>
+                    <label className="flex items-center gap-1 text-gray-500">
+                      土日祝対応
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={r.holiday_support_count}
+                        onChange={(e) => patchRow(i, { holiday_support_count: e.target.value })}
+                        className="w-12 border border-gray-200 rounded px-1 py-0.5 text-right"
+                      />
+                      件
+                    </label>
+                    {(() => {
+                      const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count));
+                      return pay > 0 ? (
+                        <span className="ml-auto tabular-nums text-emerald-700 font-medium">¥{pay.toLocaleString()}</span>
+                      ) : null;
+                    })()}
+                  </div>
+                )}
               </div>
             );
           })}

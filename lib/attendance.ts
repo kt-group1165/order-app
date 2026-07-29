@@ -28,6 +28,8 @@ export type AttendanceOffice = {
   work_week_start: number;
   /** 共通マスタの事業所名 */
   name: string;
+  /** payroll_offices.office_type。'本社' なら電話当番・土日祝対応の入力欄が出る */
+  office_type: string;
 };
 
 /**
@@ -67,6 +69,10 @@ export type AttendanceDbRow = {
   note: string | null;
   business_km: number | null;
   substitute_for_date: string | null;
+  /** 電話当番 (本社のみ)。列未適用の環境では undefined */
+  phone_duty?: boolean;
+  /** 土日祝対応 件数 (本社のみ)。列未適用の環境では undefined */
+  holiday_support_count?: number;
 };
 
 export type AttendanceFetchResult = {
@@ -144,19 +150,25 @@ export async function getAttendanceOffices(tenantId: string): Promise<Attendance
 
   const { data, error } = await supabase
     .from("payroll_offices")
-    .select("id, office_id, work_week_start")
+    .select("id, office_id, work_week_start, office_type")
     .in("office_id", active.map((c) => c.id));
   if (error) throw new Error(`事業所の取得に失敗: ${error.message}`);
 
   const nameById = new Map(active.map((c) => [c.id, c.name]));
-  const rows = ((data ?? []) as { id: string; office_id: string; work_week_start: number | null }[]).map(
-    (r) => ({
-      id: r.id,
-      office_id: r.office_id,
-      work_week_start: r.work_week_start ?? 0,
-      name: nameById.get(r.office_id) ?? "(名称不明)",
-    }),
-  );
+  const rows = (
+    (data ?? []) as {
+      id: string;
+      office_id: string;
+      work_week_start: number | null;
+      office_type: string | null;
+    }[]
+  ).map((r) => ({
+    id: r.id,
+    office_id: r.office_id,
+    work_week_start: r.work_week_start ?? 0,
+    name: nameById.get(r.office_id) ?? "(名称不明)",
+    office_type: r.office_type ?? "",
+  }));
   rows.sort((a, b) => a.name.localeCompare(b.name, "ja"));
   return rows;
 }
