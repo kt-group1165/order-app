@@ -382,6 +382,8 @@ export default function TenantPage({
   const [activeTab, setActiveTab] = useState<Tab>("home");
   const [tenantName, setTenantName] = useState(tenantId);
   const [ordersDirty, setOrdersDirty] = useState(false);
+  // 出勤簿タブの未保存件数 (0 = 変更なし)。タブ離脱時の警告に使う
+  const [attendanceDirty, setAttendanceDirty] = useState(0);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
   // 書類タスク → Documents タブ遷移時に、対象 client を pre-select するための受け渡し
@@ -457,7 +459,17 @@ export default function TenantPage({
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-emerald-600 text-white px-4 py-3 flex items-center gap-2 shrink-0">
-        <button onClick={() => setActiveTab("home")} className="flex items-center gap-2 flex-1 min-w-0 text-left" title="ホームメニューへ">
+        <button
+          onClick={() => {
+            const leavingDirty =
+              (activeTab === "orders" && ordersDirty) ||
+              (activeTab === "attendance" && attendanceDirty > 0);
+            if (activeTab !== "home" && leavingDirty) setPendingTabChange("home");
+            else setActiveTab("home");
+          }}
+          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+          title="ホームメニューへ"
+        >
           <Package size={20} className="shrink-0" />
           <div className="min-w-0">
             <h1 className="text-base font-semibold truncate leading-tight">{tenantName}</h1>
@@ -483,7 +495,7 @@ export default function TenantPage({
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "overtime" && <OvertimeTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
-        {activeTab === "attendance" && <AttendanceTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
+        {activeTab === "attendance" && <AttendanceTab tenantId={tenantId} currentOfficeId={currentOfficeId} onDirtyChange={setAttendanceDirty} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} currentOfficeId={currentOfficeId} currentOfficeName={currentOfficeName} officeViewAll={officeViewAll} />}
         {activeTab === "demo-units" && <DemoUnitsTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
@@ -508,7 +520,10 @@ export default function TenantPage({
           <button
             key={id}
             onClick={() => {
-              if (id !== activeTab && activeTab === "orders" && ordersDirty) {
+              const leavingDirty =
+                (activeTab === "orders" && ordersDirty) ||
+                (activeTab === "attendance" && attendanceDirty > 0);
+              if (id !== activeTab && leavingDirty) {
                 setPendingTabChange(id);
               } else {
                 setActiveTab(id);
@@ -534,7 +549,11 @@ export default function TenantPage({
               <AlertCircle size={20} className="text-amber-500 shrink-0 mt-0.5" />
               <div>
                 <p className="font-semibold text-gray-800 text-sm">保存されていない変更があります</p>
-                <p className="text-xs text-gray-500 mt-1">ステータス変更が保存されていません。このまま移動しますか？</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {activeTab === "attendance"
+                    ? `出勤簿の入力 ${attendanceDirty} 件が保存されていません。破棄して移動しますか？`
+                    : "ステータス変更が保存されていません。このまま移動しますか？"}
+                </p>
               </div>
             </div>
             <div className="flex gap-2">
@@ -545,7 +564,12 @@ export default function TenantPage({
                 キャンセル
               </button>
               <button
-                onClick={() => { setActiveTab(pendingTabChange); setPendingTabChange(null); setOrdersDirty(false); }}
+                onClick={() => {
+                  setActiveTab(pendingTabChange);
+                  setPendingTabChange(null);
+                  setOrdersDirty(false);
+                  setAttendanceDirty(0);
+                }}
                 className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium"
               >
                 移動する

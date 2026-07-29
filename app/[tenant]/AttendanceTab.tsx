@@ -200,10 +200,13 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
 export default function AttendanceTab({
   tenantId,
   currentOfficeId,
+  onDirtyChange,
 }: {
   tenantId: string;
   /** app 全体で選択中の共通 office id。出勤簿タブ内 dropdown の初期選択にだけ使う */
   currentOfficeId: string | null;
+  /** 未保存の入力件数を親に通知 (タブ離脱時の警告に使う) */
+  onDirtyChange?: (count: number) => void;
 }) {
   const [month, setMonth] = useState<string>(() => {
     const m = currentMonth();
@@ -222,6 +225,8 @@ export default function AttendanceTab({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  // 振替・代休元の入力欄を開いている行 (work_date)。値が空でも欄を出し続けるため
+  const [subEditing, setSubEditing] = useState<Set<string>>(() => new Set());
   const [isMaster, setIsMaster] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
@@ -402,6 +407,35 @@ export default function AttendanceTab({
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
 
+  /**
+   * 未保存の変更があるとき確認を出す。OK なら true (= 操作を続行してよい)。
+   * 月・事業所・職員の切替や CSV 取込など、入力内容が失われる操作の前に必ず通す。
+   */
+  const confirmIfDirty = (): boolean => {
+    if (dirtyCount === 0) return true;
+    return window.confirm(
+      `保存していない変更が ${dirtyCount} 件あります。
+破棄して移動しますか？`,
+    );
+  };
+
+  // 未保存件数を親に通知 (タブ切替の警告用)
+  useEffect(() => {
+    onDirtyChange?.(dirtyCount);
+  }, [dirtyCount, onDirtyChange]);
+
+  // タブを閉じる・リロードする時のブラウザ標準警告
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // 一部ブラウザは returnValue が必要 (文言はブラウザ既定になる)
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirtyCount]);
+
   // ─── 編集 ───────────────────────────────────────────────────────────
   const patchRow = (idx: number, patch: Partial<RowState>) => {
     setRows((prev) =>
@@ -566,7 +600,10 @@ export default function AttendanceTab({
 
         <div className="flex items-center gap-1 ml-2">
           <button
-            onClick={() => setMonth((m) => (shiftMonth(m, -1) < FIRST_MONTH ? m : shiftMonth(m, -1)))}
+            onClick={() => {
+              if (!confirmIfDirty()) return;
+              setMonth((m) => (shiftMonth(m, -1) < FIRST_MONTH ? m : shiftMonth(m, -1)));
+            }}
             disabled={month <= FIRST_MONTH}
             className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30"
             title={month <= FIRST_MONTH ? `${FIRST_MONTH} より前はありません` : "前月"}
@@ -577,17 +614,30 @@ export default function AttendanceTab({
             type="month"
             value={month}
             min={FIRST_MONTH}
-            onChange={(e) => setMonth(e.target.value < FIRST_MONTH ? FIRST_MONTH : e.target.value)}
+            onChange={(e) => {
+              if (!confirmIfDirty()) return;
+              setMonth(e.target.value < FIRST_MONTH ? FIRST_MONTH : e.target.value);
+            }}
             className="text-xs border border-gray-300 rounded px-2 py-1"
           />
-          <button onClick={() => setMonth((m) => shiftMonth(m, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500" title="次月">
+          <button
+            onClick={() => {
+              if (!confirmIfDirty()) return;
+              setMonth((m) => shiftMonth(m, 1));
+            }}
+            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+            title="次月"
+          >
             <ChevronRight size={16} />
           </button>
         </div>
 
         <select
           value={payrollOfficeId}
-          onChange={(e) => setPayrollOfficeId(e.target.value)}
+          onChange={(e) => {
+            if (!confirmIfDirty()) return;
+            setPayrollOfficeId(e.target.value);
+          }}
           disabled={officeList.length === 0}
           className="text-xs border border-gray-300 rounded px-2 py-1 max-w-[14rem] disabled:bg-gray-50"
           title="出勤簿の対象事業所 (福祉用具 + 本社)"
@@ -600,7 +650,10 @@ export default function AttendanceTab({
 
         <select
           value={employeeId}
-          onChange={(e) => setEmployeeId(e.target.value)}
+          onChange={(e) => {
+            if (!confirmIfDirty()) return;
+            setEmployeeId(e.target.value);
+          }}
           disabled={employees.length === 0}
           className="text-xs border border-gray-300 rounded px-2 py-1 max-w-[12rem] disabled:bg-gray-50"
         >
@@ -621,7 +674,10 @@ export default function AttendanceTab({
             CSV 出力
           </button>
           <button
-            onClick={() => csvInputRef.current?.click()}
+            onClick={() => {
+              if (!confirmIfDirty()) return;
+              csvInputRef.current?.click();
+            }}
             disabled={!employeeId}
             className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
             title="編集済 CSV (Shift-JIS) を取込んで入力欄に反映"
@@ -769,7 +825,7 @@ export default function AttendanceTab({
       ) : (
         // padding を付けると sticky ヘッダー/フッターの外側に行が透けるので余白なし
         <div className="flex-1 overflow-auto">
-          <table className="w-full min-w-[1240px] text-sm bg-white">
+          <table className="w-full min-w-[1340px] text-sm bg-white">
             <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-2 w-24">日付</th>
@@ -785,8 +841,8 @@ export default function AttendanceTab({
                     <th className="text-right px-2 py-2 w-20">手当</th>
                   </>
                 )}
-                <th className="text-left px-2 py-2 w-60" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
-                <th className="text-left px-2 py-2">備考</th>
+                <th className="text-left px-2 py-2 w-[16rem]" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
+                <th className="text-left px-2 py-2 min-w-[10rem]">備考</th>
                 <th className="text-right px-2 py-2 w-20">実労働</th>
                 <th className="text-right px-2 py-2 w-20">時間外</th>
                 <th className="text-right px-2 py-2 w-20">深夜</th>
@@ -893,24 +949,41 @@ export default function AttendanceTab({
                       </>
                     )}
                     <td className="px-2 py-1">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="date"
-                          value={r.substitute_for_date}
-                          onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
-                          className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-0.5 text-xs"
-                          title="この休みの元になった出勤日 (1つ目)"
-                        />
-                        {(r.substitute_for_date || r.substitute_for_date2) && (
+                      {r.substitute_for_date || r.substitute_for_date2 || subEditing.has(r.work_date) ? (
+                        <div className="flex items-center gap-1">
                           <input
                             type="date"
-                            value={r.substitute_for_date2}
-                            onChange={(e) => patchRow(i, { substitute_for_date2: e.target.value })}
-                            className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-0.5 text-xs"
-                            title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
+                            value={r.substitute_for_date}
+                            onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
+                            className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
+                            title="この休みの元になった出勤日 (1つ目)"
                           />
-                        )}
-                      </div>
+                          {(r.substitute_for_date || r.substitute_for_date2) && (
+                            <input
+                              type="date"
+                              value={r.substitute_for_date2}
+                              onChange={(e) => patchRow(i, { substitute_for_date2: e.target.value })}
+                              className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
+                              title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSubEditing((prev) => {
+                              const next = new Set(prev);
+                              next.add(r.work_date);
+                              return next;
+                            })
+                          }
+                          className="text-[11px] text-gray-300 hover:text-emerald-600 px-1"
+                          title="代休の元になった出勤日を入れる"
+                        >
+                          ＋
+                        </button>
+                      )}
                     </td>
                     <td className="px-2 py-1">
                       <input
