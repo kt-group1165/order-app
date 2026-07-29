@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users, CheckCircle2, RotateCcw } from "lucide-react";
 import {
   getAttendanceOffices,
   getAttendanceEmployees,
@@ -9,7 +9,12 @@ import {
   upsertAttendanceRecords,
   deleteAttendanceRecords,
   getCompanyHolidays,
+  getMonthStatus,
+  submitMonth,
+  approveMonth,
+  reopenMonth,
   toUiTime,
+  type MonthStatus,
   type AttendanceOffice,
   type AttendanceEmployee,
   type AttendanceDbRow,
@@ -229,6 +234,9 @@ export default function AttendanceTab({
   const [subEditing, setSubEditing] = useState<Set<string>>(() => new Set());
   // 2 つ目 (半日×2 の組合せ用) を開いている行。1 つ目を入れただけでは出さない
   const [sub2Editing, setSub2Editing] = useState<Set<string>>(() => new Set());
+  // 月次ステータス (null = 未提出)
+  const [monthStatus, setMonthStatus] = useState<MonthStatus | null>(null);
+  const [statusBusy, setStatusBusy] = useState(false);
   const [isMaster, setIsMaster] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
@@ -309,14 +317,17 @@ export default function AttendanceTab({
     if (!employeeId) {
       setRows(days.map(emptyRow));
       setNeighbors([]);
+      setMonthStatus(null);
       return;
     }
     setLoading(true);
     try {
-      const [res, holidays] = await Promise.all([
+      const [res, holidays, status] = await Promise.all([
         getAttendanceRecords(employeeId, month, weekStart),
         getCompanyHolidays(tenantId, month, weekStart),
+        getMonthStatus(employeeId, month),
       ]);
+      setMonthStatus(status);
       const byDate = new Map(res.currentMonthRows.map((r) => [r.work_date, r]));
       setRows(
         days.map((d) => {
@@ -410,6 +421,43 @@ export default function AttendanceTab({
   const workDays = dailies.filter((d) => d.work_minutes > 0).length;
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
+
+  // ─── 確定＆提出 / 承認 / 差し戻し ────────────────────────────────────
+  const runStatusAction = async (
+    action: () => Promise<void>,
+    confirmMsg?: string,
+  ) => {
+    if (!employeeId) return;
+    if (dirtyCount > 0) {
+      alert(`保存していない変更が ${dirtyCount} 件あります。先に保存してください。`);
+      return;
+    }
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    setStatusBusy(true);
+    try {
+      await action();
+      setMonthStatus(await getMonthStatus(employeeId, month));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const handleSubmitMonth = () =>
+    runStatusAction(
+      () => submitMonth(tenantId, employeeId, month, employeeName || null),
+      `${month.replace("-", "年")}月分を確定して提出しますか？\n提出後、本人の入力画面からは編集できなくなります。`,
+    );
+
+  const handleApproveMonth = () =>
+    runStatusAction(() => approveMonth(tenantId, employeeId, month, "管理者"));
+
+  const handleReopenMonth = () =>
+    runStatusAction(
+      () => reopenMonth(employeeId, month),
+      "差し戻して未提出に戻しますか？\n本人が再び入力できるようになります。",
+    );
 
   /**
    * 未保存の変更があるとき確認を出す。OK なら true (= 操作を続行してよい)。
@@ -723,6 +771,57 @@ export default function AttendanceTab({
               <Users size={14} />
               スタッフ管理
             </button>
+          )}
+          {/* 確定＆提出 / 承認 / 差し戻し */}
+          {employeeId && (
+            monthStatus === null ? (
+              <button
+                onClick={handleSubmitMonth}
+                disabled={statusBusy || dirtyCount > 0}
+                className="text-xs px-2.5 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 inline-flex items-center gap-1 disabled:opacity-40"
+                title={dirtyCount > 0 ? "先に保存してください" : "この月を確定して提出する (本人は編集できなくなります)"}
+              >
+                <CheckCircle2 size={14} />
+                確定＆提出
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`text-[11px] px-2 py-1 rounded ${
+                    monthStatus.status === "approved"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-sky-100 text-sky-700"
+                  }`}
+                  title={
+                    monthStatus.status === "approved"
+                      ? `承認 ${monthStatus.approved_at?.slice(0, 16).replace("T", " ") ?? ""}`
+                      : `提出 ${monthStatus.submitted_at?.slice(0, 16).replace("T", " ") ?? ""}`
+                  }
+                >
+                  {monthStatus.status === "approved" ? "承認済み" : "提出済み"}
+                </span>
+                {monthStatus.status === "submitted" && (
+                  <button
+                    onClick={handleApproveMonth}
+                    disabled={statusBusy}
+                    className="text-xs px-2.5 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1 disabled:opacity-40"
+                    title="管理者として承認する"
+                  >
+                    <CheckCircle2 size={14} />
+                    承認
+                  </button>
+                )}
+                <button
+                  onClick={handleReopenMonth}
+                  disabled={statusBusy}
+                  className="text-xs px-2 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 disabled:opacity-40"
+                  title="未提出に戻す (本人が再び入力できるようになります)"
+                >
+                  <RotateCcw size={13} />
+                  差し戻し
+                </button>
+              </div>
+            )
           )}
           <button
             onClick={handleSave}

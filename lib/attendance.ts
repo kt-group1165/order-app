@@ -275,3 +275,97 @@ export async function getCompanyHolidays(
   if (error) throw new Error(`会社休日の取得に失敗: ${error.message}`);
   return new Set((data ?? []).map((r) => (r as { holiday_date: string }).holiday_date));
 }
+
+// =====================================================================
+// 月次ステータス (確定＆提出 / 承認)
+// =====================================================================
+
+/** row 無し = 未提出。submitted = 本人提出済 (本人ロック)、approved = 管理者承認済 */
+export type MonthStatus = {
+  status: "submitted" | "approved";
+  submitted_at: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+};
+
+/** 1 職員 × 1 月のステータス。未提出 or table 未適用なら null */
+export async function getMonthStatus(
+  employeeId: string,
+  month: string,
+): Promise<MonthStatus | null> {
+  const { data, error } = await supabase
+    .from("attendance_month_status")
+    .select("status, submitted_at, approved_at, approved_by")
+    .eq("employee_id", employeeId)
+    .eq("month_start", `${month}-01`)
+    .maybeSingle();
+  if (error) {
+    // 42P01 = table 未適用 → 未提出として扱う
+    if (error.code === "42P01") return null;
+    throw new Error(`提出状況の取得に失敗: ${error.message}`);
+  }
+  return (data as MonthStatus | null) ?? null;
+}
+
+/** 提出 (管理者操作) */
+export async function submitMonth(
+  tenantId: string,
+  employeeId: string,
+  month: string,
+  by: string | null,
+): Promise<void> {
+  const { error } = await supabase.from("attendance_month_status").upsert(
+    {
+      tenant_id: tenantId,
+      employee_id: employeeId,
+      month_start: `${month}-01`,
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+      submitted_by: by,
+      approved_at: null,
+      approved_by: null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "employee_id,month_start" },
+  );
+  if (error) throw new Error(missingTableMsg(error, "提出に失敗"));
+}
+
+/** 承認 (管理者操作) */
+export async function approveMonth(
+  tenantId: string,
+  employeeId: string,
+  month: string,
+  by: string | null,
+): Promise<void> {
+  const { error } = await supabase.from("attendance_month_status").upsert(
+    {
+      tenant_id: tenantId,
+      employee_id: employeeId,
+      month_start: `${month}-01`,
+      status: "approved",
+      approved_at: new Date().toISOString(),
+      approved_by: by,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "employee_id,month_start" },
+  );
+  if (error) throw new Error(missingTableMsg(error, "承認に失敗"));
+}
+
+/** 差し戻し (row 削除 = 未提出に戻す) */
+export async function reopenMonth(employeeId: string, month: string): Promise<void> {
+  const { error } = await supabase
+    .from("attendance_month_status")
+    .delete()
+    .eq("employee_id", employeeId)
+    .eq("month_start", `${month}-01`);
+  if (error) throw new Error(missingTableMsg(error, "差し戻しに失敗"));
+}
+
+function missingTableMsg(error: { code?: string; message: string }, prefix: string): string {
+  if (error.code === "42P01") {
+    return `${prefix}: 提出状況のテーブルが未適用です (migrations/attendance_month_status.sql を適用してください)`;
+  }
+  return `${prefix}: ${error.message}`;
+}
