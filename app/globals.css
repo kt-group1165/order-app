@@ -100,12 +100,13 @@ body {
   .print-table th,
   .print-table td {
     border: 1px solid #999;
-    padding: 0.3mm 1mm;
+    padding: 0.6mm 1mm;
     text-align: right;
-    font-size: 7pt;
-    line-height: 1.2;
-    /* 31 行 + ヘッダ + 集計で ~165mm。1 枚に収まる行高 */
-    height: 5mm;
+    font-size: 7.5pt;
+    line-height: 1.25;
+    /* 行高 6mm: 31 行 + ヘッダ + 集計 ≈ 200mm。見出し・集計表・注記を足しても
+       A4 縦の印字域 (285mm) に収まる */
+    height: 6mm;
     overflow: hidden;
     white-space: nowrap;
   }

@@ -406,6 +406,8 @@ export default function AttendanceTab({
 
   /** 出張距離の月合計 (km) */
   const kmTotal = rows.reduce((a, r) => a + (parseFloat(r.business_km) || 0), 0);
+  /** 出勤日数 (実労働が 1 分でもある日) */
+  const workDays = dailies.filter((d) => d.work_minutes > 0).length;
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
 
@@ -1156,18 +1158,12 @@ export default function AttendanceTab({
                 <td>{formatHM(overtimeTotal)}</td>
               </tr>
               <tr>
-                <th>法定休日 (×1.35)</th>
-                <td>
-                  {formatHM(summary.total_holiday)}
-                  {summary.total_holiday > 0 && ` → ${formatHM(holidayEquiv)}`}
-                </td>
+                <th>法定休日</th>
+                <td>{formatHM(summary.total_holiday)}</td>
               </tr>
               <tr>
-                <th>深夜 (+0.25)</th>
-                <td>
-                  {formatHM(summary.total_midnight)}
-                  {summary.total_midnight > 0 && ` → ${formatHM(midnightEquiv)}`}
-                </td>
+                <th>深夜</th>
+                <td>{formatHM(summary.total_midnight)}</td>
               </tr>
               <tr className="sum">
                 <th>消費計</th>
@@ -1187,6 +1183,28 @@ export default function AttendanceTab({
                   <td>{formatHM(summary.total_absence)}</td>
                 </tr>
               )}
+            </tbody>
+          </table>
+
+          <table className="print-sum-box">
+            <caption>勤務の集計</caption>
+            <tbody>
+              <tr>
+                <th>実労働 合計</th>
+                <td>{formatHM(summary.total_work)}</td>
+              </tr>
+              <tr>
+                <th>出勤日数</th>
+                <td>{workDays} 日</td>
+              </tr>
+              <tr>
+                <th>有給</th>
+                <td>{summary.total_paid_leave_days} 日</td>
+              </tr>
+              <tr>
+                <th>出張距離</th>
+                <td>{kmTotal.toFixed(1)} km</td>
+              </tr>
             </tbody>
           </table>
 
@@ -1214,7 +1232,7 @@ export default function AttendanceTab({
         </div>
 
         <p className="print-foot print-note-small">
-          通常残業 = 1日8時間超 + 週40時間超。法定休日・深夜は割増率比で通常残業 (×1.25) に換算して上限枠を消費。
+          通常残業 = 1日8時間超 + 週40時間超。消費計は 法定休日 (×1.35)・深夜 (+0.25) を通常残業 (×1.25) との割増率比で換算した合計。
           {isHonbu && " 土日祝対応は 1件 6,000円 / 2件以上 10,000円、電話当番とは併給しない。"}
         </p>
       </div>
