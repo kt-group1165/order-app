@@ -92,10 +92,10 @@ const DEFAULT_BREAK_MINUTES = 60;
 
 // 法定休日 = 日曜で固定 (KT Group の運用。実際に休むことが最も多い曜日)。
 // 手動チェックは持たず自動判定する。週の起算曜日 (work_week_start) とは独立。
-// 振替出勤の日曜 (振替元日付あり) は休日を別日に移しているため通常労働日扱い。
+// 振替は「代休の日に元出勤日を書く」方式 (Excel 踏襲) なので日曜側の例外は無い。
 const LEGAL_HOLIDAY_DOW = 0; // 0 = 日曜
-function isLegalHolidayRow(r: { dow: number; substitute_for_date: string }): boolean {
-  return r.dow === LEGAL_HOLIDAY_DOW && !r.substitute_for_date;
+function isLegalHolidayRow(r: { dow: number }): boolean {
+  return r.dow === LEGAL_HOLIDAY_DOW;
 }
 
 // =====================================================================
@@ -111,7 +111,10 @@ type RowState = {
   break_minutes: number;
   paid_leave_type: "full" | "half" | null;
   business_km: string;
+  /** 振替・代休元 1 (この日の休みの元になった出勤日)。set = 代休で休み扱い */
   substitute_for_date: string;
+  /** 振替・代休元 2 (半日出勤×2 を 1 日の代休に組み合わせる用) */
+  substitute_for_date2: string;
   note: string;
   /** 電話当番 (本社のみ表示・保存) */
   phone_duty: boolean;
@@ -165,6 +168,7 @@ function emptyRow(work_date: string): RowState {
     paid_leave_type: null,
     business_km: "",
     substitute_for_date: "",
+    substitute_for_date2: "",
     note: "",
     phone_duty: false,
     holiday_support_count: "",
@@ -182,6 +186,7 @@ function isBlank(r: RowState): boolean {
     r.paid_leave_type === null &&
     !r.business_km.trim() &&
     !r.substitute_for_date &&
+    !r.substitute_for_date2 &&
     !r.note.trim() &&
     !r.phone_duty &&
     !parseHolidayCount(r.holiday_support_count)
@@ -202,7 +207,7 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
     break_minutes: r.break_minutes,
     is_legal_holiday: isLegalHolidayRow(r),
     paid_leave_type: r.paid_leave_type,
-    substitute_for_date: r.substitute_for_date || null,
+    substitute_for_date: r.substitute_for_date || r.substitute_for_date2 || null,
   };
 }
 
@@ -348,6 +353,7 @@ export default function AttendanceTab({
                   : null,
             business_km: db.business_km === null || db.business_km === undefined ? "" : String(db.business_km),
             substitute_for_date: db.substitute_for_date ?? "",
+            substitute_for_date2: db.substitute_for_date2 ?? "",
             note: db.note ?? "",
             phone_duty: db.phone_duty === true,
             holiday_support_count:
@@ -473,6 +479,7 @@ export default function AttendanceTab({
         note: r.note.trim() || null,
         business_km: kmNum,
         substitute_for_date: r.substitute_for_date || null,
+        substitute_for_date2: r.substitute_for_date2 || null,
         // 電話当番・土日祝対応は本社のみ。列未適用の環境を壊さないよう本社以外では送らない
         ...(isHonbu
           ? {
@@ -802,7 +809,7 @@ export default function AttendanceTab({
                     <th className="text-right px-2 py-2 w-20">手当</th>
                   </>
                 )}
-                <th className="text-left px-2 py-2 w-32">振替元</th>
+                <th className="text-left px-2 py-2 w-32" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
                 <th className="text-left px-2 py-2">備考</th>
                 <th className="text-right px-2 py-2 w-20">実労働</th>
                 <th className="text-right px-2 py-2 w-20">時間外</th>
@@ -919,13 +926,24 @@ export default function AttendanceTab({
                       </>
                     )}
                     <td className="px-2 py-1">
-                      <input
-                        type="date"
-                        value={r.substitute_for_date}
-                        onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
-                        className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs"
-                        title="この出勤が振替出勤の場合、元の休日となる日付"
-                      />
+                      <div className="flex flex-col gap-0.5">
+                        <input
+                          type="date"
+                          value={r.substitute_for_date}
+                          onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
+                          className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs"
+                          title="この休みの元になった出勤日 (1つ目)"
+                        />
+                        {(r.substitute_for_date || r.substitute_for_date2) && (
+                          <input
+                            type="date"
+                            value={r.substitute_for_date2}
+                            onChange={(e) => patchRow(i, { substitute_for_date2: e.target.value })}
+                            className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs"
+                            title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
+                          />
+                        )}
+                      </div>
                     </td>
                     <td className="px-2 py-1">
                       <input

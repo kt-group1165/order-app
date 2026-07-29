@@ -67,6 +67,7 @@ type DbRow = {
   note: string | null;
   business_km: number | string | null;
   substitute_for_date: string | null;
+  substitute_for_date2?: string | null;
   phone_duty?: boolean;
   holiday_support_count?: number;
 };
@@ -82,6 +83,9 @@ type RowState = {
   note: string;
   phone_duty: boolean;
   holiday_support_count: string;
+  /** 振替・代休元 (管理者が設定。本人入力 UI は無いが保存で消さないよう保持) */
+  substitute_for_date: string;
+  substitute_for_date2: string;
   dirty: boolean;
   existed: boolean;
 };
@@ -147,6 +151,8 @@ function emptyRow(work_date: string): RowState {
     note: "",
     phone_duty: false,
     holiday_support_count: "",
+    substitute_for_date: "",
+    substitute_for_date2: "",
     dirty: false,
     existed: false,
   };
@@ -157,7 +163,8 @@ function isBlank(r: RowState): boolean {
     !r.start_time && !r.end_time && r.break_minutes === 0 &&
     r.paid_leave_type === null &&
     !r.business_km.trim() && !r.note.trim() &&
-    !r.phone_duty && !parseHolidayCount(r.holiday_support_count)
+    !r.phone_duty && !parseHolidayCount(r.holiday_support_count) &&
+    !r.substitute_for_date && !r.substitute_for_date2
   );
 }
 
@@ -169,7 +176,8 @@ function toRecord(r: RowState): AttendanceRecord {
     break_minutes: r.break_minutes,
     is_legal_holiday: isLegalHolidayDow(r.dow),
     paid_leave_type: r.paid_leave_type,
-    substitute_for_date: null,
+    // 代休 (振替元あり) は休み扱い → 欠勤に積まれない
+    substitute_for_date: r.substitute_for_date || r.substitute_for_date2 || null,
   };
 }
 
@@ -263,6 +271,8 @@ function SelfAttendanceInner() {
             business_km:
               db.business_km === null || db.business_km === undefined ? "" : String(db.business_km),
             note: db.note ?? "",
+            substitute_for_date: db.substitute_for_date ?? "",
+            substitute_for_date2: db.substitute_for_date2 ?? "",
             phone_duty: db.phone_duty === true,
             holiday_support_count:
               db.holiday_support_count && db.holiday_support_count > 0
@@ -349,6 +359,9 @@ function SelfAttendanceInner() {
       // 本社のみ有効 (API 側で office_type 判定して無視/採用される)
       phone_duty: r.phone_duty,
       holiday_support_count: parseHolidayCount(r.holiday_support_count),
+      // 管理者が設定した代休を本人保存で消さないため送り返す
+      substitute_for_date: r.substitute_for_date || null,
+      substitute_for_date2: r.substitute_for_date2 || null,
     }));
     const delete_dates = dirty.filter((r) => isBlank(r) && r.existed).map((r) => r.work_date);
     if (upserts.length === 0 && delete_dates.length === 0) return;

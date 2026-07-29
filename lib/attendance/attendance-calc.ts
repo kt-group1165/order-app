@@ -41,9 +41,12 @@ export type AttendanceRecord = {
    */
   paid_leave_type: "full" | "half" | null;
   /**
-   * 振替元日付 (YYYY-MM-DD)。null = 振替ではない通常の出勤。
-   * NOT NULL の場合、この record の work_date が振替出勤日 (= 所定労働日)、
-   * substitute_for_date は振替先の休日 (= 所定労働日でなくなる)。
+   * 振替・代休元の日付 (YYYY-MM-DD)。null = 通常の日。
+   * NOT NULL の場合、この record の work_date は「代休 (= 休み扱い、所定 0h)」で、
+   * substitute_for_date はその元になった出勤日 (参照情報。計算には使わない)。
+   * ※ 2026-07-29 に order-app の運用 (Excel 出勤簿の向き) に合わせて意味を反転。
+   *    元日付が 2 つある場合 (半日出勤×2 の組合せ) も「set されているか」だけを見るので
+   *    呼出側はどちらか 1 つを入れて渡せばよい。
    */
   substitute_for_date: string | null;
 };
@@ -438,14 +441,6 @@ export function calcDailyListWithWeekly(
     weekGroups.get(wk)!.push(it);
   }
 
-  // 振替先 (= 他の日から休日を振り替えられた日) を pre-build (per-week 処理で必要)
-  const substituteTargetDates = new Set<string>();
-  for (const it of items) {
-    if (it.r.substitute_for_date) {
-      substituteTargetDates.add(it.r.substitute_for_date);
-    }
-  }
-
   for (const list of weekGroups.values()) {
     list.sort((a, b) => a.r.work_date.localeCompare(b.r.work_date));
 
@@ -484,9 +479,8 @@ export function calcDailyListWithWeekly(
 
     // ─── 欠勤 (raw per-day) ───
     // 所定労働日の判定:
-    //   - 平日 (月-金) かつ 祝日でない → 所定日 (= 8h)
-    //   - 振替出勤日 (substitute_for_date が set) → 強制で所定日 (= 8h)
-    //   - 振替先 (= 他の record の substitute_for_date が この日) → 所定日でなくなる (= 0h)
+    //   - 平日 (月-金) かつ 祝日・会社休日でない → 所定日 (= 8h)
+    //   - 代休の日 (substitute_for_date が set = 元出勤日を持つ休み) → 所定日でなくなる (= 0h)
     //   - 全有給 → 所定日でなくなる (= 0h)
     //   - 半有給 → 所定時間 4h
     //   - 法定休日労働日 (manual/auto) → 所定日でない (= 0h)、欠勤判定対象外
@@ -502,19 +496,19 @@ export function calcDailyListWithWeekly(
         it.daily.absence_minutes = 0;
         continue;
       }
-      if (substituteTargetDates.has(it.r.work_date)) {
+      // 代休 (振替元あり) = 休み扱い
+      if (it.r.substitute_for_date !== null) {
         it.daily.scheduled_minutes = 0;
         it.daily.absence_minutes = 0;
         continue;
       }
-      const isSubstituteWorkDay = it.r.substitute_for_date !== null;
       const dt = parseDateUTC(it.r.work_date);
       const dow = dt ? dt.getUTCDay() : 0;
       const isWeekday = dow >= 1 && dow <= 5;
       const isHoliday =
         isJapaneseHoliday(it.r.work_date) ||
         (companyHolidayDates?.has(it.r.work_date) ?? false);
-      const isScheduledDay = isSubstituteWorkDay || (isWeekday && !isHoliday);
+      const isScheduledDay = isWeekday && !isHoliday;
       if (!isScheduledDay) {
         it.daily.scheduled_minutes = 0;
         it.daily.absence_minutes = 0;

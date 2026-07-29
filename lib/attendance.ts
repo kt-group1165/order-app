@@ -68,7 +68,10 @@ export type AttendanceDbRow = {
   paid_leave_type: "full" | "half" | null;
   note: string | null;
   business_km: number | null;
+  /** 振替・代休元 1 (order-app 方式: この日の休みの元になった出勤日) */
   substitute_for_date: string | null;
+  /** 振替・代休元 2 (列未適用の環境では undefined) */
+  substitute_for_date2?: string | null;
   /** 電話当番 (本社のみ)。列未適用の環境では undefined */
   phone_duty?: boolean;
   /** 土日祝対応 件数 (本社のみ)。列未適用の環境では undefined */
@@ -124,7 +127,8 @@ function toRecord(r: AttendanceDbRow): AttendanceRecord {
     break_minutes: r.break_minutes ?? 0,
     is_legal_holiday: !!r.is_legal_holiday,
     paid_leave_type: paidLeaveType,
-    substitute_for_date: r.substitute_for_date ?? null,
+    // どちらかの元日付があれば代休 (休み扱い)
+    substitute_for_date: r.substitute_for_date ?? r.substitute_for_date2 ?? null,
   };
 }
 

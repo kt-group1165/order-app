@@ -213,6 +213,10 @@ export async function POST(req: Request) {
         typeof r.substitute_for_date === "string" && DATE_RE.test(r.substitute_for_date)
           ? r.substitute_for_date
           : null,
+      substitute_for_date2:
+        typeof r.substitute_for_date2 === "string" && DATE_RE.test(r.substitute_for_date2)
+          ? r.substitute_for_date2
+          : null,
     });
   }
   const delDates: string[] = [];
