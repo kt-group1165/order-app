@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users } from "lucide-react";
 import {
-  getAttendanceOffice,
+  getAttendanceOffices,
   getAttendanceEmployees,
   getAttendanceRecords,
   upsertAttendanceRecords,
@@ -198,17 +198,19 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
 export default function AttendanceTab({
   tenantId,
   currentOfficeId,
-  currentOfficeName,
 }: {
   tenantId: string;
+  /** app 全体で選択中の共通 office id。出勤簿タブ内 dropdown の初期選択にだけ使う */
   currentOfficeId: string | null;
-  currentOfficeName: string | null;
 }) {
   const [month, setMonth] = useState<string>(() => {
     const m = currentMonth();
     return m < FIRST_MONTH ? FIRST_MONTH : m;
   });
-  const [office, setOffice] = useState<AttendanceOffice | null>(null);
+  // 出勤簿は app 全体の事業所切替 (福祉用具のみ) と独立に、
+  // 福祉用具 + 本社 (統括営業本部) をタブ内 dropdown で切り替える
+  const [officeList, setOfficeList] = useState<AttendanceOffice[]>([]);
+  const [payrollOfficeId, setPayrollOfficeId] = useState<string>("");
   const [officeMissing, setOfficeMissing] = useState(false);
   const [employees, setEmployees] = useState<AttendanceEmployee[]>([]);
   const [employeeId, setEmployeeId] = useState<string>("");
@@ -223,31 +225,43 @@ export default function AttendanceTab({
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
   const [adminRefresh, setAdminRefresh] = useState(0);
 
+  const office = officeList.find((o) => o.id === payrollOfficeId) ?? null;
   const weekStart = office?.work_week_start ?? 0;
   const employeeName = employees.find((e) => e.id === employeeId)?.name ?? "";
 
-  // ─── 事業所解決 + 職員一覧 ──────────────────────────────────────────
+  // ─── 事業所一覧 (福祉用具 + 本社) ───────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!currentOfficeId) {
-        setOffice(null);
+      try {
+        const list = await getAttendanceOffices(tenantId);
+        if (cancelled) return;
+        setOfficeList(list);
+        setOfficeMissing(list.length === 0);
+        setPayrollOfficeId((prev) => {
+          if (list.some((o) => o.id === prev)) return prev;
+          // 初期選択は app 側で選択中の事業所に合わせ、無ければ先頭
+          const match = currentOfficeId ? list.find((o) => o.office_id === currentOfficeId) : null;
+          return match?.id ?? list[0]?.id ?? "";
+        });
+      } catch (e) {
+        if (!cancelled) alert(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, currentOfficeId, adminRefresh]);
+
+  // ─── 職員一覧 (選択事業所) ──────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!payrollOfficeId) {
         setEmployees([]);
         setEmployeeId("");
-        setOfficeMissing(false);
         return;
       }
       try {
-        const po = await getAttendanceOffice(currentOfficeId);
-        if (cancelled) return;
-        setOffice(po);
-        setOfficeMissing(po === null);
-        if (!po) {
-          setEmployees([]);
-          setEmployeeId("");
-          return;
-        }
-        const emps = await getAttendanceEmployees(po.id);
+        const emps = await getAttendanceEmployees(payrollOfficeId);
         if (cancelled) return;
         setEmployees(emps);
         setEmployeeId((prev) => (emps.some((e) => e.id === prev) ? prev : (emps[0]?.id ?? "")));
@@ -256,7 +270,7 @@ export default function AttendanceTab({
       }
     })();
     return () => { cancelled = true; };
-  }, [currentOfficeId, adminRefresh]);
+  }, [payrollOfficeId, adminRefresh]);
 
   // ─── master user 判定 (スタッフ管理ボタンの表示可否) ────────────────
   useEffect(() => {
@@ -517,10 +531,6 @@ export default function AttendanceTab({
   const [showUrlModal, setShowUrlModal] = useState(false);
 
   // ─── 表示 ───────────────────────────────────────────────────────────
-  if (!currentOfficeId) {
-    return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">事業所を選択してください</div>;
-  }
-
   return (
     <div className="flex flex-col h-full">
       {/* ヘッダー */}
@@ -548,6 +558,19 @@ export default function AttendanceTab({
             <ChevronRight size={16} />
           </button>
         </div>
+
+        <select
+          value={payrollOfficeId}
+          onChange={(e) => setPayrollOfficeId(e.target.value)}
+          disabled={officeList.length === 0}
+          className="text-xs border border-gray-300 rounded px-2 py-1 max-w-[14rem] disabled:bg-gray-50"
+          title="出勤簿の対象事業所 (福祉用具 + 本社)"
+        >
+          {officeList.length === 0 && <option value="">事業所なし</option>}
+          {officeList.map((o) => (
+            <option key={o.id} value={o.id}>{o.name}</option>
+          ))}
+        </select>
 
         <select
           value={employeeId}
@@ -707,8 +730,8 @@ export default function AttendanceTab({
       {/* 明細 */}
       {officeMissing ? (
         <div className="flex-1 flex items-center justify-center px-6 text-center text-sm text-gray-400">
-          この事業所は給与計算システムに取込まれていません。<br />
-          給与計算システムの「事業所」→「共通マスタから取込」を先に実行してください。
+          出勤簿を使える事業所がまだありません。<br />
+          「スタッフ管理」→ 事業所タブで共通マスタから取込んでください。
         </div>
       ) : loading ? (
         <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-emerald-400" /></div>
@@ -857,7 +880,7 @@ export default function AttendanceTab({
         <div className="print-head">
           <h1>出　勤　簿</h1>
           <div className="print-meta">
-            <span>{currentOfficeName ?? ""}</span>
+            <span>{office?.name ?? ""}</span>
             <span>{month.replace("-", "年")}月分</span>
             <span>氏名：{employeeName}</span>
           </div>

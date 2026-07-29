@@ -32,6 +32,7 @@ type CommonOffice = {
   name: string;
   short_name: string | null;
   business_number: string | null;
+  service_type: string | null;
 };
 
 type Employee = {
@@ -62,12 +63,12 @@ export default function AttendanceAdminModal({
   const loadOffices = useCallback(async () => {
     setLoading(true);
     try {
-      // 共通マスタの福祉用具事業所 (service_type 未設定の旧データ含む = getOffices と同条件)
+      // 共通マスタの福祉用具 + 本社 (統括営業本部) 事業所 (service_type 未設定の旧データ含む)
       const { data: commons, error: cErr } = await supabase
         .from("offices")
         .select("id, name, short_name, business_number, service_type, is_active")
         .eq("tenant_id", tenantId)
-        .or("service_type.eq.福祉用具,service_type.is.null");
+        .or("service_type.eq.福祉用具,service_type.eq.本社,service_type.is.null");
       if (cErr) throw new Error(`共通マスタの取得に失敗: ${cErr.message}`);
       const activeCommons = (commons ?? []).filter(
         (c) => (c as { is_active?: boolean }).is_active !== false,
@@ -126,7 +127,8 @@ export default function AttendanceAdminModal({
         office_id: c.id,
         office_number: c.business_number,
         short_name: c.short_name ?? c.name,
-        office_type: "福祉用具貸与",
+        // payroll_offices.office_type: 本社はそのまま、それ以外 (福祉用具/未設定) は福祉用具貸与
+        office_type: c.service_type === "本社" ? "本社" : "福祉用具貸与",
       });
       if (error) throw new Error(`取込に失敗: ${error.message}`);
       await loadOffices();

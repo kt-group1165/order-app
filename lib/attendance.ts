@@ -26,7 +26,14 @@ export type AttendanceOffice = {
   office_id: string;
   /** 1週間の起算曜日 (0=日, 1=月, ..., 6=土) */
   work_week_start: number;
+  /** 共通マスタの事業所名 */
+  name: string;
 };
+
+// 出勤簿の対象 service_type。order-app 本来の 福祉用具 に加えて
+// 本社 (統括営業本部) の staff も出勤簿を使うため含める。null は旧データ互換。
+export const ATTENDANCE_SERVICE_TYPES_OR =
+  "service_type.eq.福祉用具,service_type.eq.本社,service_type.is.null";
 
 export type AttendanceEmployee = {
   id: string;
@@ -110,23 +117,39 @@ function toRecord(r: AttendanceDbRow): AttendanceRecord {
 // =====================================================================
 
 /**
- * 共通マスタ offices.id から payroll 側の事業所を解決する。
- * payroll に取込まれていない事業所は null (= 出勤簿は使えない)。
+ * 出勤簿で扱える payroll 事業所の一覧 (福祉用具 5 事業所 + 本社/統括営業本部)。
+ * 共通マスタ (offices) を service_type で絞り、payroll_offices にリンク済みのものだけ返す。
+ * payroll 未取込の事業所は含まれない (= スタッフ管理の事業所タブで取込むと現れる)。
  */
-export async function getAttendanceOffice(officeId: string): Promise<AttendanceOffice | null> {
+export async function getAttendanceOffices(tenantId: string): Promise<AttendanceOffice[]> {
+  const { data: commons, error: cErr } = await supabase
+    .from("offices")
+    .select("id, name, service_type, is_active")
+    .eq("tenant_id", tenantId)
+    .or(ATTENDANCE_SERVICE_TYPES_OR);
+  if (cErr) throw new Error(`共通マスタの取得に失敗: ${cErr.message}`);
+  const active = (commons ?? []).filter(
+    (c) => (c as { is_active?: boolean }).is_active !== false,
+  ) as { id: string; name: string }[];
+  if (active.length === 0) return [];
+
   const { data, error } = await supabase
     .from("payroll_offices")
     .select("id, office_id, work_week_start")
-    .eq("office_id", officeId)
-    .maybeSingle();
+    .in("office_id", active.map((c) => c.id));
   if (error) throw new Error(`事業所の取得に失敗: ${error.message}`);
-  if (!data) return null;
-  const row = data as { id: string; office_id: string; work_week_start: number | null };
-  return {
-    id: row.id,
-    office_id: row.office_id,
-    work_week_start: row.work_week_start ?? 0,
-  };
+
+  const nameById = new Map(active.map((c) => [c.id, c.name]));
+  const rows = ((data ?? []) as { id: string; office_id: string; work_week_start: number | null }[]).map(
+    (r) => ({
+      id: r.id,
+      office_id: r.office_id,
+      work_week_start: r.work_week_start ?? 0,
+      name: nameById.get(r.office_id) ?? "(名称不明)",
+    }),
+  );
+  rows.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+  return rows;
 }
 
 /** payroll 事業所に所属する在籍職員 (退職者と出勤簿非表示を除く) */
