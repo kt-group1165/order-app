@@ -1146,25 +1146,76 @@ export default function AttendanceTab({
           </tfoot>
         </table>
 
-        {isHonbu && allowance.totalPay > 0 && (
-          <p className="print-foot">
-            手当合計 ¥{allowance.totalPay.toLocaleString()}
-            （電話当番 {allowance.phoneDutyDays} 回 ／ 土日祝対応 {allowance.holidaySupportTotal} 件・
-            電話当番 {phoneDutyPay.toLocaleString()}円/回・土日祝 1件 6,000円・2件以上 10,000円・併給なし）
-          </p>
-        )}
-        <p className="print-foot">
-          通常残業 {formatHM(overtimeTotal)}
-          ／ 法定休日 {formatHM(summary.total_holiday)}（換算 {formatHM(holidayEquiv)}）
-          ／ 深夜 {formatHM(summary.total_midnight)}（換算 {formatHM(midnightEquiv)}）
-          {summary.total_absence > 0 && `　欠勤 ${formatHM(summary.total_absence)}`}
-        </p>
-        <p className="print-foot print-strong">
-          消費計 {formatHM(consumed)} ／ 月上限 {MONTHLY_OVERTIME_LIMIT_HOURS}:00
-          （{remaining >= 0 ? `あと残業できる時間 ${formatHM(remaining)}` : `超過 ${formatHM(-remaining)}`}）
-        </p>
+        {/* 集計は 2 つの小表に分けて並べる (文章羅列だと読みにくいため) */}
+        <div className="print-summary">
+          <table className="print-sum-box">
+            <caption>時間外の集計</caption>
+            <tbody>
+              <tr>
+                <th>通常残業</th>
+                <td>{formatHM(overtimeTotal)}</td>
+              </tr>
+              <tr>
+                <th>法定休日 (×1.35)</th>
+                <td>
+                  {formatHM(summary.total_holiday)}
+                  {summary.total_holiday > 0 && ` → ${formatHM(holidayEquiv)}`}
+                </td>
+              </tr>
+              <tr>
+                <th>深夜 (+0.25)</th>
+                <td>
+                  {formatHM(summary.total_midnight)}
+                  {summary.total_midnight > 0 && ` → ${formatHM(midnightEquiv)}`}
+                </td>
+              </tr>
+              <tr className="sum">
+                <th>消費計</th>
+                <td>{formatHM(consumed)}</td>
+              </tr>
+              <tr>
+                <th>月上限</th>
+                <td>{MONTHLY_OVERTIME_LIMIT_HOURS}:00</td>
+              </tr>
+              <tr className={remaining >= 0 ? undefined : "over"}>
+                <th>{remaining >= 0 ? "残り" : "超過"}</th>
+                <td>{formatHM(Math.abs(remaining))}</td>
+              </tr>
+              {summary.total_absence > 0 && (
+                <tr>
+                  <th>欠勤</th>
+                  <td>{formatHM(summary.total_absence)}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          {isHonbu && (
+            <table className="print-sum-box">
+              <caption>調整手当</caption>
+              <tbody>
+                <tr>
+                  <th>電話当番</th>
+                  <td>
+                    {allowance.phoneDutyDays} 回 × {phoneDutyPay.toLocaleString()}円
+                  </td>
+                </tr>
+                <tr>
+                  <th>土日祝対応</th>
+                  <td>{allowance.holidaySupportTotal} 件</td>
+                </tr>
+                <tr className="sum">
+                  <th>合計</th>
+                  <td>¥{allowance.totalPay.toLocaleString()}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+
         <p className="print-foot print-note-small">
-          通常残業 = 1日8時間超 + 週40時間超。法定休日 (×1.35)・深夜 (+0.25) は割増率比で通常残業 (×1.25) に換算して上限枠を消費します。
+          通常残業 = 1日8時間超 + 週40時間超。法定休日・深夜は割増率比で通常残業 (×1.25) に換算して上限枠を消費。
+          {isHonbu && " 土日祝対応は 1件 6,000円 / 2件以上 10,000円、電話当番とは併給しない。"}
         </p>
       </div>
 
