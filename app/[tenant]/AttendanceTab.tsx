@@ -784,7 +784,7 @@ export default function AttendanceTab({
       ) : loading ? (
         <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-emerald-400" /></div>
       ) : (
-        {/* padding を付けると sticky ヘッダー/フッターの外側に行が透けるので余白なし */}
+        // padding を付けると sticky ヘッダー/フッターの外側に行が透けるので余白なし
         <div className="flex-1 overflow-auto">
           <table className="w-full min-w-[1080px] text-sm bg-white">
             <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0 z-10">
