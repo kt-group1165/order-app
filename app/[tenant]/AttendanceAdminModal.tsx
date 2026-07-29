@@ -45,6 +45,8 @@ type Employee = {
   attendance_hidden?: boolean;
   /** 人の正マスタ members への紐付け。null/undefined = payroll 専用の独立エントリ */
   member_id?: string | null;
+  /** 電話当番の単価 (円/回)。本社の職員のみ意味を持つ */
+  phone_duty_pay?: number | null;
 };
 
 /** members から取込む候補 (この事業所が主所属で、まだ payroll に居ない人) */
@@ -344,6 +346,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editNumber, setEditNumber] = useState("");
   const [editName, setEditName] = useState("");
+  const [editPhonePay, setEditPhonePay] = useState("");
 
   const load = useCallback(async () => {
     if (!officeId) {
@@ -513,6 +516,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     setEditingId(emp.id);
     setEditNumber(emp.employee_number);
     setEditName(emp.name);
+    setEditPhonePay(String(emp.phone_duty_pay ?? 3000));
   };
 
   const handleEditSave = async (emp: Employee) => {
@@ -525,9 +529,19 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     setBusyId(emp.id);
     try {
       // 社員番号は payroll 側の属性なので常に payroll 行を更新
+      const phonePay = parseInt(editPhonePay, 10);
+      if (!Number.isFinite(phonePay) || phonePay < 0) {
+        alert("電話当番の単価が不正です");
+        return;
+      }
       const { error } = await supabase
         .from("payroll_employees")
-        .update({ employee_number: num, ...(emp.member_id ? {} : { name }) })
+        .update({
+          employee_number: num,
+          ...(emp.member_id ? {} : { name }),
+          // 列未適用の環境では 42703 になるので送らない (phone_duty_pay が未定義のとき)
+          ...(emp.phone_duty_pay === undefined ? {} : { phone_duty_pay: phonePay }),
+        })
         .eq("id", emp.id);
       if (error) throw new Error(`更新に失敗: ${error.message}`);
       // 氏名は members が正。紐付け済みなら members を更新 → trigger が全アプリに反映
@@ -737,6 +751,19 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                       onChange={(e) => setEditName(e.target.value)}
                       className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-xs"
                     />
+                    <label className="flex items-center gap-1 text-[10px] text-gray-500 shrink-0">
+                      電話当番
+                      <input
+                        type="number"
+                        min={0}
+                        step={500}
+                        value={editPhonePay}
+                        onChange={(e) => setEditPhonePay(e.target.value)}
+                        className="w-20 border border-gray-300 rounded px-1 py-1 text-xs text-right"
+                        title="電話当番 1 回あたりの手当 (円)"
+                      />
+                      円
+                    </label>
                     <button
                       onClick={() => handleEditSave(emp)}
                       disabled={busyId === emp.id}

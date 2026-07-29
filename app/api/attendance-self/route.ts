@@ -20,6 +20,8 @@ type EmployeeCtx = {
   work_week_start: number;
   /** payroll_offices.office_type。'本社' なら電話当番・土日祝対応の入力が有効 */
   office_type: string;
+  /** 電話当番の単価 (円/回)。列未適用なら既定 3,000 */
+  phone_duty_pay: number;
 };
 
 async function resolveEmployee(token: string | null): Promise<EmployeeCtx | NextResponse> {
@@ -85,6 +87,8 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
     office_id: data.office_id as string,
     work_week_start: (office?.work_week_start as number | null) ?? 0,
     office_type: (office?.office_type as string | null) ?? "",
+    phone_duty_pay:
+      ((data as { phone_duty_pay?: number | null }).phone_duty_pay as number | null) ?? 3000,
   };
 }
 
@@ -130,6 +134,7 @@ export async function GET(req: Request) {
       name: ctx.name,
       work_week_start: ctx.work_week_start,
       office_type: ctx.office_type,
+      phone_duty_pay: ctx.phone_duty_pay,
     },
     records: recordsRes.data ?? [],
     company_holidays: (holidaysRes.data ?? []).map(

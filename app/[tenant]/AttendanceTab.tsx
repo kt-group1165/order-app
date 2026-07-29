@@ -29,7 +29,11 @@ import {
   type AttendanceCsvRow,
 } from "@/lib/attendance/attendance-csv";
 import AttendanceAdminModal from "./AttendanceAdminModal";
-import { calcDailyAllowance, summarizeAllowance } from "@/lib/attendance/allowance";
+import {
+  calcDailyAllowance,
+  summarizeAllowance,
+  DEFAULT_PHONE_DUTY_PAY,
+} from "@/lib/attendance/allowance";
 
 // 月間の時間外 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
 // 「通常残業を何時間できるか」を基準にした枠。
@@ -250,6 +254,9 @@ export default function AttendanceTab({
   const employeeName = employees.find((e) => e.id === employeeId)?.name ?? "";
   /** 統括営業本部 (本社)。電話当番・土日祝対応の入力と手当計算はここだけ */
   const isHonbu = office?.office_type === "本社";
+  /** 選択職員の電話当番単価 (職員ごとに異なる。既定 3,000 円) */
+  const phoneDutyPay =
+    employees.find((e) => e.id === employeeId)?.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY;
 
   // ─── 事業所一覧 (福祉用具 + 本社) ───────────────────────────────────
   useEffect(() => {
@@ -419,8 +426,9 @@ export default function AttendanceTab({
             phone_duty: r.phone_duty,
             holiday_support_count: parseHolidayCount(r.holiday_support_count),
           })),
+        phoneDutyPay,
       ),
-    [rows, month],
+    [rows, month, phoneDutyPay],
   );
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
@@ -804,7 +812,7 @@ export default function AttendanceTab({
                 <th className="text-left px-2 py-2 w-20">出張km</th>
                 {isHonbu && (
                   <>
-                    <th className="text-center px-2 py-2 w-12" title="電話当番 (1回 3,000円。土日祝対応がある日は併給されません)">電話</th>
+                    <th className="text-center px-2 py-2 w-12" title={`電話当番 (1回 ${phoneDutyPay.toLocaleString()}円。土日祝対応がある日は併給されません)`}>電話</th>
                     <th className="text-right px-2 py-2 w-16" title="土日祝対応 件数 (1件 6,000円 / 2件以上 10,000円)">土日祝</th>
                     <th className="text-right px-2 py-2 w-20">手当</th>
                   </>
@@ -919,7 +927,7 @@ export default function AttendanceTab({
                         </td>
                         <td className="px-2 py-1 text-right tabular-nums text-gray-600">
                           {(() => {
-                            const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count));
+                            const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count), phoneDutyPay);
                             return pay > 0 ? `¥${pay.toLocaleString()}` : "";
                           })()}
                         </td>
@@ -1045,7 +1053,7 @@ export default function AttendanceTab({
                     <td>
                       {(() => {
                         const cnt = parseHolidayCount(r.holiday_support_count);
-                        const pay = calcDailyAllowance(r.phone_duty, cnt);
+                        const pay = calcDailyAllowance(r.phone_duty, cnt, phoneDutyPay);
                         if (pay === 0) return "";
                         const mark = cnt > 0 ? `土日祝${cnt}` : "電話";
                         return `${pay.toLocaleString()} (${mark})`;
@@ -1076,7 +1084,7 @@ export default function AttendanceTab({
           <p className="print-foot">
             手当合計 ¥{allowance.totalPay.toLocaleString()}
             （電話当番 {allowance.phoneDutyDays} 回 ／ 土日祝対応 {allowance.holidaySupportTotal} 件・
-            電話当番 3,000円/回・土日祝 1件 6,000円・2件以上 10,000円・併給なし）
+            電話当番 {phoneDutyPay.toLocaleString()}円/回・土日祝 1件 6,000円・2件以上 10,000円・併給なし）
           </p>
         )}
         <p className="print-foot">

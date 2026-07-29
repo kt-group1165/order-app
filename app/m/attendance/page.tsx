@@ -17,7 +17,11 @@ import {
   type AttendanceRecord,
 } from "@/lib/attendance/attendance-calc";
 import { isJapaneseHoliday, getJapaneseHolidayName } from "@/lib/attendance/japan-holidays";
-import { calcDailyAllowance, summarizeAllowance } from "@/lib/attendance/allowance";
+import {
+  calcDailyAllowance,
+  summarizeAllowance,
+  DEFAULT_PHONE_DUTY_PAY,
+} from "@/lib/attendance/allowance";
 
 // 35h 枠と割増換算 (AttendanceTab.tsx と同一ロジック。福祉用具の運用ライン)
 const LIMIT_HOURS = 35;
@@ -191,6 +195,7 @@ function SelfAttendanceInner() {
   });
   const [name, setName] = useState<string>("");
   const [officeType, setOfficeType] = useState<string>("");
+  const [phoneDutyPay, setPhoneDutyPay] = useState<number>(DEFAULT_PHONE_DUTY_PAY);
   const [weekStart, setWeekStart] = useState(0);
   const [rows, setRows] = useState<RowState[]>([]);
   const [neighbors, setNeighbors] = useState<AttendanceRecord[]>([]);
@@ -221,6 +226,7 @@ function SelfAttendanceInner() {
       setFatal(null);
       setName(json.employee?.name ?? "");
       setOfficeType(json.employee?.office_type ?? "");
+      setPhoneDutyPay(json.employee?.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY);
       const ws: number = json.employee?.work_week_start ?? 0;
       setWeekStart(ws);
       setCompanyHolidays(new Set<string>(json.company_holidays ?? []));
@@ -304,8 +310,9 @@ function SelfAttendanceInner() {
             phone_duty: r.phone_duty,
             holiday_support_count: parseHolidayCount(r.holiday_support_count),
           })),
+        phoneDutyPay,
       ),
-    [rows, month],
+    [rows, month, phoneDutyPay],
   );
 
   const dailies = useMemo(() => {
@@ -544,7 +551,7 @@ function SelfAttendanceInner() {
                       件
                     </label>
                     {(() => {
-                      const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count));
+                      const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count), phoneDutyPay);
                       return pay > 0 ? (
                         <span className="ml-auto tabular-nums text-emerald-700 font-medium">¥{pay.toLocaleString()}</span>
                       ) : null;

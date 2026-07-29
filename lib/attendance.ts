@@ -15,6 +15,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { extendedMonthRange, type AttendanceRecord } from "@/lib/attendance/attendance-calc";
+import { DEFAULT_PHONE_DUTY_PAY } from "@/lib/attendance/allowance";
 
 // =====================================================================
 // 型
@@ -51,6 +52,8 @@ export type AttendanceEmployee = {
   id: string;
   name: string;
   office_id: string;
+  /** 電話当番の単価 (円/回)。本社の手当計算に使う。列未適用なら既定 3,000 */
+  phone_duty_pay: number;
 };
 
 /** DB row (payroll_kyotaku_attendance_records) */
@@ -187,9 +190,19 @@ export async function getAttendanceEmployees(payrollOfficeId: string): Promise<A
     .neq("employment_status", "退職者")
     .order("name");
   if (error) throw new Error(`職員の取得に失敗: ${error.message}`);
-  return ((data ?? []) as (AttendanceEmployee & { attendance_hidden?: boolean })[])
+  return (
+    (data ?? []) as (AttendanceEmployee & {
+      attendance_hidden?: boolean;
+      phone_duty_pay?: number | null;
+    })[]
+  )
     .filter((e) => e.attendance_hidden !== true)
-    .map((e) => ({ id: e.id, name: e.name, office_id: e.office_id }));
+    .map((e) => ({
+      id: e.id,
+      name: e.name,
+      office_id: e.office_id,
+      phone_duty_pay: e.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY,
+    }));
 }
 
 // =====================================================================
