@@ -86,11 +86,6 @@ export type AttendanceFetchResult = {
   currentMonthRows: AttendanceDbRow[];
   /** 前後隣接月分。月跨ぎ週の週次残業を正しく按分するための calc 用 (UI 表示しない) */
   neighborRecords: AttendanceRecord[];
-  /**
-   * neighborRecords と同じ row の生 DB 形式。
-   * 稼働開始月 (2026-07) で前月最終週を編集可能な行として出すために使う。
-   */
-  neighborRows: AttendanceDbRow[];
 };
 
 // =====================================================================
@@ -219,7 +214,7 @@ export async function getAttendanceRecords(
   weekStart: number,
 ): Promise<AttendanceFetchResult> {
   const bounds = monthBounds(month);
-  if (!bounds) return { currentMonthRows: [], neighborRecords: [], neighborRows: [] };
+  if (!bounds) return { currentMonthRows: [], neighborRecords: [] };
   const { start: extStart, end: extEnd } = extendedMonthRange(month, weekStart);
 
   const { data, error } = await supabase
@@ -232,16 +227,11 @@ export async function getAttendanceRecords(
 
   const currentMonthRows: AttendanceDbRow[] = [];
   const neighborRecords: AttendanceRecord[] = [];
-  const neighborRows: AttendanceDbRow[] = [];
   for (const r of (data ?? []) as AttendanceDbRow[]) {
-    if (r.work_date >= bounds.start && r.work_date <= bounds.end) {
-      currentMonthRows.push(r);
-    } else {
-      neighborRecords.push(toRecord(r));
-      neighborRows.push(r);
-    }
+    if (r.work_date >= bounds.start && r.work_date <= bounds.end) currentMonthRows.push(r);
+    else neighborRecords.push(toRecord(r));
   }
-  return { currentMonthRows, neighborRecords, neighborRows };
+  return { currentMonthRows, neighborRecords };
 }
 
 /** 変更のあった行のみ upsert (UNIQUE: employee_id, work_date) */

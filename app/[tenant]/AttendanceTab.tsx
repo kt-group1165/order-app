@@ -17,7 +17,6 @@ import {
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
-  extendedMonthRange,
   formatHM,
   minutesBetween,
   type AttendanceRecord,
@@ -64,30 +63,9 @@ function midnightToOvertimeEquiv(min: number): number {
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
 // 出勤簿の稼働開始月。これより前の月へは移動できない。
-// 開始月に限り、前月最終週のうち開始月の初週に属する日を
-// 「編集可能な行」としてグリッド先頭に出す (週 40h 残業の計算材料。月合計には含めない)。
+// 各月は自分の月の日付だけを編集する (前月の日は前月ページで編集する)。
+// 月跨ぎ週の 40h 判定は、DB から隣接月 record を読んで計算にだけ使う。
 const FIRST_MONTH = "2026-06";
-
-/**
- * 開始月の初週に属する前月側の日付 (YYYY-MM-DD) を返す。
- * 開始月以外は空。週起算 (weekStart) により 0〜6 日になる。
- */
-function prevMonthTailDates(month: string, weekStart: number): string[] {
-  if (month !== FIRST_MONTH) return [];
-  const { start } = extendedMonthRange(month, weekStart);
-  const monthStart = `${month}-01`;
-  if (!start || start >= monthStart) return [];
-  const out: string[] = [];
-  const [y, m, d] = start.split("-").map(Number);
-  const cur = new Date(Date.UTC(y, m - 1, d));
-  for (let i = 0; i < 7; i++) {
-    const s = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, "0")}-${String(cur.getUTCDate()).padStart(2, "0")}`;
-    if (s >= monthStart) break;
-    out.push(s);
-    cur.setUTCDate(cur.getUTCDate() + 1);
-  }
-  return out;
-}
 
 // 拘束 6 時間以上の日に自動で入れる休憩 (労基法 §34 は 6h 超で 45 分・8h 超で 60 分だが、
 // 運用上は 6 時間以上なら一律 60 分を既定値にする)。手入力済みの行は上書きしない。
@@ -317,16 +295,12 @@ export default function AttendanceTab({
   }, []);
 
   // ─── 出勤簿 row 読込 ────────────────────────────────────────────────
-  // 開始月 (FIRST_MONTH) では前月最終週の日も編集可能な行として先頭に足す。
-  // 保存先は同じ table (work_date が前月なだけ) なので、既存の extended fetch で
-  // 拾われ、週 40h 計算に自動で乗る。月合計は calcMonthlySummary の monthFilter で
-  // 当月分しか積まれないため汚染しない。
+  // 表示・編集するのは当月の日付だけ。隣接月の record は週 40h 計算のためだけに
+  // 読み込み、グリッドには出さない (前月分は前月ページで編集する)。
   const load = useCallback(async () => {
     const days = daysOfMonth(month);
-    const prevDays = prevMonthTailDates(month, weekStart);
-    const allDays = [...prevDays, ...days];
     if (!employeeId) {
-      setRows(allDays.map(emptyRow));
+      setRows(days.map(emptyRow));
       setNeighbors([]);
       return;
     }
@@ -336,14 +310,9 @@ export default function AttendanceTab({
         getAttendanceRecords(employeeId, month, weekStart),
         getCompanyHolidays(tenantId, month, weekStart),
       ]);
-      const prevSet = new Set(prevDays);
-      const byDate = new Map(
-        [...res.currentMonthRows, ...res.neighborRows.filter((r) => prevSet.has(r.work_date))].map(
-          (r) => [r.work_date, r],
-        ),
-      );
+      const byDate = new Map(res.currentMonthRows.map((r) => [r.work_date, r]));
       setRows(
-        allDays.map((d) => {
+        days.map((d) => {
           const db = byDate.get(d);
           if (!db) return emptyRow(d);
           return {
@@ -372,12 +341,11 @@ export default function AttendanceTab({
           };
         }),
       );
-      // 前月最終週は編集行に昇格させたので、calc 用 neighbor からは除外 (二重計上防止)
-      setNeighbors(res.neighborRecords.filter((n) => !prevSet.has(n.work_date)));
+      setNeighbors(res.neighborRecords);
       setCompanyHolidays(holidays);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
-      setRows(allDays.map(emptyRow));
+      setRows(days.map(emptyRow));
       setNeighbors([]);
     } finally {
       setLoading(false);
@@ -420,16 +388,17 @@ export default function AttendanceTab({
   const allowance = useMemo(
     () =>
       summarizeAllowance(
-        rows
-          .filter((r) => r.work_date.startsWith(month))
-          .map((r) => ({
-            phone_duty: r.phone_duty,
-            holiday_support_count: parseHolidayCount(r.holiday_support_count),
-          })),
+        rows.map((r) => ({
+          phone_duty: r.phone_duty,
+          holiday_support_count: parseHolidayCount(r.holiday_support_count),
+        })),
         phoneDutyPay,
       ),
-    [rows, month, phoneDutyPay],
+    [rows, phoneDutyPay],
   );
+
+  /** 出張距離の月合計 (km) */
+  const kmTotal = rows.reduce((a, r) => a + (parseFloat(r.business_km) || 0), 0);
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
 
@@ -514,8 +483,7 @@ export default function AttendanceTab({
   const handleExportCsv = () => {
     try {
       exportAttendanceCsv({
-        // 前月最終週の行 (開始月のみ存在) は当月の CSV に含めない
-        rows: rows.filter((r) => r.work_date.startsWith(month)).map((r) => ({
+        rows: rows.map((r) => ({
           work_date: r.work_date,
           start_time: r.start_time,
           end_time: r.end_time,
@@ -826,31 +794,22 @@ export default function AttendanceTab({
               </tr>
             </thead>
             <tbody>
-              {rows.some((r) => !r.work_date.startsWith(month)) && (
-                <tr className="bg-sky-50 border-b border-sky-100">
-                  <td colSpan={isHonbu ? 15 : 12} className="px-2 py-1 text-[11px] text-sky-700">
-                    前月 ({parseInt(rows[0].work_date.slice(5, 7), 10)}月) 最終週 —
-                    週40時間の残業計算にのみ使います。月合計・印刷・CSV には含まれません
-                  </td>
-                </tr>
-              )}
               {rows.map((r, i) => {
                 const d = dailies[i];
-                const isPrevMonth = !r.work_date.startsWith(month);
                 const holidayName = getJapaneseHolidayName(r.work_date);
                 const isCompanyHoliday = companyHolidays.has(r.work_date);
                 const isRed = r.dow === 0 || isJapaneseHoliday(r.work_date);
+                // 公休 (土日祝・会社休日) はグレーで区別
+                const isRestDay = r.dow === 0 || r.dow === 6 || isJapaneseHoliday(r.work_date) || isCompanyHoliday;
                 const overtime = (d?.daily_overtime ?? 0) + (d?.weekly_overtime ?? 0);
                 return (
                   <tr
                     key={r.work_date}
-                    className={`border-b border-gray-100 ${r.dirty ? "bg-emerald-50/60" : isPrevMonth ? "bg-sky-50/40" : isCompanyHoliday ? "bg-amber-50/50" : "hover:bg-gray-50"}`}
+                    className={`border-b border-gray-100 ${r.dirty ? "bg-emerald-50/60" : isRestDay ? "bg-gray-100/70" : "hover:bg-gray-50"}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap">
                       <span className={isRed ? "text-red-600" : r.dow === 6 ? "text-blue-600" : "text-gray-700"}>
-                        {isPrevMonth
-                          ? `${parseInt(r.work_date.slice(5, 7), 10)}/${parseInt(r.work_date.slice(8), 10)} (${WEEK_DAY_LABELS[r.dow]})`
-                          : `${parseInt(r.work_date.slice(8), 10)}日 (${WEEK_DAY_LABELS[r.dow]})`}
+                        {parseInt(r.work_date.slice(8), 10)}日 ({WEEK_DAY_LABELS[r.dow]})
                       </span>
                       {(holidayName || isCompanyHoliday) && (
                         <span className="ml-1 text-[10px] text-gray-400" title={holidayName ?? "会社休日"}>
@@ -977,7 +936,7 @@ export default function AttendanceTab({
             </tbody>
             <tfoot className="bg-gray-50 text-xs font-medium text-gray-700 sticky bottom-0">
               <tr>
-                <td className="px-2 py-2" colSpan={isHonbu ? 11 : 8}>
+                <td className="px-2 py-2" colSpan={isHonbu ? 6 : 6}>
                   月合計
                   {isHonbu && allowance.totalPay > 0 && (
                     <span className="ml-3 font-normal text-gray-500">
@@ -985,6 +944,10 @@ export default function AttendanceTab({
                     </span>
                   )}
                 </td>
+                <td className="px-2 py-2 text-right tabular-nums" title="出張距離の月合計">
+                  {kmTotal > 0 ? `${kmTotal.toFixed(1)} km` : ""}
+                </td>
+                <td className="px-2 py-2" colSpan={isHonbu ? 4 : 1} />
                 <td className="px-2 py-2 text-right tabular-nums">{formatHM(summary.total_work)}</td>
                 <td className={`px-2 py-2 text-right tabular-nums ${overLimit ? "text-red-600" : "text-amber-600"}`}>
                   {formatHM(overtimeTotal)}
@@ -1024,20 +987,23 @@ export default function AttendanceTab({
               <th>深夜</th>
               <th>法定休日</th>
               <th>有給</th>
-              <th>出張km</th>
-              {isHonbu && <th>手当</th>}
+              <th>出張(km)</th>
+              {isHonbu && <th>手当(円)</th>}
               <th className="print-note">備考</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              // 前月最終週の行 (開始月のみ) は印刷に含めない
-              if (!r.work_date.startsWith(month)) return null;
               const d = dailies[i];
               const overtime = (d?.daily_overtime ?? 0) + (d?.weekly_overtime ?? 0);
               const worked = (d?.work_minutes ?? 0) > 0;
+              const isRestDay =
+                r.dow === 0 ||
+                r.dow === 6 ||
+                isJapaneseHoliday(r.work_date) ||
+                companyHolidays.has(r.work_date);
               return (
-                <tr key={r.work_date}>
+                <tr key={r.work_date} className={isRestDay ? "print-rest" : undefined}>
                   <td>{parseInt(r.work_date.slice(8), 10)}</td>
                   <td>{WEEK_DAY_LABELS[r.dow]}</td>
                   <td>{r.start_time}</td>
@@ -1052,15 +1018,23 @@ export default function AttendanceTab({
                   {isHonbu && (
                     <td>
                       {(() => {
-                        const cnt = parseHolidayCount(r.holiday_support_count);
-                        const pay = calcDailyAllowance(r.phone_duty, cnt, phoneDutyPay);
-                        if (pay === 0) return "";
-                        const mark = cnt > 0 ? `土日祝${cnt}` : "電話";
-                        return `${pay.toLocaleString()} (${mark})`;
+                        const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count), phoneDutyPay);
+                        return pay > 0 ? pay.toLocaleString() : "";
                       })()}
                     </td>
                   )}
-                  <td className="print-note">{r.note}</td>
+                  <td className="print-note">
+                    {[
+                      r.note,
+                      // 振替・代休元は専用列を持たず備考にまとめる (印刷のみ)
+                      [r.substitute_for_date, r.substitute_for_date2]
+                        .filter(Boolean)
+                        .map((d) => (d as string).replace(/-/g, "/"))
+                        .join("・"),
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </td>
                 </tr>
               );
             })}
@@ -1073,7 +1047,7 @@ export default function AttendanceTab({
               <td>{formatHM(summary.total_midnight)}</td>
               <td>{formatHM(summary.total_holiday)}</td>
               <td>{summary.total_paid_leave_days} 日</td>
-              <td />
+              <td>{kmTotal > 0 ? kmTotal.toFixed(1) : ""}</td>
               {isHonbu && <td>{allowance.totalPay > 0 ? allowance.totalPay.toLocaleString() : ""}</td>}
               <td className="print-note" />
             </tr>
@@ -1098,9 +1072,7 @@ export default function AttendanceTab({
           （{remaining >= 0 ? `あと残業できる時間 ${formatHM(remaining)}` : `超過 ${formatHM(-remaining)}`}）
         </p>
         <p className="print-foot print-note-small">
-          通常残業は 1 日 8 時間超および週 40 時間超の合計。法定休日 (×1.35) と深夜 (+0.25) は
-          通常残業 (×1.25) との割増率比で換算して上限枠を消費するため、実時間の合計と残り時間の和は
-          {MONTHLY_OVERTIME_LIMIT_HOURS}:00 になりません。
+          通常残業 = 1日8時間超 + 週40時間超。法定休日 (×1.35)・深夜 (+0.25) は割増率比で通常残業 (×1.25) に換算して上限枠を消費します。
         </p>
       </div>
 

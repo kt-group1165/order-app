@@ -99,15 +99,34 @@ body {
 
   .print-table th,
   .print-table td {
-    border: 1px solid #000;
-    padding: 0.3mm 0.8mm;
-    text-align: center;
+    border: 1px solid #999;
+    padding: 0.3mm 1mm;
+    text-align: right;
     font-size: 7pt;
     line-height: 1.2;
     /* 31 行 + ヘッダ + 集計で ~165mm。1 枚に収まる行高 */
     height: 5mm;
     overflow: hidden;
     white-space: nowrap;
+  }
+
+  /* 日付・曜日は中央、それ以外の数値は右寄せ (上の既定) */
+  .print-table td:nth-child(1),
+  .print-table td:nth-child(2),
+  .print-table th {
+    text-align: center;
+  }
+
+  /* 土日祝・会社休日の行は薄いグレーで区別 */
+  .print-table tbody tr.print-rest td {
+    background: #f2f2f2;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 外周は太罫で締める */
+  .print-table {
+    border: 1.2pt solid #000;
   }
 
   .print-table th {
@@ -125,9 +144,15 @@ body {
   }
 
   /* 備考だけ左寄せ + 広め (残り幅を全部使う) */
-  .print-table .print-note {
+  .print-table .print-note,
+  .print-table td.print-note {
     text-align: left;
-    width: 24%;
+    width: 26%;
+  }
+
+  /* 集計行は上を太罫で区切る */
+  .print-table tfoot td {
+    border-top: 1.2pt solid #000;
   }
 
   .print-foot {
