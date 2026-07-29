@@ -829,7 +829,7 @@ export default function AttendanceTab({
       ) : (
         // padding を付けると sticky ヘッダー/フッターの外側に行が透けるので余白なし
         <div className="flex-1 overflow-auto">
-          <table className="w-full min-w-[1340px] text-sm bg-white">
+          <table className="w-full min-w-[1300px] text-sm bg-white">
             <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0 z-10">
               <tr>
                 <th className="text-left px-2 py-2 w-24">日付</th>
@@ -845,7 +845,7 @@ export default function AttendanceTab({
                     <th className="text-right px-2 py-2 w-20">手当</th>
                   </>
                 )}
-                <th className="text-left px-2 py-2 w-[16rem]" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
+                <th className="text-left px-2 py-2 w-[14rem]" title="代休の日に、元になった出勤日を入れる (最大2つ。半日出勤×2の組合せ可)。入れた日は休み扱いで欠勤になりません">振替・代休元</th>
                 <th className="text-left px-2 py-2 min-w-[10rem]">備考</th>
                 <th className="text-right px-2 py-2 w-20">実労働</th>
                 <th className="text-right px-2 py-2 w-20">時間外</th>
@@ -959,7 +959,7 @@ export default function AttendanceTab({
                             type="date"
                             value={r.substitute_for_date}
                             onChange={(e) => patchRow(i, { substitute_for_date: e.target.value })}
-                            className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
+                            className="w-[6.5rem] shrink-0 border border-gray-200 rounded px-0.5 py-0.5 text-[11px]"
                             title="この休みの元になった出勤日 (1つ目)"
                           />
                           {r.substitute_for_date2 || sub2Editing.has(r.work_date) ? (
@@ -967,7 +967,7 @@ export default function AttendanceTab({
                               type="date"
                               value={r.substitute_for_date2}
                               onChange={(e) => patchRow(i, { substitute_for_date2: e.target.value })}
-                              className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
+                              className="w-[6.5rem] shrink-0 border border-gray-200 rounded px-0.5 py-0.5 text-[11px]"
                               title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
                             />
                           ) : (
