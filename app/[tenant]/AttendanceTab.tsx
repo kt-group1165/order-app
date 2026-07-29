@@ -1187,18 +1187,6 @@ export default function AttendanceTab({
                 <th>深夜</th>
                 <td>{formatHM(summary.total_midnight)}</td>
               </tr>
-              <tr className="sum">
-                <th>消費計</th>
-                <td>{formatHM(consumed)}</td>
-              </tr>
-              <tr>
-                <th>月上限</th>
-                <td>{MONTHLY_OVERTIME_LIMIT_HOURS}:00</td>
-              </tr>
-              <tr className={remaining >= 0 ? undefined : "over"}>
-                <th>{remaining >= 0 ? "残り" : "超過"}</th>
-                <td>{formatHM(Math.abs(remaining))}</td>
-              </tr>
               {summary.total_absence > 0 && (
                 <tr>
                   <th>欠勤</th>
@@ -1232,7 +1220,7 @@ export default function AttendanceTab({
         </div>
 
         <p className="print-foot print-note-small">
-          通常残業 = 1日8時間超 + 週40時間超。消費計は 法定休日 (×1.35)・深夜 (+0.25) を通常残業 (×1.25) との割増率比で換算した合計。
+          通常残業 = 1日8時間超 + 週40時間超。
           {isHonbu && " 土日祝対応は 1件 6,000円 / 2件以上 10,000円、電話当番とは併給しない。"}
         </p>
       </div>
