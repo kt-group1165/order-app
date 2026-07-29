@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users } from "lucide-react";
 import {
   getAttendanceOffice,
   getAttendanceEmployees,
@@ -28,6 +28,7 @@ import {
   parseAttendanceCsv,
   type AttendanceCsvRow,
 } from "@/lib/attendance/attendance-csv";
+import AttendanceAdminModal from "./AttendanceAdminModal";
 
 // 月間の時間外 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
 // 「通常残業を何時間できるか」を基準にした枠。
@@ -88,10 +89,12 @@ function prevMonthTailDates(month: string, weekStart: number): string[] {
 const DEFAULT_BREAK_THRESHOLD_MIN = 6 * 60;
 const DEFAULT_BREAK_MINUTES = 60;
 
-// 法定休日 = 土曜で固定 (KT Group の運用)。手動チェックは持たず自動判定する。
-// 振替出勤の土曜 (振替元日付あり) は休日を別日に移しているため通常労働日扱い。
+// 法定休日 = 日曜で固定 (KT Group の運用。実際に休むことが最も多い曜日)。
+// 手動チェックは持たず自動判定する。週の起算曜日 (work_week_start) とは独立。
+// 振替出勤の日曜 (振替元日付あり) は休日を別日に移しているため通常労働日扱い。
+const LEGAL_HOLIDAY_DOW = 0; // 0 = 日曜
 function isLegalHolidayRow(r: { dow: number; substitute_for_date: string }): boolean {
-  return r.dow === 6 && !r.substitute_for_date;
+  return r.dow === LEGAL_HOLIDAY_DOW && !r.substitute_for_date;
 }
 
 // =====================================================================
@@ -215,6 +218,10 @@ export default function AttendanceTab({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const [isMaster, setIsMaster] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
+  const [adminRefresh, setAdminRefresh] = useState(0);
 
   const weekStart = office?.work_week_start ?? 0;
   const employeeName = employees.find((e) => e.id === employeeId)?.name ?? "";
@@ -249,7 +256,22 @@ export default function AttendanceTab({
       }
     })();
     return () => { cancelled = true; };
-  }, [currentOfficeId]);
+  }, [currentOfficeId, adminRefresh]);
+
+  // ─── master user 判定 (スタッフ管理ボタンの表示可否) ────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/master-check");
+        const json = await res.json();
+        if (!cancelled) setIsMaster(json.is_master === true);
+      } catch {
+        // 判定失敗時はボタン非表示のまま (機能自体は payroll-app 側でも操作可能)
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // ─── 出勤簿 row 読込 ────────────────────────────────────────────────
   // 開始月 (FIRST_MONTH) では前月最終週の日も編集可能な行として先頭に足す。
@@ -393,7 +415,7 @@ export default function AttendanceTab({
         start_time: r.start_time ? `${r.start_time}:00` : null,
         end_time: r.end_time ? `${r.end_time}:00` : null,
         break_minutes: r.break_minutes ?? 0,
-        // 法定休日 = 土曜固定の自動判定 (振替出勤の土曜は通常労働日)
+        // 法定休日 = 日曜固定の自動判定 (振替出勤の日曜は通常労働日)
         is_legal_holiday: isLegalHolidayRow(r),
         // legacy 列。paid_leave_type IS NOT NULL と同義になるよう同期して書く
         is_paid_leave: r.paid_leave_type !== null,
@@ -470,7 +492,7 @@ export default function AttendanceTab({
           start_time: c.start_time,
           end_time: c.end_time,
           break_minutes: c.break_minutes,
-          // 法定休日は土曜固定の自動判定なので CSV の値は取り込まない
+          // 法定休日は日曜固定の自動判定なので CSV の値は取り込まない
           paid_leave_type: c.paid_leave_type,
           business_km: c.business_km,
           note: c.note,
@@ -583,6 +605,16 @@ export default function AttendanceTab({
             <Link2 size={14} />
             URL 管理
           </button>
+          {isMaster && (
+            <button
+              onClick={() => setShowAdminModal(true)}
+              className="text-xs px-2.5 py-1.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 inline-flex items-center gap-1"
+              title="事業所とスタッフの管理 (master user 専用)"
+            >
+              <Users size={14} />
+              スタッフ管理
+            </button>
+          )}
           <button
             onClick={handleSave}
             disabled={saving || dirtyCount === 0 || !employeeId}
@@ -907,6 +939,16 @@ export default function AttendanceTab({
 
       {showUrlModal && office && (
         <StaffUrlModal payrollOfficeId={office.id} onClose={() => setShowUrlModal(false)} />
+      )}
+      {showAdminModal && (
+        <AttendanceAdminModal
+          tenantId={tenantId}
+          onClose={() => {
+            setShowAdminModal(false);
+            // 事業所取込・スタッフ追加を dropdown に反映
+            setAdminRefresh((n) => n + 1);
+          }}
+        />
       )}
     </div>
   );

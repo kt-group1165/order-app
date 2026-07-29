@@ -81,10 +81,11 @@ type RowState = {
   existed: boolean;
 };
 
-// 法定休日 = 土曜で固定 (AttendanceTab.tsx と同一運用)。手動チェック無しの自動判定。
-// 振替は管理者画面のみの機能なので、本人入力では単純に土曜 = 法定休日とする。
+// 法定休日 = 日曜で固定 (AttendanceTab.tsx と同一運用)。手動チェック無しの自動判定。
+// 振替は管理者画面のみの機能なので、本人入力では単純に日曜 = 法定休日とする。
+const LEGAL_HOLIDAY_DOW = 0; // 0 = 日曜
 function isLegalHolidayDow(dow: number): boolean {
-  return dow === 6;
+  return dow === LEGAL_HOLIDAY_DOW;
 }
 
 function currentMonth(): string {
@@ -303,7 +304,7 @@ function SelfAttendanceInner() {
       start_time: r.start_time ? `${r.start_time}:00` : null,
       end_time: r.end_time ? `${r.end_time}:00` : null,
       break_minutes: r.break_minutes,
-      // 法定休日 = 土曜固定の自動判定
+      // 法定休日 = 日曜固定の自動判定
       is_legal_holiday: isLegalHolidayDow(r.dow),
       paid_leave_type: r.paid_leave_type,
       business_km: r.business_km.trim() || null,
