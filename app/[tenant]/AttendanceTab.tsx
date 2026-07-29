@@ -227,6 +227,8 @@ export default function AttendanceTab({
   const csvInputRef = useRef<HTMLInputElement>(null);
   // 振替・代休元の入力欄を開いている行 (work_date)。値が空でも欄を出し続けるため
   const [subEditing, setSubEditing] = useState<Set<string>>(() => new Set());
+  // 2 つ目 (半日×2 の組合せ用) を開いている行。1 つ目を入れただけでは出さない
+  const [sub2Editing, setSub2Editing] = useState<Set<string>>(() => new Set());
   const [isMaster, setIsMaster] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
@@ -958,7 +960,7 @@ export default function AttendanceTab({
                             className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
                             title="この休みの元になった出勤日 (1つ目)"
                           />
-                          {(r.substitute_for_date || r.substitute_for_date2) && (
+                          {r.substitute_for_date2 || sub2Editing.has(r.work_date) ? (
                             <input
                               type="date"
                               value={r.substitute_for_date2}
@@ -966,6 +968,23 @@ export default function AttendanceTab({
                               className="w-[7.5rem] shrink-0 border border-gray-200 rounded px-1 py-0.5 text-[11px]"
                               title="元になった出勤日 (2つ目。半日×2 の組合せ用)"
                             />
+                          ) : (
+                            r.substitute_for_date && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSub2Editing((prev) => {
+                                    const next = new Set(prev);
+                                    next.add(r.work_date);
+                                    return next;
+                                  })
+                                }
+                                className="text-[11px] text-gray-300 hover:text-emerald-600 px-1 shrink-0"
+                                title="元になった出勤日をもう 1 つ追加 (半日×2 の組合せ用)"
+                              >
+                                ＋
+                              </button>
+                            )
                           )}
                         </div>
                       ) : (
