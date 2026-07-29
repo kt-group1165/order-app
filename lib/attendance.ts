@@ -30,10 +30,20 @@ export type AttendanceOffice = {
   name: string;
 };
 
-// 出勤簿の対象 service_type。order-app 本来の 福祉用具 に加えて
-// 本社 (統括営業本部) の staff も出勤簿を使うため含める。null は旧データ互換。
-export const ATTENDANCE_SERVICE_TYPES_OR =
-  "service_type.eq.福祉用具,service_type.eq.本社,service_type.is.null";
+/**
+ * 出勤簿の対象となる共通 offices の or-filter。
+ * - 福祉用具 (+ service_type 未設定の旧データ) は URL tenant (kt-group) のもの
+ * - 本社 (統括営業本部など) は tenant が sales-hq に分かれているため別枠で含める。
+ *   ただし fukuyogu-kanri (福祉用具管理者 = 管理用の擬似事業所) は除外するので
+ *   tenant を kt-group / sales-hq に限定する
+ */
+export function attendanceOfficesOrFilter(tenantId: string): string {
+  return [
+    `and(tenant_id.eq.${tenantId},service_type.eq.福祉用具)`,
+    `and(tenant_id.eq.${tenantId},service_type.is.null)`,
+    `and(service_type.eq.本社,or(tenant_id.eq.${tenantId},tenant_id.eq.sales-hq))`,
+  ].join(",");
+}
 
 export type AttendanceEmployee = {
   id: string;
@@ -125,8 +135,7 @@ export async function getAttendanceOffices(tenantId: string): Promise<Attendance
   const { data: commons, error: cErr } = await supabase
     .from("offices")
     .select("id, name, service_type, is_active")
-    .eq("tenant_id", tenantId)
-    .or(ATTENDANCE_SERVICE_TYPES_OR);
+    .or(attendanceOfficesOrFilter(tenantId));
   if (cErr) throw new Error(`共通マスタの取得に失敗: ${cErr.message}`);
   const active = (commons ?? []).filter(
     (c) => (c as { is_active?: boolean }).is_active !== false,

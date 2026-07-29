@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus, X, Users, Building2, Check, Pencil } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { attendanceOfficesOrFilter } from "@/lib/attendance";
 
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -63,12 +64,11 @@ export default function AttendanceAdminModal({
   const loadOffices = useCallback(async () => {
     setLoading(true);
     try {
-      // 共通マスタの福祉用具 + 本社 (統括営業本部) 事業所 (service_type 未設定の旧データ含む)
+      // 共通マスタの福祉用具 + 本社 (統括営業本部は tenant=sales-hq) 事業所
       const { data: commons, error: cErr } = await supabase
         .from("offices")
         .select("id, name, short_name, business_number, service_type, is_active")
-        .eq("tenant_id", tenantId)
-        .or("service_type.eq.福祉用具,service_type.eq.本社,service_type.is.null");
+        .or(attendanceOfficesOrFilter(tenantId));
       if (cErr) throw new Error(`共通マスタの取得に失敗: ${cErr.message}`);
       const activeCommons = (commons ?? []).filter(
         (c) => (c as { is_active?: boolean }).is_active !== false,
@@ -116,7 +116,11 @@ export default function AttendanceAdminModal({
 
   // ─── 共通マスタから取込 ───────────────────────────────────────────
   const handleImport = async (c: CommonOffice) => {
-    if (!c.business_number) {
+    const isHonbu = c.service_type === "本社";
+    // 本社は介護事業所番号を持たないため placeholder を採番する (payroll_offices 内でのみ使用)。
+    // 共通マスタの business_number には fake を書かない (伝送・請求で使う欄のため)。
+    const officeNumber = c.business_number ?? (isHonbu ? `HONBU-${c.id.slice(0, 8)}` : null);
+    if (!officeNumber) {
       alert("事業所番号 (business_number) が未設定のため取込めません。先に共通マスタで設定してください。");
       return;
     }
@@ -125,10 +129,10 @@ export default function AttendanceAdminModal({
     try {
       const { error } = await supabase.from("payroll_offices").insert({
         office_id: c.id,
-        office_number: c.business_number,
+        office_number: officeNumber,
         short_name: c.short_name ?? c.name,
         // payroll_offices.office_type: 本社はそのまま、それ以外 (福祉用具/未設定) は福祉用具貸与
-        office_type: c.service_type === "本社" ? "本社" : "福祉用具貸与",
+        office_type: isHonbu ? "本社" : "福祉用具貸与",
       });
       if (error) throw new Error(`取込に失敗: ${error.message}`);
       await loadOffices();
@@ -266,24 +270,30 @@ function OfficesView({
         <div>
           <h4 className="text-xs font-semibold text-gray-600 mb-2">未取込の共通マスタ事業所 ({unimported.length})</h4>
           <div className="space-y-1.5">
-            {unimported.map((c) => (
-              <div key={c.id} className="flex items-center gap-2 border border-dashed border-gray-300 rounded-lg px-3 py-2 bg-gray-50">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-600 truncate">{c.name}</p>
-                  <p className="text-[10px] text-gray-400">
-                    事業所番号 {c.business_number || "未設定 (取込不可)"}
-                  </p>
+            {unimported.map((c) => {
+              const isHonbu = c.service_type === "本社";
+              const importable = !!c.business_number || isHonbu;
+              return (
+                <div key={c.id} className="flex items-center gap-2 border border-dashed border-gray-300 rounded-lg px-3 py-2 bg-gray-50">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-600 truncate">{c.name}</p>
+                    <p className="text-[10px] text-gray-400">
+                      事業所番号{" "}
+                      {c.business_number ??
+                        (isHonbu ? "なし (本社は番号なしで取込可)" : "未設定 (取込不可)")}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onImport(c)}
+                    disabled={busy || !importable}
+                    className="text-[11px] px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
+                  >
+                    <Plus size={12} />
+                    取込
+                  </button>
                 </div>
-                <button
-                  onClick={() => onImport(c)}
-                  disabled={busy || !c.business_number}
-                  className="text-[11px] px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
-                >
-                  <Plus size={12} />
-                  取込
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
