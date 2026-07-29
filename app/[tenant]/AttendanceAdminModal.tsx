@@ -43,7 +43,27 @@ type Employee = {
   employment_status: string;
   /** 出勤簿での非表示 (擬似エントリ用)。列未適用の環境では undefined */
   attendance_hidden?: boolean;
+  /** 人の正マスタ members への紐付け。null/undefined = payroll 専用の独立エントリ */
+  member_id?: string | null;
 };
+
+/** members から取込む候補 (この事業所が主所属で、まだ payroll に居ない人) */
+type ImportCandidate = {
+  member_id: string;
+  name: string;
+  internal_number: number | null;
+  /** 既に他事業所の payroll に紐付いている (1人1冊のため取込不可) */
+  linked_elsewhere: string | null;
+  /** この事業所に同名の未紐付け payroll 行がある → 新規作成せず紐付けで済む */
+  link_to_employee_id: string | null;
+};
+
+/** 氏名正規化 (空白除去 + 全角英数→半角)。members ↔ payroll の同名判定用 */
+function normName(name: string): string {
+  return (name ?? "")
+    .replace(/[\s　]/g, "")
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0));
+}
 
 type SubTab = "staff" | "offices";
 
@@ -308,9 +328,12 @@ function OfficesView({
 function StaffView({ offices }: { offices: PayrollOffice[] }) {
   const [officeId, setOfficeId] = useState<string>(offices[0]?.id ?? "");
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showRetired, setShowRetired] = useState(false);
+
+  const commonOfficeId = offices.find((o) => o.id === officeId)?.office_id ?? null;
 
   // 追加フォーム
   const [newNumber, setNewNumber] = useState("");
@@ -325,24 +348,93 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
   const load = useCallback(async () => {
     if (!officeId) {
       setEmployees([]);
+      setCandidates([]);
       return;
     }
     setLoading(true);
     try {
-      // attendance_hidden は後付け列 (migration 未適用でも動くよう select("*"))
+      // attendance_hidden / member_id は後付け列 (migration 未適用でも動くよう select("*"))
       const { data, error } = await supabase
         .from("payroll_employees")
         .select("*")
         .eq("office_id", officeId)
         .order("employee_number");
       if (error) throw new Error(`スタッフの取得に失敗: ${error.message}`);
-      setEmployees((data ?? []) as Employee[]);
+      const emps = (data ?? []) as Employee[];
+      setEmployees(emps);
+
+      // ─── members からの取込候補 ───
+      // この共通 office が「主所属」の在籍 members のうち、payroll 未紐付けの人。
+      // 1人1冊 (主所属のみ) 運用: 他事業所で紐付け済みなら取込不可として表示。
+      if (!commonOfficeId) {
+        setCandidates([]);
+        return;
+      }
+      const { data: links, error: linkErr } = await supabase
+        .from("member_offices")
+        .select("member_id")
+        .eq("office_id", commonOfficeId)
+        .eq("is_primary", true);
+      if (linkErr) throw new Error(`所属の取得に失敗: ${linkErr.message}`);
+      const mids = [...new Set((links ?? []).map((l) => (l as { member_id: string }).member_id))];
+      if (mids.length === 0) {
+        setCandidates([]);
+        return;
+      }
+      const [{ data: mems, error: memErr }, { data: linkedRows, error: linkedErr }] =
+        await Promise.all([
+          supabase
+            .from("members")
+            .select("id, name, status, deleted_at, internal_number")
+            .in("id", mids),
+          supabase
+            .from("payroll_employees")
+            .select("member_id, office_id")
+            .in("member_id", mids),
+        ]);
+      if (memErr) throw new Error(`members の取得に失敗: ${memErr.message}`);
+      // member_id 列未適用 (42703) はまだ紐付け運用前 → 候補表示をスキップ
+      if (linkedErr) {
+        if (linkedErr.code === "42703") {
+          setCandidates([]);
+          return;
+        }
+        throw new Error(`紐付け状況の取得に失敗: ${linkedErr.message}`);
+      }
+      const linkedByMember = new Map<string, string>();
+      for (const r of linkedRows ?? []) {
+        const row = r as { member_id: string | null; office_id: string };
+        if (row.member_id) linkedByMember.set(row.member_id, row.office_id);
+      }
+      const officeName = (pid: string) => offices.find((o) => o.id === pid)?.name ?? "他事業所";
+      // この事業所の未紐付け payroll 行 (正規化名 → employee id)。同名なら新規でなく紐付けにする
+      const unlinkedByName = new Map<string, string>();
+      for (const e of emps) {
+        if (!e.member_id) unlinkedByName.set(normName(e.name), e.id);
+      }
+      const cands: ImportCandidate[] = (mems ?? [])
+        .filter((m) => !m.deleted_at && m.status === "active")
+        .map((m) => {
+          const linkedOffice = linkedByMember.get(m.id as string);
+          return {
+            member_id: m.id as string,
+            name: m.name as string,
+            internal_number: (m.internal_number as number | null) ?? null,
+            linked_elsewhere:
+              linkedOffice && linkedOffice !== officeId ? officeName(linkedOffice) : null,
+            link_to_employee_id: unlinkedByName.get(normName(m.name as string)) ?? null,
+          };
+        })
+        // この事業所に紐付け済みの人は候補から外す
+        .filter((c) => !(linkedByMember.get(c.member_id) === officeId));
+      cands.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+      setCandidates(cands);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [officeId]);
+  }, [officeId, commonOfficeId, offices]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 事業所切替時の async fetch
@@ -375,6 +467,48 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     }
   };
 
+  // ─── members からの取込 / 紐付け ────────────────────────────────────
+  const handleImportMember = async (c: ImportCandidate) => {
+    setBusyId(c.member_id);
+    try {
+      if (c.link_to_employee_id) {
+        // 同名の既存 payroll 行に紐付けるだけ (新規行は作らない)
+        const { error } = await supabase
+          .from("payroll_employees")
+          .update({ member_id: c.member_id })
+          .eq("id", c.link_to_employee_id)
+          .is("member_id", null);
+        if (error) throw new Error(`紐付けに失敗: ${error.message}`);
+      } else {
+        // 社員番号は members の internal_number ベースで自動採番 (後で編集可)
+        const num = c.internal_number !== null ? `M${c.internal_number}` : `M-${c.member_id.slice(0, 8)}`;
+        const { error } = await supabase.from("payroll_employees").insert({
+          employee_number: num,
+          name: c.name,
+          office_id: officeId,
+          employment_status: "在職者",
+          member_id: c.member_id,
+        });
+        if (error) throw new Error(`取込に失敗: ${error.message}`);
+      }
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleImportAll = async () => {
+    const targets = candidates.filter((c) => !c.linked_elsewhere);
+    if (targets.length === 0) return;
+    if (!window.confirm(`${targets.length} 名をまとめて取込みますか？`)) return;
+    for (const c of targets) {
+      // 1件ずつ逐次 (エラーはその場で alert される)
+      await handleImportMember(c);
+    }
+  };
+
   const startEdit = (emp: Employee) => {
     setEditingId(emp.id);
     setEditNumber(emp.employee_number);
@@ -390,11 +524,20 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     }
     setBusyId(emp.id);
     try {
+      // 社員番号は payroll 側の属性なので常に payroll 行を更新
       const { error } = await supabase
         .from("payroll_employees")
-        .update({ employee_number: num, name })
+        .update({ employee_number: num, ...(emp.member_id ? {} : { name }) })
         .eq("id", emp.id);
       if (error) throw new Error(`更新に失敗: ${error.message}`);
+      // 氏名は members が正。紐付け済みなら members を更新 → trigger が全アプリに反映
+      if (emp.member_id && name !== emp.name) {
+        const { error: memErr } = await supabase
+          .from("members")
+          .update({ name })
+          .eq("id", emp.member_id);
+        if (memErr) throw new Error(`氏名の更新に失敗 (members): ${memErr.message}`);
+      }
       setEditingId(null);
       await load();
     } catch (e) {
@@ -431,21 +574,33 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
 
   const handleToggleStatus = async (emp: Employee) => {
     const toRetired = emp.employment_status !== "退職者";
+    const linked = !!emp.member_id;
     if (
       toRetired &&
       !window.confirm(
-        `${emp.name} を退職者にしますか？\n出勤簿の対象・自己入力 URL から外れます (記録は残ります)。`,
+        linked
+          ? `${emp.name} を退職者にしますか？\nカレンダー・給与計算など全アプリで退職扱いになります (記録は残ります)。`
+          : `${emp.name} を退職者にしますか？\n出勤簿の対象・自己入力 URL から外れます (記録は残ります)。`,
       )
     ) {
       return;
     }
     setBusyId(emp.id);
     try {
-      const { error } = await supabase
-        .from("payroll_employees")
-        .update({ employment_status: toRetired ? "退職者" : "在職者" })
-        .eq("id", emp.id);
-      if (error) throw new Error(`変更に失敗: ${error.message}`);
+      if (linked) {
+        // 在籍状態は members が正 → trigger が payroll (と他アプリの見え方) に反映
+        const { error } = await supabase
+          .from("members")
+          .update({ status: toRetired ? "inactive" : "active" })
+          .eq("id", emp.member_id as string);
+        if (error) throw new Error(`変更に失敗 (members): ${error.message}`);
+      } else {
+        const { error } = await supabase
+          .from("payroll_employees")
+          .update({ employment_status: toRetired ? "退職者" : "在職者" })
+          .eq("id", emp.id);
+        if (error) throw new Error(`変更に失敗: ${error.message}`);
+      }
       await load();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
@@ -514,6 +669,44 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
         </button>
       </div>
 
+      {/* members からの取込候補 (この事業所が主所属で出勤簿に未登録の人) */}
+      {!loading && candidates.length > 0 && (
+        <div className="border border-dashed border-sky-300 rounded-lg px-3 py-2 bg-sky-50/50 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] font-semibold text-sky-700 flex-1">
+              職員マスタに居て出勤簿に未登録 ({candidates.length})
+            </p>
+            {candidates.some((c) => !c.linked_elsewhere) && (
+              <button
+                onClick={handleImportAll}
+                disabled={busyId !== null}
+                className="text-[11px] px-2.5 py-1 rounded bg-sky-500 hover:bg-sky-600 text-white shrink-0 disabled:opacity-40"
+              >
+                まとめて取込
+              </button>
+            )}
+          </div>
+          {candidates.map((c) => (
+            <div key={c.member_id} className="flex items-center gap-2">
+              <span className="flex-1 min-w-0 text-xs text-gray-700 truncate">{c.name}</span>
+              {c.linked_elsewhere ? (
+                <span className="text-[10px] text-gray-400 shrink-0">
+                  出勤簿は {c.linked_elsewhere} 側 (1人1冊)
+                </span>
+              ) : (
+                <button
+                  onClick={() => handleImportMember(c)}
+                  disabled={busyId !== null}
+                  className="text-[11px] px-2 py-0.5 rounded border border-sky-400 text-sky-600 hover:bg-sky-100 shrink-0 disabled:opacity-40"
+                >
+                  {busyId === c.member_id ? "…" : c.link_to_employee_id ? "既存行に紐付け" : "取込"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* 一覧 */}
       {loading ? (
         <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin text-emerald-400" /></div>
@@ -565,6 +758,14 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                     <span className="flex-1 min-w-0 text-sm text-gray-700 truncate">{emp.name}</span>
                     {retired && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 shrink-0">退職者</span>}
                     {hidden && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-600 shrink-0">非表示</span>}
+                    {emp.member_id && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-600 shrink-0"
+                        title="職員マスタ (members) と連携中。氏名・在籍の変更は全アプリに反映されます"
+                      >
+                        連携
+                      </span>
+                    )}
                     <button
                       onClick={() => startEdit(emp)}
                       disabled={busyId === emp.id}
