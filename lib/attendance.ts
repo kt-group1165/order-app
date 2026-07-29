@@ -54,6 +54,8 @@ export type AttendanceEmployee = {
   office_id: string;
   /** 電話当番の単価 (円/回)。本社の手当計算に使う。列未適用なら既定 3,000 */
   phone_duty_pay: number;
+  /** 事務員か。true なら出勤簿に 通勤距離 + 出張距離 の 2 列を出す */
+  is_office_worker: boolean;
 };
 
 /** DB row (payroll_kyotaku_attendance_records) */
@@ -75,6 +77,8 @@ export type AttendanceDbRow = {
   substitute_for_date: string | null;
   /** 振替・代休元 2 (列未適用の環境では undefined) */
   substitute_for_date2?: string | null;
+  /** 出張距離 (km)。事務員のみ。列未適用の環境では undefined */
+  business_trip_km?: number | null;
   /** 電話当番 (本社のみ)。列未適用の環境では undefined */
   phone_duty?: boolean;
   /** 土日祝対応 件数 (本社のみ)。列未適用の環境では undefined */
@@ -189,6 +193,7 @@ export async function getAttendanceEmployees(payrollOfficeId: string): Promise<A
     (data ?? []) as (AttendanceEmployee & {
       attendance_hidden?: boolean;
       phone_duty_pay?: number | null;
+      is_office_worker?: boolean | null;
     })[]
   )
     .filter((e) => e.attendance_hidden !== true)
@@ -197,6 +202,7 @@ export async function getAttendanceEmployees(payrollOfficeId: string): Promise<A
       name: e.name,
       office_id: e.office_id,
       phone_duty_pay: e.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY,
+      is_office_worker: e.is_office_worker === true,
     }));
 }
 

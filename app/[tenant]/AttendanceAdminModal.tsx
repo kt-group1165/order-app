@@ -47,6 +47,8 @@ type Employee = {
   member_id?: string | null;
   /** 電話当番の単価 (円/回)。本社の職員のみ意味を持つ */
   phone_duty_pay?: number | null;
+  /** 事務員か。true なら出勤簿に出張距離の列が増える */
+  is_office_worker?: boolean | null;
 };
 
 /** members から取込む候補 (この事業所が主所属で、まだ payroll に居ない人) */
@@ -347,6 +349,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
   const [editNumber, setEditNumber] = useState("");
   const [editName, setEditName] = useState("");
   const [editPhonePay, setEditPhonePay] = useState("");
+  const [editOfficeWorker, setEditOfficeWorker] = useState(false);
 
   const load = useCallback(async () => {
     if (!officeId) {
@@ -517,6 +520,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     setEditNumber(emp.employee_number);
     setEditName(emp.name);
     setEditPhonePay(String(emp.phone_duty_pay ?? 3000));
+    setEditOfficeWorker(emp.is_office_worker === true);
   };
 
   const handleEditSave = async (emp: Employee) => {
@@ -539,8 +543,9 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
         .update({
           employee_number: num,
           ...(emp.member_id ? {} : { name }),
-          // 列未適用の環境では 42703 になるので送らない (phone_duty_pay が未定義のとき)
+          // 列未適用の環境では 42703 になるので送らない (値が undefined のとき)
           ...(emp.phone_duty_pay === undefined ? {} : { phone_duty_pay: phonePay }),
+          ...(emp.is_office_worker === undefined ? {} : { is_office_worker: editOfficeWorker }),
         })
         .eq("id", emp.id);
       if (error) throw new Error(`更新に失敗: ${error.message}`);
@@ -764,6 +769,18 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                       />
                       円
                     </label>
+                    <label
+                      className="flex items-center gap-1 text-[10px] text-gray-500 shrink-0"
+                      title="事務員は出勤簿に 通勤距離 と 出張距離 の 2 列が出ます"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={editOfficeWorker}
+                        onChange={(e) => setEditOfficeWorker(e.target.checked)}
+                        className="accent-emerald-600"
+                      />
+                      事務員
+                    </label>
                     <button
                       onClick={() => handleEditSave(emp)}
                       disabled={busyId === emp.id}
@@ -785,6 +802,14 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                     <span className="flex-1 min-w-0 text-sm text-gray-700 truncate">{emp.name}</span>
                     {retired && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 shrink-0">退職者</span>}
                     {hidden && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-600 shrink-0">非表示</span>}
+                    {emp.is_office_worker && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600 shrink-0"
+                        title="事務員 (出勤簿に出張距離の列が出ます)"
+                      >
+                        事務
+                      </span>
+                    )}
                     {emp.member_id && (
                       <span
                         className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-600 shrink-0"

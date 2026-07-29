@@ -98,6 +98,8 @@ type RowState = {
   break_minutes: number;
   paid_leave_type: "full" | "half" | null;
   business_km: string;
+  /** 出張距離 (事務員のみ)。文字列保持で空入力を許す */
+  business_trip_km: string;
   /** 振替・代休元 1 (この日の休みの元になった出勤日)。set = 代休で休み扱い */
   substitute_for_date: string;
   /** 振替・代休元 2 (半日出勤×2 を 1 日の代休に組み合わせる用) */
@@ -154,6 +156,7 @@ function emptyRow(work_date: string): RowState {
     break_minutes: 0,
     paid_leave_type: null,
     business_km: "",
+    business_trip_km: "",
     substitute_for_date: "",
     substitute_for_date2: "",
     note: "",
@@ -172,6 +175,7 @@ function isBlank(r: RowState): boolean {
     r.break_minutes === 0 &&
     r.paid_leave_type === null &&
     !r.business_km.trim() &&
+    !r.business_trip_km.trim() &&
     !r.substitute_for_date &&
     !r.substitute_for_date2 &&
     !r.note.trim() &&
@@ -250,6 +254,8 @@ export default function AttendanceTab({
   /** 選択職員の電話当番単価 (職員ごとに異なる。既定 3,000 円) */
   const phoneDutyPay =
     employees.find((e) => e.id === employeeId)?.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY;
+  /** 事務員か (true なら通勤距離に加えて出張距離の列も出す) */
+  const isOfficeWorker = employees.find((e) => e.id === employeeId)?.is_office_worker === true;
 
   // ─── 事業所一覧 (福祉用具 + 本社) ───────────────────────────────────
   useEffect(() => {
@@ -346,6 +352,10 @@ export default function AttendanceTab({
                   ? "full"
                   : null,
             business_km: db.business_km === null || db.business_km === undefined ? "" : String(db.business_km),
+            business_trip_km:
+              db.business_trip_km === null || db.business_trip_km === undefined
+                ? ""
+                : String(db.business_trip_km),
             substitute_for_date: db.substitute_for_date ?? "",
             substitute_for_date2: db.substitute_for_date2 ?? "",
             note: db.note ?? "",
@@ -415,8 +425,10 @@ export default function AttendanceTab({
     [rows, phoneDutyPay],
   );
 
-  /** 出張距離の月合計 (km) */
+  /** 通勤距離の月合計 (km) */
   const kmTotal = rows.reduce((a, r) => a + (parseFloat(r.business_km) || 0), 0);
+  /** 出張距離の月合計 (km、事務員のみ) */
+  const tripKmTotal = rows.reduce((a, r) => a + (parseFloat(r.business_trip_km) || 0), 0);
   /** 出勤日数 (実労働が 1 分でもある日) */
   const workDays = dailies.filter((d) => d.work_minutes > 0).length;
 
@@ -523,6 +535,12 @@ export default function AttendanceTab({
       const km = r.business_km.trim();
       const kmNum = km === "" ? null : Number(km);
       if (kmNum !== null && !Number.isFinite(kmNum)) {
+        alert(`${r.work_date} の通勤距離が数値ではありません`);
+        return;
+      }
+      const tripKm = r.business_trip_km.trim();
+      const tripKmNum = tripKm === "" ? null : Number(tripKm);
+      if (tripKmNum !== null && !Number.isFinite(tripKmNum)) {
         alert(`${r.work_date} の出張距離が数値ではありません`);
         return;
       }
@@ -541,6 +559,8 @@ export default function AttendanceTab({
         paid_leave_type: r.paid_leave_type,
         note: r.note.trim() || null,
         business_km: kmNum,
+        // 出張距離は事務員のみ。列未適用の環境を壊さないよう対象外では送らない
+        ...(isOfficeWorker ? { business_trip_km: tripKmNum } : {}),
         substitute_for_date: r.substitute_for_date || null,
         substitute_for_date2: r.substitute_for_date2 || null,
         // 電話当番・土日祝対応は本社のみ。列未適用の環境を壊さないよう本社以外では送らない
@@ -936,7 +956,10 @@ export default function AttendanceTab({
                 <th className="text-left px-2 py-2 w-24">退勤</th>
                 <th className="text-left px-2 py-2 w-20">休憩(分)</th>
                 <th className="text-left px-2 py-2 w-20">有給</th>
-                <th className="text-left px-2 py-2 w-20">出張km</th>
+                <th className="text-left px-2 py-2 w-20" title="自宅⇔事業所の通勤距離 (km)">通勤km</th>
+                {isOfficeWorker && (
+                  <th className="text-left px-2 py-2 w-20" title="出張の走行距離 (km)。事務員のみ">出張km</th>
+                )}
                 {isHonbu && (
                   <>
                     <th className="text-center px-2 py-2 w-12" title={`電話当番 (1回 ${phoneDutyPay.toLocaleString()}円。土日祝対応がある日は併給されません)`}>電話</th>
@@ -1023,6 +1046,18 @@ export default function AttendanceTab({
                         className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs text-right"
                       />
                     </td>
+                    {isOfficeWorker && (
+                      <td className="px-2 py-1">
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={r.business_trip_km}
+                          onChange={(e) => patchRow(i, { business_trip_km: e.target.value })}
+                          className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs text-right"
+                        />
+                      </td>
+                    )}
                     {isHonbu && (
                       <>
                         <td className="px-2 py-1 text-center">
@@ -1137,9 +1172,14 @@ export default function AttendanceTab({
                     </span>
                   )}
                 </td>
-                <td className="px-2 py-2 text-right tabular-nums" title="出張距離の月合計">
+                <td className="px-2 py-2 text-right tabular-nums" title="通勤距離の月合計">
                   {kmTotal > 0 ? `${kmTotal.toFixed(1)} km` : ""}
                 </td>
+                {isOfficeWorker && (
+                  <td className="px-2 py-2 text-right tabular-nums" title="出張距離の月合計">
+                    {tripKmTotal > 0 ? `${tripKmTotal.toFixed(1)} km` : ""}
+                  </td>
+                )}
                 <td className="px-2 py-2" colSpan={isHonbu ? 4 : 1} />
                 <td className="px-2 py-2 text-right tabular-nums">{formatHM(summary.total_work)}</td>
                 <td className={`px-2 py-2 text-right tabular-nums ${overLimit ? "text-red-600" : "text-amber-600"}`}>
@@ -1180,7 +1220,8 @@ export default function AttendanceTab({
               <th>深夜</th>
               <th>法定休日</th>
               <th>有給</th>
-              <th>出張(km)</th>
+              <th>通勤(km)</th>
+              {isOfficeWorker && <th>出張(km)</th>}
               {isHonbu && <th>手当(円)</th>}
               <th className="print-note">備考</th>
             </tr>
@@ -1208,6 +1249,7 @@ export default function AttendanceTab({
                   <td>{(d?.holiday_work ?? 0) > 0 ? formatHM(d.holiday_work) : ""}</td>
                   <td>{r.paid_leave_type === "full" ? "○" : r.paid_leave_type === "half" ? "半" : ""}</td>
                   <td>{r.business_km}</td>
+                  {isOfficeWorker && <td>{r.business_trip_km}</td>}
                   {isHonbu && (
                     <td>
                       {(() => {
@@ -1241,6 +1283,7 @@ export default function AttendanceTab({
               <td>{formatHM(summary.total_holiday)}</td>
               <td>{summary.total_paid_leave_days} 日</td>
               <td>{kmTotal > 0 ? kmTotal.toFixed(1) : ""}</td>
+              {isOfficeWorker && <td>{tripKmTotal > 0 ? tripKmTotal.toFixed(1) : ""}</td>}
               {isHonbu && <td>{allowance.totalPay > 0 ? allowance.totalPay.toLocaleString() : ""}</td>}
               <td className="print-note" />
             </tr>
@@ -1265,9 +1308,15 @@ export default function AttendanceTab({
                 <td>{summary.total_paid_leave_days} 日</td>
               </tr>
               <tr>
-                <th>出張距離</th>
+                <th>通勤距離</th>
                 <td>{kmTotal.toFixed(1)} km</td>
               </tr>
+              {isOfficeWorker && (
+                <tr>
+                  <th>出張距離</th>
+                  <td>{tripKmTotal.toFixed(1)} km</td>
+                </tr>
+              )}
             </tbody>
           </table>
 
