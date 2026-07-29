@@ -47,9 +47,10 @@ export async function GET(req: Request) {
   }
 
   const admin = createAdminClient();
+  // attendance_hidden は後付け列 (migration 未適用でも動くよう select("*") + JS filter)
   const { data, error } = await admin
     .from("payroll_employees")
-    .select("id, name")
+    .select("*")
     .eq("office_id", payrollOfficeId)
     .neq("employment_status", "退職者")
     .order("name");
@@ -57,7 +58,9 @@ export async function GET(req: Request) {
     console.error("attendance-url employees fetch failed:", error.message);
     return NextResponse.json({ error: `職員の取得に失敗: ${error.message}` }, { status: 500 });
   }
-  const employees = data ?? [];
+  const employees = (data ?? []).filter(
+    (e) => (e as { attendance_hidden?: boolean }).attendance_hidden !== true,
+  );
 
   // 個別制御の状態。row 無し = 有効 / version 1。
   // table 未 apply (42P01) は全員デフォルト (settingsAvailable=false で UI に伝える)。

@@ -129,16 +129,19 @@ export async function getAttendanceOffice(officeId: string): Promise<AttendanceO
   };
 }
 
-/** payroll 事業所に所属する在籍職員 (退職者を除く) */
+/** payroll 事業所に所属する在籍職員 (退職者と出勤簿非表示を除く) */
 export async function getAttendanceEmployees(payrollOfficeId: string): Promise<AttendanceEmployee[]> {
+  // attendance_hidden は後付け列 (migration 未適用でも動くよう select("*") + JS filter)
   const { data, error } = await supabase
     .from("payroll_employees")
-    .select("id, name, office_id")
+    .select("*")
     .eq("office_id", payrollOfficeId)
     .neq("employment_status", "退職者")
     .order("name");
   if (error) throw new Error(`職員の取得に失敗: ${error.message}`);
-  return (data ?? []) as AttendanceEmployee[];
+  return ((data ?? []) as (AttendanceEmployee & { attendance_hidden?: boolean })[])
+    .filter((e) => e.attendance_hidden !== true)
+    .map((e) => ({ id: e.id, name: e.name, office_id: e.office_id }));
 }
 
 // =====================================================================

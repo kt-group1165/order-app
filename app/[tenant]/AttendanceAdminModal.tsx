@@ -39,6 +39,8 @@ type Employee = {
   employee_number: string;
   name: string;
   employment_status: string;
+  /** 出勤簿での非表示 (擬似エントリ用)。列未適用の環境では undefined */
+  attendance_hidden?: boolean;
 };
 
 type SubTab = "staff" | "offices";
@@ -315,9 +317,10 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     }
     setLoading(true);
     try {
+      // attendance_hidden は後付け列 (migration 未適用でも動くよう select("*"))
       const { data, error } = await supabase
         .from("payroll_employees")
-        .select("id, employee_number, name, employment_status")
+        .select("*")
         .eq("office_id", officeId)
         .order("employee_number");
       if (error) throw new Error(`スタッフの取得に失敗: ${error.message}`);
@@ -389,6 +392,31 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     }
   };
 
+  const handleToggleHidden = async (emp: Employee) => {
+    const toHidden = emp.attendance_hidden !== true;
+    setBusyId(emp.id);
+    try {
+      const { error } = await supabase
+        .from("payroll_employees")
+        .update({ attendance_hidden: toHidden })
+        .eq("id", emp.id);
+      if (error) {
+        // 42703 = 列が無い (migration 未適用)
+        if (error.code === "42703") {
+          throw new Error(
+            "非表示フラグの列が未適用です。migrations/payroll_employees_attendance_hidden.sql を Supabase で適用してください。",
+          );
+        }
+        throw new Error(`変更に失敗: ${error.message}`);
+      }
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleToggleStatus = async (emp: Employee) => {
     const toRetired = emp.employment_status !== "退職者";
     if (
@@ -414,8 +442,13 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
     }
   };
 
-  const visible = showRetired ? employees : employees.filter((e) => e.employment_status !== "退職者");
-  const retiredCount = employees.filter((e) => e.employment_status === "退職者").length;
+  // 退職者と非表示は同じチェックボックスでまとめて出す (普段のリストから隠す対象)
+  const visible = showRetired
+    ? employees
+    : employees.filter((e) => e.employment_status !== "退職者" && e.attendance_hidden !== true);
+  const retiredCount = employees.filter(
+    (e) => e.employment_status === "退職者" || e.attendance_hidden === true,
+  ).length;
 
   return (
     <div className="space-y-3">
@@ -438,7 +471,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
               onChange={(e) => setShowRetired(e.target.checked)}
               className="accent-emerald-600"
             />
-            退職者も表示 ({retiredCount})
+            退職者・非表示も表示 ({retiredCount})
           </label>
         )}
       </div>
@@ -478,11 +511,12 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
         <div className="space-y-1.5">
           {visible.map((emp) => {
             const retired = emp.employment_status === "退職者";
+            const hidden = emp.attendance_hidden === true;
             const editing = editingId === emp.id;
             return (
               <div
                 key={emp.id}
-                className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${retired ? "border-gray-200 bg-gray-50 opacity-70" : "border-gray-200"}`}
+                className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${retired || hidden ? "border-gray-200 bg-gray-50 opacity-70" : "border-gray-200"}`}
               >
                 {editing ? (
                   <>
@@ -518,6 +552,7 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                     <span className="text-[10px] text-gray-400 w-20 shrink-0 font-mono truncate">{emp.employee_number}</span>
                     <span className="flex-1 min-w-0 text-sm text-gray-700 truncate">{emp.name}</span>
                     {retired && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 shrink-0">退職者</span>}
+                    {hidden && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-600 shrink-0">非表示</span>}
                     <button
                       onClick={() => startEdit(emp)}
                       disabled={busyId === emp.id}
@@ -525,6 +560,22 @@ function StaffView({ offices }: { offices: PayrollOffice[] }) {
                     >
                       <Pencil size={11} />
                       編集
+                    </button>
+                    <button
+                      onClick={() => handleToggleHidden(emp)}
+                      disabled={busyId === emp.id}
+                      className={`text-[11px] px-2 py-1 rounded border shrink-0 disabled:opacity-40 ${
+                        hidden
+                          ? "border-emerald-300 text-emerald-600 hover:bg-emerald-50"
+                          : "border-amber-300 text-amber-600 hover:bg-amber-50"
+                      }`}
+                      title={
+                        hidden
+                          ? "出勤簿の職員選択・URL 発行に再び表示する"
+                          : "出勤簿の職員選択・URL 発行から隠す (対応者調整などの擬似エントリ用。給与計算側には残る)"
+                      }
+                    >
+                      {busyId === emp.id ? "…" : hidden ? "表示に戻す" : "非表示"}
                     </button>
                     <button
                       onClick={() => handleToggleStatus(emp)}

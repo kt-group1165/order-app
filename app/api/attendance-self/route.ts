@@ -51,16 +51,21 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
     return NextResponse.json({ error: "この URL は無効です" }, { status: 403 });
   }
 
+  // attendance_hidden は後付け列 (migration 未適用でも動くよう select("*") で拾う)
   const { data, error } = await admin
     .from("payroll_employees")
-    .select("id, name, office_id, employment_status")
+    .select("*")
     .eq("id", employeeId)
     .maybeSingle();
   if (error) {
     console.error("attendance-self employee fetch failed:", error.message);
     return NextResponse.json({ error: `職員の取得に失敗: ${error.message}` }, { status: 500 });
   }
-  if (!data || data.employment_status === "退職者") {
+  if (
+    !data ||
+    data.employment_status === "退職者" ||
+    (data as { attendance_hidden?: boolean }).attendance_hidden === true
+  ) {
     return NextResponse.json({ error: "この URL は無効です" }, { status: 403 });
   }
   const { data: office, error: officeErr } = await admin
