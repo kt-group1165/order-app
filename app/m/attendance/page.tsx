@@ -7,7 +7,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, CheckCircle2 } from "lucide-react";
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
@@ -52,6 +52,7 @@ type DbRow = {
   paid_leave_type: "full" | "half" | null;
   note: string | null;
   business_km: number | string | null;
+  business_trip_km?: number | string | null;
   substitute_for_date: string | null;
   substitute_for_date2?: string | null;
   phone_duty?: boolean;
@@ -66,6 +67,7 @@ type RowState = {
   break_minutes: number;
   paid_leave_type: "full" | "half" | null;
   business_km: string;
+  business_trip_km: string;
   note: string;
   phone_duty: boolean;
   holiday_support_count: string;
@@ -134,6 +136,7 @@ function emptyRow(work_date: string): RowState {
     break_minutes: 0,
     paid_leave_type: null,
     business_km: "",
+    business_trip_km: "",
     note: "",
     phone_duty: false,
     holiday_support_count: "",
@@ -148,7 +151,7 @@ function isBlank(r: RowState): boolean {
   return (
     !r.start_time && !r.end_time && r.break_minutes === 0 &&
     r.paid_leave_type === null &&
-    !r.business_km.trim() && !r.note.trim() &&
+    !r.business_km.trim() && !r.business_trip_km.trim() && !r.note.trim() &&
     !r.phone_duty && !parseHolidayCount(r.holiday_support_count) &&
     !r.substitute_for_date && !r.substitute_for_date2
   );
@@ -177,6 +180,10 @@ function SelfAttendanceInner() {
   });
   const [name, setName] = useState<string>("");
   const [officeType, setOfficeType] = useState<string>("");
+  const [isOfficeWorker, setIsOfficeWorker] = useState(false);
+  // 月次ステータス (null = 未提出)。提出済みは編集不可
+  const [monthStatus, setMonthStatus] = useState<{ status: string; submitted_at: string | null } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [phoneDutyPay, setPhoneDutyPay] = useState<number>(DEFAULT_PHONE_DUTY_PAY);
   const [weekStart, setWeekStart] = useState(0);
   const [rows, setRows] = useState<RowState[]>([]);
@@ -208,6 +215,8 @@ function SelfAttendanceInner() {
       setFatal(null);
       setName(json.employee?.name ?? "");
       setOfficeType(json.employee?.office_type ?? "");
+      setIsOfficeWorker(json.employee?.is_office_worker === true);
+      setMonthStatus(json.month_status ?? null);
       setPhoneDutyPay(json.employee?.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY);
       const ws: number = json.employee?.work_week_start ?? 0;
       setWeekStart(ws);
@@ -253,6 +262,10 @@ function SelfAttendanceInner() {
                 : db.is_paid_leave ? "full" : null,
             business_km:
               db.business_km === null || db.business_km === undefined ? "" : String(db.business_km),
+            business_trip_km:
+              db.business_trip_km === null || db.business_trip_km === undefined
+                ? ""
+                : String(db.business_trip_km),
             note: db.note ?? "",
             substitute_for_date: db.substitute_for_date ?? "",
             substitute_for_date2: db.substitute_for_date2 ?? "",
@@ -308,7 +321,11 @@ function SelfAttendanceInner() {
 
   const dirtyCount = rows.filter((r) => r.dirty).length;
 
+  /** 提出済み (submitted / approved) は本人編集不可 */
+  const locked = monthStatus !== null;
+
   const patchRow = (idx: number, patch: Partial<RowState>) => {
+    if (locked) return;
     setRows((prev) =>
       prev.map((r, i) => {
         if (i !== idx) return r;
@@ -324,6 +341,34 @@ function SelfAttendanceInner() {
     );
   };
 
+  const handleSubmitMonth = async () => {
+    if (!token) return;
+    if (rows.some((r) => r.dirty)) {
+      alert("保存していない入力があります。先に「保存」を押してください。");
+      return;
+    }
+    if (!window.confirm(`${month.replace("-", "年")}月分を確定して提出しますか？
+提出後は編集できなくなります (修正が必要な場合は管理者に連絡してください)。`)) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/attendance-self-submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ t: token, month }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        alert(json.error ?? `提出に失敗しました (${res.status})`);
+        return;
+      }
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!token) return;
     const dirty = rows.filter((r) => r.dirty);
@@ -337,6 +382,7 @@ function SelfAttendanceInner() {
       is_legal_holiday: isLegalHolidayDow(r.dow),
       paid_leave_type: r.paid_leave_type,
       business_km: r.business_km.trim() || null,
+      business_trip_km: r.business_trip_km.trim() || null,
       note: r.note,
       // 本社のみ有効 (API 側で office_type 判定して無視/採用される)
       phone_duty: r.phone_duty,
@@ -448,18 +494,32 @@ function SelfAttendanceInner() {
                   <input
                     type="time"
                     value={r.start_time}
-                    onChange={(e) => patchRow(i, { start_time: e.target.value })}
+                    disabled={locked} onChange={(e) => patchRow(i, { start_time: e.target.value })}
                     className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs"
                   />
                   <span className="text-gray-300 text-xs">〜</span>
                   <input
                     type="time"
                     value={r.end_time}
-                    onChange={(e) => patchRow(i, { end_time: e.target.value })}
+                    disabled={locked} onChange={(e) => patchRow(i, { end_time: e.target.value })}
                     className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs"
                   />
                 </div>
                 <div className="flex items-center gap-2 mt-1.5 text-[11px]">
+                  {isOfficeWorker && (
+                    <label className="flex items-center gap-1 text-gray-500">
+                      出張
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={r.business_trip_km}
+                        disabled={locked} onChange={(e) => patchRow(i, { business_trip_km: e.target.value })}
+                        className="w-14 border border-gray-200 rounded px-1 py-0.5 text-right"
+                      />
+                      km
+                    </label>
+                  )}
                   <label className="flex items-center gap-1 text-gray-500">
                     休憩
                     <input
@@ -467,14 +527,14 @@ function SelfAttendanceInner() {
                       min={0}
                       step={5}
                       value={r.break_minutes}
-                      onChange={(e) => patchRow(i, { break_minutes: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                      disabled={locked} onChange={(e) => patchRow(i, { break_minutes: Math.max(0, parseInt(e.target.value, 10) || 0) })}
                       className="w-14 border border-gray-200 rounded px-1 py-0.5 text-right"
                     />
                     分
                   </label>
                   <select
                     value={r.paid_leave_type ?? ""}
-                    onChange={(e) => patchRow(i, { paid_leave_type: (e.target.value || null) as "full" | "half" | null })}
+                    disabled={locked} onChange={(e) => patchRow(i, { paid_leave_type: (e.target.value || null) as "full" | "half" | null })}
                     className="border border-gray-200 rounded px-1 py-0.5 text-[11px]"
                   >
                     <option value="">有給なし</option>
@@ -485,7 +545,7 @@ function SelfAttendanceInner() {
                     type="text"
                     placeholder="備考"
                     value={r.note}
-                    onChange={(e) => patchRow(i, { note: e.target.value })}
+                    disabled={locked} onChange={(e) => patchRow(i, { note: e.target.value })}
                     className="flex-1 min-w-0 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"
                   />
                   {(d?.absence_minutes ?? 0) > 0 && (
@@ -501,7 +561,7 @@ function SelfAttendanceInner() {
                       <input
                         type="checkbox"
                         checked={r.phone_duty}
-                        onChange={(e) => patchRow(i, { phone_duty: e.target.checked })}
+                        disabled={locked} onChange={(e) => patchRow(i, { phone_duty: e.target.checked })}
                         className="accent-emerald-600"
                       />
                       電話当番
@@ -513,7 +573,7 @@ function SelfAttendanceInner() {
                         min={0}
                         step={1}
                         value={r.holiday_support_count}
-                        onChange={(e) => patchRow(i, { holiday_support_count: e.target.value })}
+                        disabled={locked} onChange={(e) => patchRow(i, { holiday_support_count: e.target.value })}
                         className="w-12 border border-gray-200 rounded px-1 py-0.5 text-right"
                       />
                       件
@@ -532,16 +592,36 @@ function SelfAttendanceInner() {
         </div>
       )}
 
-      {/* 保存 (固定フッター) */}
+      {/* 保存・確定＆提出 (固定フッター) */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 z-20">
-        <button
-          onClick={handleSave}
-          disabled={saving || dirtyCount === 0}
-          className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
-        >
-          {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          保存{dirtyCount > 0 ? ` (${dirtyCount} 日分)` : ""}
-        </button>
+        {locked ? (
+          <div className="text-center text-xs text-gray-500 py-1.5">
+            <span className="inline-block px-2 py-1 rounded bg-emerald-100 text-emerald-700 font-medium">
+              {monthStatus?.status === "approved" ? "承認済み" : "提出済み"}
+            </span>
+            <span className="ml-2">修正が必要な場合は管理者に連絡してください</span>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={handleSave}
+              disabled={saving || dirtyCount === 0}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
+            >
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              保存{dirtyCount > 0 ? ` (${dirtyCount} 日分)` : ""}
+            </button>
+            <button
+              onClick={handleSubmitMonth}
+              disabled={submitting || dirtyCount > 0}
+              className="flex-1 py-2.5 rounded-xl border border-emerald-500 text-emerald-700 text-sm font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
+              title={dirtyCount > 0 ? "先に保存してください" : "この月を確定して提出する"}
+            >
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+              確定＆提出
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -22,6 +22,8 @@ type EmployeeCtx = {
   office_type: string;
   /** 電話当番の単価 (円/回)。列未適用なら既定 3,000 */
   phone_duty_pay: number;
+  /** 事務員か。true なら出張距離も入力できる */
+  is_office_worker: boolean;
 };
 
 async function resolveEmployee(token: string | null): Promise<EmployeeCtx | NextResponse> {
@@ -89,6 +91,7 @@ async function resolveEmployee(token: string | null): Promise<EmployeeCtx | Next
     office_type: (office?.office_type as string | null) ?? "",
     phone_duty_pay:
       ((data as { phone_duty_pay?: number | null }).phone_duty_pay as number | null) ?? 3000,
+    is_office_worker: (data as { is_office_worker?: boolean }).is_office_worker === true,
   };
 }
 
@@ -129,13 +132,27 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: `会社休日の取得に失敗: ${holidaysRes.error.message}` }, { status: 500 });
   }
 
+  // 月次ステータス (未提出なら null)。table 未適用は未提出扱い
+  const { data: statusRow, error: statusErr } = await admin
+    .from("attendance_month_status")
+    .select("status, submitted_at, approved_at")
+    .eq("employee_id", ctx.id)
+    .eq("month_start", `${month}-01`)
+    .maybeSingle();
+  if (statusErr && statusErr.code !== "42P01") {
+    console.error("attendance-self status fetch failed:", statusErr.message);
+    return NextResponse.json({ error: `提出状況の取得に失敗: ${statusErr.message}` }, { status: 500 });
+  }
+
   return NextResponse.json({
     employee: {
       name: ctx.name,
       work_week_start: ctx.work_week_start,
       office_type: ctx.office_type,
       phone_duty_pay: ctx.phone_duty_pay,
+      is_office_worker: ctx.is_office_worker,
     },
+    month_status: statusRow ?? null,
     records: recordsRes.data ?? [],
     company_holidays: (holidaysRes.data ?? []).map(
       (r: { holiday_date: string }) => r.holiday_date,
@@ -160,6 +177,34 @@ export async function POST(req: Request) {
 
   const ctx = await resolveEmployee(typeof t === "string" ? t : null);
   if (ctx instanceof NextResponse) return ctx;
+
+  // 提出済み (submitted / approved) の月は本人からの変更を受け付けない
+  const monthOfBody = (() => {
+    const arr = Array.isArray(upserts) ? upserts : [];
+    const first = arr.find((r) => typeof (r as { work_date?: unknown })?.work_date === "string");
+    const d = (first as { work_date?: string } | undefined)?.work_date
+      ?? (Array.isArray(delete_dates) ? (delete_dates as unknown[]).find((x) => typeof x === "string") as string | undefined : undefined);
+    return typeof d === "string" && DATE_RE.test(d) ? d.slice(0, 7) : null;
+  })();
+  if (monthOfBody) {
+    const admin0 = createAdminClient();
+    const { data: st, error: stErr } = await admin0
+      .from("attendance_month_status")
+      .select("status")
+      .eq("employee_id", ctx.id)
+      .eq("month_start", `${monthOfBody}-01`)
+      .maybeSingle();
+    if (stErr && stErr.code !== "42P01") {
+      console.error("attendance-self status check failed:", stErr.message);
+      return NextResponse.json({ error: `提出状況の確認に失敗: ${stErr.message}` }, { status: 500 });
+    }
+    if (st) {
+      return NextResponse.json(
+        { error: "この月は提出済みのため編集できません。修正が必要な場合は管理者に差し戻しを依頼してください。" },
+        { status: 409 },
+      );
+    }
+  }
 
   const upsertArr = Array.isArray(upserts) ? upserts : [];
   const deleteArr = Array.isArray(delete_dates) ? delete_dates : [];
@@ -190,6 +235,14 @@ export async function POST(req: Request) {
     const paidLeave =
       r.paid_leave_type === "full" || r.paid_leave_type === "half" ? r.paid_leave_type : null;
     // 電話当番・土日祝対応は本社のみ。列未適用の環境を壊さないよう本社以外では含めない
+    const tripKm =
+      r.business_trip_km === null || r.business_trip_km === undefined || r.business_trip_km === ""
+        ? null
+        : Number(r.business_trip_km);
+    if (tripKm !== null && !Number.isFinite(tripKm)) {
+      return NextResponse.json({ error: `出張距離が不正です (${workDate})` }, { status: 400 });
+    }
+    const officeWorkerFields = ctx.is_office_worker ? { business_trip_km: tripKm } : {};
     const honbuFields =
       ctx.office_type === "本社"
         ? {
@@ -205,6 +258,7 @@ export async function POST(req: Request) {
       office_id: ctx.office_id,
       employee_id: ctx.id,
       work_date: workDate,
+      ...officeWorkerFields,
       ...honbuFields,
       start_time: time(r.start_time),
       end_time: time(r.end_time),
