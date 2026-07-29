@@ -807,12 +807,13 @@ export default function AttendanceTab({
                 <th className="text-right px-2 py-2 w-20">実労働</th>
                 <th className="text-right px-2 py-2 w-20">時間外</th>
                 <th className="text-right px-2 py-2 w-20">深夜</th>
+                <th className="text-right px-2 py-2 w-20" title="所定労働時間 − 実労働。土日祝・会社休日・全有給は対象外。週40時間を確保した週は補填されて消えます">欠勤</th>
               </tr>
             </thead>
             <tbody>
               {rows.some((r) => !r.work_date.startsWith(month)) && (
                 <tr className="bg-sky-50 border-b border-sky-100">
-                  <td colSpan={isHonbu ? 14 : 11} className="px-2 py-1 text-[11px] text-sky-700">
+                  <td colSpan={isHonbu ? 15 : 12} className="px-2 py-1 text-[11px] text-sky-700">
                     前月 ({parseInt(rows[0].work_date.slice(5, 7), 10)}月) 最終週 —
                     週40時間の残業計算にのみ使います。月合計・印刷・CSV には含まれません
                   </td>
@@ -941,6 +942,9 @@ export default function AttendanceTab({
                     <td className={`px-2 py-1 text-right tabular-nums ${(d?.midnight_overtime ?? 0) > 0 ? "text-indigo-600" : "text-gray-300"}`}>
                       {formatHM(d?.midnight_overtime ?? 0)}
                     </td>
+                    <td className="px-2 py-1 text-right tabular-nums text-red-500 font-medium">
+                      {(d?.absence_minutes ?? 0) > 0 ? formatHM(d.absence_minutes) : ""}
+                    </td>
                   </tr>
                 );
               })}
@@ -960,6 +964,9 @@ export default function AttendanceTab({
                   {formatHM(overtimeTotal)}
                 </td>
                 <td className="px-2 py-2 text-right tabular-nums">{formatHM(summary.total_midnight)}</td>
+                <td className={`px-2 py-2 text-right tabular-nums ${summary.total_absence > 0 ? "text-red-500" : ""}`}>
+                  {summary.total_absence > 0 ? formatHM(summary.total_absence) : ""}
+                </td>
               </tr>
             </tfoot>
           </table>

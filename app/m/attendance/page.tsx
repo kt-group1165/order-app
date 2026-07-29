@@ -422,6 +422,9 @@ function SelfAttendanceInner() {
         <div className="mt-1 text-[10px] text-gray-500 tabular-nums">
           実労働 {formatHM(summary.total_work)} ／ 残業 {formatHM(overtimeTotal)} ／ 深夜 {formatHM(summary.total_midnight)} ／ 法休 {formatHM(summary.total_holiday)} ／ 有給 {summary.total_paid_leave_days}日
           {isHonbu && <> ／ 手当 ¥{allowance.totalPay.toLocaleString()}</>}
+          {summary.total_absence > 0 && (
+            <span className="text-red-500"> ／ 欠勤 {formatHM(summary.total_absence)}</span>
+          )}
         </div>
       </div>
 
@@ -497,6 +500,9 @@ function SelfAttendanceInner() {
                     onChange={(e) => patchRow(i, { note: e.target.value })}
                     className="flex-1 min-w-0 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"
                   />
+                  {(d?.absence_minutes ?? 0) > 0 && (
+                    <span className="text-[10px] text-red-500 font-medium shrink-0">欠勤 {formatHM(d.absence_minutes)}</span>
+                  )}
                   <span className={`w-12 text-right tabular-nums shrink-0 ${overtime > 0 ? "text-amber-600 font-medium" : "text-gray-300"}`}>
                     {(d?.work_minutes ?? 0) > 0 ? formatHM(d.work_minutes) : ""}
                   </span>
