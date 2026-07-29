@@ -74,13 +74,18 @@ type RowState = {
   start_time: string;
   end_time: string;
   break_minutes: number;
-  is_legal_holiday: boolean;
   paid_leave_type: "full" | "half" | null;
   business_km: string;
   note: string;
   dirty: boolean;
   existed: boolean;
 };
+
+// 法定休日 = 土曜で固定 (AttendanceTab.tsx と同一運用)。手動チェック無しの自動判定。
+// 振替は管理者画面のみの機能なので、本人入力では単純に土曜 = 法定休日とする。
+function isLegalHolidayDow(dow: number): boolean {
+  return dow === 6;
+}
 
 function currentMonth(): string {
   const d = new Date();
@@ -125,7 +130,6 @@ function emptyRow(work_date: string): RowState {
     start_time: "",
     end_time: "",
     break_minutes: 0,
-    is_legal_holiday: false,
     paid_leave_type: null,
     business_km: "",
     note: "",
@@ -137,7 +141,7 @@ function emptyRow(work_date: string): RowState {
 function isBlank(r: RowState): boolean {
   return (
     !r.start_time && !r.end_time && r.break_minutes === 0 &&
-    !r.is_legal_holiday && r.paid_leave_type === null &&
+    r.paid_leave_type === null &&
     !r.business_km.trim() && !r.note.trim()
   );
 }
@@ -148,7 +152,7 @@ function toRecord(r: RowState): AttendanceRecord {
     start_time: r.start_time || null,
     end_time: r.end_time || null,
     break_minutes: r.break_minutes,
-    is_legal_holiday: r.is_legal_holiday,
+    is_legal_holiday: isLegalHolidayDow(r.dow),
     paid_leave_type: r.paid_leave_type,
     substitute_for_date: null,
   };
@@ -232,7 +236,6 @@ function SelfAttendanceInner() {
             start_time: toUiTime(db.start_time),
             end_time: toUiTime(db.end_time),
             break_minutes: db.break_minutes ?? 0,
-            is_legal_holiday: !!db.is_legal_holiday,
             paid_leave_type:
               db.paid_leave_type === "full" || db.paid_leave_type === "half"
                 ? db.paid_leave_type
@@ -300,7 +303,8 @@ function SelfAttendanceInner() {
       start_time: r.start_time ? `${r.start_time}:00` : null,
       end_time: r.end_time ? `${r.end_time}:00` : null,
       break_minutes: r.break_minutes,
-      is_legal_holiday: r.is_legal_holiday,
+      // 法定休日 = 土曜固定の自動判定
+      is_legal_holiday: isLegalHolidayDow(r.dow),
       paid_leave_type: r.paid_leave_type,
       business_km: r.business_km.trim() || null,
       note: r.note,
@@ -434,15 +438,6 @@ function SelfAttendanceInner() {
                       className="w-14 border border-gray-200 rounded px-1 py-0.5 text-right"
                     />
                     分
-                  </label>
-                  <label className="flex items-center gap-1 text-gray-500">
-                    <input
-                      type="checkbox"
-                      checked={r.is_legal_holiday}
-                      onChange={(e) => patchRow(i, { is_legal_holiday: e.target.checked })}
-                      className="accent-emerald-600"
-                    />
-                    法休
                   </label>
                   <select
                     value={r.paid_leave_type ?? ""}

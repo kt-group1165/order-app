@@ -88,6 +88,12 @@ function prevMonthTailDates(month: string, weekStart: number): string[] {
 const DEFAULT_BREAK_THRESHOLD_MIN = 6 * 60;
 const DEFAULT_BREAK_MINUTES = 60;
 
+// 法定休日 = 土曜で固定 (KT Group の運用)。手動チェックは持たず自動判定する。
+// 振替出勤の土曜 (振替元日付あり) は休日を別日に移しているため通常労働日扱い。
+function isLegalHolidayRow(r: { dow: number; substitute_for_date: string }): boolean {
+  return r.dow === 6 && !r.substitute_for_date;
+}
+
 // =====================================================================
 // 型
 // =====================================================================
@@ -99,7 +105,6 @@ type RowState = {
   start_time: string;
   end_time: string;
   break_minutes: number;
-  is_legal_holiday: boolean;
   paid_leave_type: "full" | "half" | null;
   business_km: string;
   substitute_for_date: string;
@@ -149,7 +154,6 @@ function emptyRow(work_date: string): RowState {
     start_time: "",
     end_time: "",
     break_minutes: 0,
-    is_legal_holiday: false,
     paid_leave_type: null,
     business_km: "",
     substitute_for_date: "",
@@ -165,7 +169,6 @@ function isBlank(r: RowState): boolean {
     !r.start_time &&
     !r.end_time &&
     r.break_minutes === 0 &&
-    !r.is_legal_holiday &&
     r.paid_leave_type === null &&
     !r.business_km.trim() &&
     !r.substitute_for_date &&
@@ -179,7 +182,7 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
     start_time: r.start_time || null,
     end_time: r.end_time || null,
     break_minutes: r.break_minutes,
-    is_legal_holiday: r.is_legal_holiday,
+    is_legal_holiday: isLegalHolidayRow(r),
     paid_leave_type: r.paid_leave_type,
     substitute_for_date: r.substitute_for_date || null,
   };
@@ -284,7 +287,6 @@ export default function AttendanceTab({
             start_time: toUiTime(db.start_time),
             end_time: toUiTime(db.end_time),
             break_minutes: db.break_minutes ?? 0,
-            is_legal_holiday: !!db.is_legal_holiday,
             paid_leave_type:
               db.paid_leave_type === "full" || db.paid_leave_type === "half"
                 ? db.paid_leave_type
@@ -391,7 +393,8 @@ export default function AttendanceTab({
         start_time: r.start_time ? `${r.start_time}:00` : null,
         end_time: r.end_time ? `${r.end_time}:00` : null,
         break_minutes: r.break_minutes ?? 0,
-        is_legal_holiday: r.is_legal_holiday,
+        // 法定休日 = 土曜固定の自動判定 (振替出勤の土曜は通常労働日)
+        is_legal_holiday: isLegalHolidayRow(r),
         // legacy 列。paid_leave_type IS NOT NULL と同義になるよう同期して書く
         is_paid_leave: r.paid_leave_type !== null,
         paid_leave_type: r.paid_leave_type,
@@ -423,7 +426,7 @@ export default function AttendanceTab({
           start_time: r.start_time,
           end_time: r.end_time,
           break_minutes: r.break_minutes,
-          is_legal_holiday: r.is_legal_holiday,
+          is_legal_holiday: isLegalHolidayRow(r),
           paid_leave_type: r.paid_leave_type,
           note: r.note,
           business_km: r.business_km,
@@ -467,7 +470,7 @@ export default function AttendanceTab({
           start_time: c.start_time,
           end_time: c.end_time,
           break_minutes: c.break_minutes,
-          is_legal_holiday: c.is_legal_holiday,
+          // 法定休日は土曜固定の自動判定なので CSV の値は取り込まない
           paid_leave_type: c.paid_leave_type,
           business_km: c.business_km,
           note: c.note,
@@ -686,7 +689,6 @@ export default function AttendanceTab({
                 <th className="text-left px-2 py-2 w-24">出勤</th>
                 <th className="text-left px-2 py-2 w-24">退勤</th>
                 <th className="text-left px-2 py-2 w-20">休憩(分)</th>
-                <th className="text-center px-2 py-2 w-12">法休</th>
                 <th className="text-left px-2 py-2 w-20">有給</th>
                 <th className="text-left px-2 py-2 w-20">出張km</th>
                 <th className="text-left px-2 py-2 w-32">振替元</th>
@@ -699,7 +701,7 @@ export default function AttendanceTab({
             <tbody>
               {rows.some((r) => !r.work_date.startsWith(month)) && (
                 <tr className="bg-sky-50 border-b border-sky-100">
-                  <td colSpan={12} className="px-2 py-1 text-[11px] text-sky-700">
+                  <td colSpan={11} className="px-2 py-1 text-[11px] text-sky-700">
                     前月 ({parseInt(rows[0].work_date.slice(5, 7), 10)}月) 最終週 —
                     週40時間の残業計算にのみ使います。月合計・印刷・CSV には含まれません
                   </td>
@@ -753,14 +755,6 @@ export default function AttendanceTab({
                         value={r.break_minutes}
                         onChange={(e) => patchRow(i, { break_minutes: Math.max(0, parseInt(e.target.value, 10) || 0) })}
                         className="w-full border border-gray-200 rounded px-1 py-0.5 text-xs text-right"
-                      />
-                    </td>
-                    <td className="px-2 py-1 text-center">
-                      <input
-                        type="checkbox"
-                        checked={r.is_legal_holiday}
-                        onChange={(e) => patchRow(i, { is_legal_holiday: e.target.checked })}
-                        className="accent-emerald-600"
                       />
                     </td>
                     <td className="px-2 py-1">
