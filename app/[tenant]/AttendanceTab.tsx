@@ -458,7 +458,12 @@ export default function AttendanceTab({
 
   const handleSubmitMonth = () =>
     runStatusAction(
-      () => submitMonth(tenantId, employeeId, month, employeeName || null),
+      async () => {
+        await submitMonth(tenantId, employeeId, month, employeeName || null);
+        // 確定した内容をそのまま PDF 保存できるよう印刷ダイアログを開く
+        // (ブラウザの「PDF として保存」。保存先は前回のフォルダが記憶される)
+        setTimeout(printWithFileName, 300);
+      },
       `${month.replace("-", "年")}月分を確定して提出しますか？\n提出後、本人の入力画面からは編集できなくなります。`,
     );
 
@@ -651,12 +656,25 @@ export default function AttendanceTab({
   };
 
   // ─── 印刷 ───────────────────────────────────────────────────────────
+  // document.title が「PDF として保存」の既定ファイル名になるため、
+  // 印刷の間だけ 出勤簿_氏名_YYYY-MM に差し替える。
+  const printWithFileName = () => {
+    const original = document.title;
+    const safeName = (employeeName || "職員").replace(/[\/:*?"<>|]/g, "_");
+    document.title = `出勤簿_${safeName}_${month}`;
+    try {
+      window.print();
+    } finally {
+      document.title = original;
+    }
+  };
+
   const handlePrint = () => {
     if (!employeeId) {
       alert("職員を選択してください");
       return;
     }
-    window.print();
+    printWithFileName();
   };
 
   // ─── 自己入力 URL 管理 ─────────────────────────────────────────────
