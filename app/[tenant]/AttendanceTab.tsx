@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users, CheckCircle2, RotateCcw } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users, CheckCircle2, RotateCcw, FolderOpen } from "lucide-react";
 import {
   getAttendanceOffices,
   getAttendanceEmployees,
@@ -38,6 +38,13 @@ import {
   summarizeAllowance,
   DEFAULT_PHONE_DUTY_PAY,
 } from "@/lib/attendance/allowance";
+import {
+  isFolderSaveSupported,
+  getSavedFolderName,
+  pickFolder,
+  saveToFolder,
+  downloadBlob,
+} from "@/lib/attendance/save-folder";
 
 // 月間の時間外 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
 // 「通常残業を何時間できるか」を基準にした枠。
@@ -241,6 +248,7 @@ export default function AttendanceTab({
   // 月次ステータス (null = 未提出)
   const [monthStatus, setMonthStatus] = useState<MonthStatus | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
+  const [pdfFolder, setPdfFolder] = useState<string | null>(null);
   const [isMaster, setIsMaster] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
@@ -299,6 +307,16 @@ export default function AttendanceTab({
     })();
     return () => { cancelled = true; };
   }, [payrollOfficeId, adminRefresh]);
+
+  // ─── PDF 保存先フォルダ (端末ごとに記憶) ────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const name = await getSavedFolderName();
+      if (!cancelled) setPdfFolder(name);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // ─── master user 判定 (スタッフ管理ボタンの表示可否) ────────────────
   useEffect(() => {
@@ -456,13 +474,56 @@ export default function AttendanceTab({
     }
   };
 
+  /**
+   * 確定した月の PDF をサーバーで生成し、登録済みフォルダに直接保存する。
+   * フォルダ未設定なら選択を促し、非対応ブラウザ (スマホ等) はダウンロードに落とす。
+   */
+  const savePdf = async (): Promise<void> => {
+    const res = await fetch(
+      `/api/attendance-pdf?employee_id=${encodeURIComponent(employeeId)}&month=${month}`,
+    );
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      alert(`PDF の生成に失敗しました: ${j.error ?? res.status}`);
+      return;
+    }
+    const blob = await res.blob();
+    const safeName = (employeeName || "職員").replace(/[\/:*?"<>|]/g, "_");
+    const fileName = `出勤簿_${safeName}_${month}.pdf`;
+
+    if (!isFolderSaveSupported()) {
+      downloadBlob(fileName, blob);
+      return;
+    }
+    let result = await saveToFolder(fileName, blob);
+    if (!result.ok && result.reason === "no-folder") {
+      if (window.confirm("PDF の保存先フォルダが未設定です。今すぐ選びますか？\n(この端末に記憶され、次回から自動保存されます)")) {
+        try {
+          const name = await pickFolder();
+          setPdfFolder(name);
+          result = await saveToFolder(fileName, blob);
+        } catch {
+          downloadBlob(fileName, blob);
+          return;
+        }
+      } else {
+        downloadBlob(fileName, blob);
+        return;
+      }
+    }
+    if (!result.ok) {
+      alert(`フォルダへの保存ができなかったため、ダウンロードします。\n${result.error ?? ""}`);
+      downloadBlob(fileName, blob);
+      return;
+    }
+    alert(`PDF を保存しました\n${result.folder} / ${result.fileName}`);
+  };
+
   const handleSubmitMonth = () =>
     runStatusAction(
       async () => {
         await submitMonth(tenantId, employeeId, month, employeeName || null);
-        // 確定した内容をそのまま PDF 保存できるよう印刷ダイアログを開く
-        // (ブラウザの「PDF として保存」。保存先は前回のフォルダが記憶される)
-        setTimeout(printWithFileName, 300);
+        await savePdf();
       },
       `${month.replace("-", "年")}月分を確定して提出しますか？\n提出後、本人の入力画面からは編集できなくなります。`,
     );
@@ -791,6 +852,27 @@ export default function AttendanceTab({
             <Printer size={14} />
             印刷
           </button>
+          {isFolderSaveSupported() && (
+            <button
+              onClick={async () => {
+                try {
+                  const name = await pickFolder();
+                  setPdfFolder(name);
+                } catch {
+                  /* ユーザーがキャンセルした */
+                }
+              }}
+              className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1"
+              title={
+                pdfFolder
+                  ? `確定＆提出時の PDF 保存先: ${pdfFolder} (クリックで変更)`
+                  : "確定＆提出時に PDF を自動保存するフォルダを選ぶ"
+              }
+            >
+              <FolderOpen size={14} />
+              {pdfFolder ? `保存先: ${pdfFolder}` : "PDF 保存先"}
+            </button>
+          )}
           <button
             onClick={() => setShowUrlModal(true)}
             disabled={!office}
