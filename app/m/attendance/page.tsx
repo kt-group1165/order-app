@@ -7,7 +7,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, ChevronDown, Loader2, Save, AlertTriangle, CheckCircle2 } from "lucide-react";
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
@@ -184,6 +184,8 @@ function SelfAttendanceInner() {
   // 月次ステータス (null = 未提出)。提出済みは編集不可
   const [monthStatus, setMonthStatus] = useState<{ status: string; submitted_at: string | null } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 詳細 (休憩・有給・備考など) を開いている日
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [phoneDutyPay, setPhoneDutyPay] = useState<number>(DEFAULT_PHONE_DUTY_PAY);
   const [weekStart, setWeekStart] = useState(0);
   const [rows, setRows] = useState<RowState[]>([]);
@@ -449,22 +451,60 @@ function SelfAttendanceInner() {
         </div>
       </header>
 
-      {/* 残業サマリー */}
-      <div className={`px-4 py-2.5 border-b ${overLimit ? "bg-red-50 border-red-200" : nearLimit ? "bg-amber-50 border-amber-200" : "bg-emerald-50 border-emerald-100"}`}>
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span className="text-[11px] text-gray-500">{overLimit ? "超過" : "あと残業できる時間"}</span>
-          <span className={`text-xl font-bold tabular-nums ${overLimit ? "text-red-600" : nearLimit ? "text-amber-600" : "text-emerald-600"}`}>
+      {/* 残業サマリー (スマホは 2 段: 残り時間を大きく → 内訳をグリッドで) */}
+      <div
+        className={`px-3 py-2 border-b ${
+          overLimit
+            ? "bg-red-50 border-red-200"
+            : nearLimit
+              ? "bg-amber-50 border-amber-200"
+              : "bg-emerald-50 border-emerald-100"
+        }`}
+      >
+        <div className="flex items-baseline gap-2">
+          <span className="text-[11px] text-gray-500 shrink-0">
+            {overLimit ? "超過" : "あと残業できる"}
+          </span>
+          <span
+            className={`text-2xl font-bold tabular-nums ${
+              overLimit ? "text-red-600" : nearLimit ? "text-amber-600" : "text-emerald-600"
+            }`}
+          >
             {formatHM(Math.abs(remaining))}
           </span>
-          <span className="text-[11px] text-gray-400 tabular-nums">
-            (消費 {formatHM(consumed)} / {LIMIT_HOURS}:00)
+          <span className="text-[10px] text-gray-400 tabular-nums ml-auto">
+            消費 {formatHM(consumed)} / {LIMIT_HOURS}:00
           </span>
         </div>
-        <div className="mt-1 text-[10px] text-gray-500 tabular-nums">
-          実労働 {formatHM(summary.total_work)} ／ 残業 {formatHM(overtimeTotal)} ／ 深夜 {formatHM(summary.total_midnight)} ／ 法休 {formatHM(summary.total_holiday)} ／ 有給 {summary.total_paid_leave_days}日
-          {isHonbu && <> ／ 手当 ¥{allowance.totalPay.toLocaleString()}</>}
+        {/* 内訳は 3 列グリッド。1 行の長文だと折り返して読みにくいため */}
+        <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-1 text-[10px] text-gray-500 tabular-nums">
+          <div>
+            実労働 <span className="text-gray-700 font-medium">{formatHM(summary.total_work)}</span>
+          </div>
+          <div>
+            残業 <span className="text-gray-700 font-medium">{formatHM(overtimeTotal)}</span>
+          </div>
+          <div>
+            深夜 <span className="text-gray-700 font-medium">{formatHM(summary.total_midnight)}</span>
+          </div>
+          <div>
+            法休 <span className="text-gray-700 font-medium">{formatHM(summary.total_holiday)}</span>
+          </div>
+          <div>
+            有給 <span className="text-gray-700 font-medium">{summary.total_paid_leave_days}日</span>
+          </div>
+          {isHonbu && (
+            <div>
+              手当{" "}
+              <span className="text-gray-700 font-medium">
+                ¥{allowance.totalPay.toLocaleString()}
+              </span>
+            </div>
+          )}
           {summary.total_absence > 0 && (
-            <span className="text-red-500"> ／ 欠勤 {formatHM(summary.total_absence)}</span>
+            <div className="text-red-500">
+              欠勤 <span className="font-medium">{formatHM(summary.total_absence)}</span>
+            </div>
           )}
         </div>
       </div>
@@ -480,110 +520,198 @@ function SelfAttendanceInner() {
             const holidayName = getJapaneseHolidayName(r.work_date);
             const isCompanyHoliday = companyHolidays.has(r.work_date);
             const isRed = r.dow === 0 || isJapaneseHoliday(r.work_date);
-            // 公休 (土日祝・会社休日) はグレーで区別
-            const isRestDay = r.dow === 0 || r.dow === 6 || isJapaneseHoliday(r.work_date) || isCompanyHoliday;
+            const isRestDay =
+              r.dow === 0 || r.dow === 6 || isJapaneseHoliday(r.work_date) || isCompanyHoliday;
+            const pay = isHonbu
+              ? calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count), phoneDutyPay)
+              : 0;
+            // 休憩以外に何か入っている日は、たたまず開いたままにする
+            const hasDetail =
+              r.paid_leave_type !== null ||
+              !!r.note.trim() ||
+              r.phone_duty ||
+              parseHolidayCount(r.holiday_support_count) > 0 ||
+              !!r.business_trip_km.trim() ||
+              !!r.substitute_for_date ||
+              !!r.substitute_for_date2;
+            const open = expanded.has(r.work_date) || hasDetail;
             return (
-              <div key={r.work_date} className={`rounded-xl border px-3 py-2 ${r.dirty ? "bg-white border-emerald-300" : isRestDay ? "bg-gray-100/70 border-gray-200" : "bg-white border-gray-200"}`}>
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm font-medium w-14 shrink-0 ${isRed ? "text-red-600" : r.dow === 6 ? "text-blue-600" : "text-gray-700"}`}>
-                    {parseInt(r.work_date.slice(8), 10)}日({WEEK_DAY_LABELS[r.dow]})
+              <div
+                key={r.work_date}
+                className={`rounded-lg border px-2.5 py-1.5 ${
+                  r.dirty
+                    ? "bg-white border-emerald-300"
+                    : isRestDay
+                      ? "bg-gray-100/70 border-gray-200"
+                      : "bg-white border-gray-200"
+                }`}
+              >
+                {/* 1 行目: 日付 + 出退勤 + 実労働。大半の日はこの 1 行で完結する */}
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`text-[13px] font-medium w-12 shrink-0 ${
+                      isRed ? "text-red-600" : r.dow === 6 ? "text-blue-600" : "text-gray-700"
+                    }`}
+                  >
+                    {parseInt(r.work_date.slice(8), 10)}日
+                    <span className="text-[10px]">({WEEK_DAY_LABELS[r.dow]})</span>
                   </span>
-                  {(holidayName || isCompanyHoliday) && (
-                    <span className="text-[9px] text-gray-400 shrink-0">{holidayName ?? "会社休日"}</span>
-                  )}
                   <input
                     type="time"
                     value={r.start_time}
-                    disabled={locked} onChange={(e) => patchRow(i, { start_time: e.target.value })}
-                    className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs"
+                    disabled={locked}
+                    onChange={(e) => patchRow(i, { start_time: e.target.value })}
+                    className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"
                   />
-                  <span className="text-gray-300 text-xs">〜</span>
+                  <span className="text-gray-300 text-[10px]">〜</span>
                   <input
                     type="time"
                     value={r.end_time}
-                    disabled={locked} onChange={(e) => patchRow(i, { end_time: e.target.value })}
-                    className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs"
+                    disabled={locked}
+                    onChange={(e) => patchRow(i, { end_time: e.target.value })}
+                    className="flex-1 min-w-0 border border-gray-200 rounded px-1 py-1 text-xs disabled:bg-gray-50"
                   />
-                </div>
-                <div className="flex items-center gap-2 mt-1.5 text-[11px]">
-                  {isOfficeWorker && (
-                    <label className="flex items-center gap-1 text-gray-500">
-                      出張
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.1}
-                        value={r.business_trip_km}
-                        disabled={locked} onChange={(e) => patchRow(i, { business_trip_km: e.target.value })}
-                        className="w-14 border border-gray-200 rounded px-1 py-0.5 text-right"
-                      />
-                      km
-                    </label>
-                  )}
-                  <label className="flex items-center gap-1 text-gray-500">
-                    休憩
-                    <input
-                      type="number"
-                      min={0}
-                      step={5}
-                      value={r.break_minutes}
-                      disabled={locked} onChange={(e) => patchRow(i, { break_minutes: Math.max(0, parseInt(e.target.value, 10) || 0) })}
-                      className="w-14 border border-gray-200 rounded px-1 py-0.5 text-right"
-                    />
-                    分
-                  </label>
-                  <select
-                    value={r.paid_leave_type ?? ""}
-                    disabled={locked} onChange={(e) => patchRow(i, { paid_leave_type: (e.target.value || null) as "full" | "half" | null })}
-                    className="border border-gray-200 rounded px-1 py-0.5 text-[11px]"
+                  <span
+                    className={`w-11 text-right text-[11px] tabular-nums shrink-0 ${
+                      overtime > 0 ? "text-amber-600 font-medium" : "text-gray-400"
+                    }`}
                   >
-                    <option value="">有給なし</option>
-                    <option value="full">全有給</option>
-                    <option value="half">半有給</option>
-                  </select>
-                  <input
-                    type="text"
-                    placeholder="備考"
-                    value={r.note}
-                    disabled={locked} onChange={(e) => patchRow(i, { note: e.target.value })}
-                    className="flex-1 min-w-0 border border-gray-200 rounded px-1.5 py-0.5 text-[11px]"
-                  />
-                  {(d?.absence_minutes ?? 0) > 0 && (
-                    <span className="text-[10px] text-red-500 font-medium shrink-0">欠勤 {formatHM(d.absence_minutes)}</span>
-                  )}
-                  <span className={`w-12 text-right tabular-nums shrink-0 ${overtime > 0 ? "text-amber-600 font-medium" : "text-gray-300"}`}>
                     {(d?.work_minutes ?? 0) > 0 ? formatHM(d.work_minutes) : ""}
                   </span>
+                  {!open && !locked && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpanded((prev) => {
+                          const next = new Set(prev);
+                          next.add(r.work_date);
+                          return next;
+                        })
+                      }
+                      className="text-gray-300 shrink-0 px-0.5"
+                      title="休憩・有給・備考などを入力"
+                    >
+                      <ChevronDown size={16} />
+                    </button>
+                  )}
                 </div>
-                {isHonbu && (
-                  <div className="flex items-center gap-2 mt-1.5 text-[11px]">
-                    <label className="flex items-center gap-1 text-gray-500">
-                      <input
-                        type="checkbox"
-                        checked={r.phone_duty}
-                        disabled={locked} onChange={(e) => patchRow(i, { phone_duty: e.target.checked })}
-                        className="accent-emerald-600"
-                      />
-                      電話当番
-                    </label>
-                    <label className="flex items-center gap-1 text-gray-500">
-                      土日祝対応
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={r.holiday_support_count}
-                        disabled={locked} onChange={(e) => patchRow(i, { holiday_support_count: e.target.value })}
-                        className="w-12 border border-gray-200 rounded px-1 py-0.5 text-right"
-                      />
-                      件
-                    </label>
-                    {(() => {
-                      const pay = calcDailyAllowance(r.phone_duty, parseHolidayCount(r.holiday_support_count), phoneDutyPay);
-                      return pay > 0 ? (
-                        <span className="ml-auto tabular-nums text-emerald-700 font-medium">¥{pay.toLocaleString()}</span>
-                      ) : null;
-                    })()}
+
+                {/* たたんでいる時も、祝日・欠勤・手当があれば 1 行で見せる */}
+                {!open && (holidayName || isCompanyHoliday || pay > 0 || (d?.absence_minutes ?? 0) > 0) && (
+                  <div className="flex items-center gap-2 mt-0.5 text-[10px] pl-12">
+                    {(holidayName || isCompanyHoliday) && (
+                      <span className="text-gray-400">{holidayName ?? "会社休日"}</span>
+                    )}
+                    {(d?.absence_minutes ?? 0) > 0 && (
+                      <span className="text-red-500 font-medium">欠勤 {formatHM(d.absence_minutes)}</span>
+                    )}
+                    {pay > 0 && (
+                      <span className="ml-auto tabular-nums text-emerald-700 font-medium">
+                        ¥{pay.toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* 詳細 (開いた時だけ) */}
+                {open && (
+                  <div className="mt-1 space-y-1 text-[11px]">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {(holidayName || isCompanyHoliday) && (
+                        <span className="text-[10px] text-gray-400">{holidayName ?? "会社休日"}</span>
+                      )}
+                      <label className="flex items-center gap-1 text-gray-500">
+                        休憩
+                        <input
+                          type="number"
+                          min={0}
+                          step={5}
+                          value={r.break_minutes}
+                          disabled={locked}
+                          onChange={(e) =>
+                            patchRow(i, { break_minutes: Math.max(0, parseInt(e.target.value, 10) || 0) })
+                          }
+                          className="w-12 border border-gray-200 rounded px-1 py-0.5 text-right disabled:bg-gray-50"
+                        />
+                        分
+                      </label>
+                      <select
+                        value={r.paid_leave_type ?? ""}
+                        disabled={locked}
+                        onChange={(e) =>
+                          patchRow(i, {
+                            paid_leave_type: (e.target.value || null) as "full" | "half" | null,
+                          })
+                        }
+                        className="border border-gray-200 rounded px-1 py-0.5 text-[11px] disabled:bg-gray-50"
+                      >
+                        <option value="">有給なし</option>
+                        <option value="full">全有給</option>
+                        <option value="half">半有給</option>
+                      </select>
+                      {isOfficeWorker && (
+                        <label className="flex items-center gap-1 text-gray-500">
+                          出張
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={r.business_trip_km}
+                            disabled={locked}
+                            onChange={(e) => patchRow(i, { business_trip_km: e.target.value })}
+                            className="w-12 border border-gray-200 rounded px-1 py-0.5 text-right disabled:bg-gray-50"
+                          />
+                          km
+                        </label>
+                      )}
+                      {(d?.absence_minutes ?? 0) > 0 && (
+                        <span className="text-[10px] text-red-500 font-medium">
+                          欠勤 {formatHM(d.absence_minutes)}
+                        </span>
+                      )}
+                    </div>
+
+                    <input
+                      type="text"
+                      placeholder="備考"
+                      value={r.note}
+                      disabled={locked}
+                      onChange={(e) => patchRow(i, { note: e.target.value })}
+                      className="w-full border border-gray-200 rounded px-1.5 py-0.5 text-[11px] disabled:bg-gray-50"
+                    />
+
+                    {isHonbu && (
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-gray-500">
+                          <input
+                            type="checkbox"
+                            checked={r.phone_duty}
+                            disabled={locked}
+                            onChange={(e) => patchRow(i, { phone_duty: e.target.checked })}
+                            className="accent-emerald-600"
+                          />
+                          電話当番
+                        </label>
+                        <label className="flex items-center gap-1 text-gray-500">
+                          土日祝
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={r.holiday_support_count}
+                            disabled={locked}
+                            onChange={(e) => patchRow(i, { holiday_support_count: e.target.value })}
+                            className="w-11 border border-gray-200 rounded px-1 py-0.5 text-right disabled:bg-gray-50"
+                          />
+                          件
+                        </label>
+                        {pay > 0 && (
+                          <span className="ml-auto tabular-nums text-emerald-700 font-medium">
+                            ¥{pay.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
