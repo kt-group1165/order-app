@@ -512,9 +512,9 @@ function SelfAttendanceInner() {
         <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-emerald-400" /></div>
       ) : (
         <div className="pb-2 overflow-x-auto">
-          <div className="min-w-[34rem]">
+          <div className="w-max min-w-full">
           {/* 列見出し (入力欄と同じ幅で並べる) */}
-          <div className="flex items-center gap-1 px-1 py-1 text-[9px] text-gray-400 border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
+          <div className="flex items-center gap-1 px-1 py-1 text-[9px] text-gray-400 border-b border-gray-200 bg-gray-50 w-max min-w-full sticky top-0 z-20">
             <span className="w-[3.2rem] shrink-0 sticky left-0 bg-gray-50 z-10">日付</span>
             <span className="w-[4.6rem] shrink-0 text-center">出勤</span>
             <span className="w-[4.6rem] shrink-0 text-center">退勤</span>
@@ -524,7 +524,7 @@ function SelfAttendanceInner() {
             {isHonbu && <span className="w-4 shrink-0 text-center">電</span>}
             {isHonbu && <span className="w-8 shrink-0 text-right">土日</span>}
             <span className="w-11 shrink-0 text-center">有給</span>
-            <span className="flex-1 min-w-[3.5rem]">備考</span>
+            <span className="w-28 shrink-0">備考</span>
             <span className="w-[3.1rem] shrink-0 text-right">実労働</span>
           </div>
           {rows.map((r, i) => {
@@ -541,7 +541,7 @@ function SelfAttendanceInner() {
             return (
               <div
                 key={r.work_date}
-                className={`flex items-center gap-1 border-b border-gray-100 px-1 py-1 ${
+                className={`flex items-center gap-1 border-b border-gray-100 px-1 py-1 w-max min-w-full ${
                   r.dirty ? "bg-emerald-50" : isRestDay ? "bg-gray-50" : "bg-white"
                 }`}
               >
@@ -658,7 +658,7 @@ function SelfAttendanceInner() {
                   value={r.note}
                   disabled={locked}
                   onChange={(e) => patchRow(i, { note: e.target.value })}
-                  className="flex-1 min-w-[3.5rem] border border-gray-200 rounded px-1 py-1 text-[11px] disabled:bg-gray-50"
+                  className="w-28 shrink-0 border border-gray-200 rounded px-1 py-1 text-[11px] disabled:bg-gray-50"
                 />
 
                 {/* 実労働 / 手当 / 欠勤 */}
