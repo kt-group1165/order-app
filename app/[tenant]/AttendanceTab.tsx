@@ -84,12 +84,12 @@ const FIRST_MONTH = "2026-06";
 const DEFAULT_BREAK_THRESHOLD_MIN = 6 * 60;
 const DEFAULT_BREAK_MINUTES = 60;
 
-// 法定休日 = 日曜で固定 (KT Group の運用。実際に休むことが最も多い曜日)。
-// 手動チェックは持たず自動判定する。週の起算曜日 (work_week_start) とは独立。
-// 振替は「代休の日に元出勤日を書く」方式 (Excel 踏襲) なので日曜側の例外は無い。
-const LEGAL_HOLIDAY_DOW = 0; // 0 = 日曜
-function isLegalHolidayRow(r: { dow: number }): boolean {
-  return r.dow === LEGAL_HOLIDAY_DOW;
+// 法定休日労働 (×1.35) は「週 1 日の休みが無かった週」にだけ発生する (労基 §35)。
+// その週のどの日を法定休日とみなすかは 日曜 で固定 (2026-07-31 user 確定)。
+// 判定は attendance-calc の週次処理が行うので、行データには法休フラグを立てない
+// (日曜に出勤しても、その週に休みがあれば通常労働)。
+function isLegalHolidayRow(): boolean {
+  return false;
 }
 
 // =====================================================================
@@ -203,7 +203,7 @@ function toAttendanceRecord(r: RowState): AttendanceRecord {
     start_time: r.start_time || null,
     end_time: r.end_time || null,
     break_minutes: r.break_minutes,
-    is_legal_holiday: isLegalHolidayRow(r),
+    is_legal_holiday: isLegalHolidayRow(),
     paid_leave_type: r.paid_leave_type,
     substitute_for_date: r.substitute_for_date || r.substitute_for_date2 || null,
   };
@@ -619,7 +619,7 @@ export default function AttendanceTab({
         end_time: r.end_time ? `${r.end_time}:00` : null,
         break_minutes: r.break_minutes ?? 0,
         // 法定休日 = 日曜固定の自動判定 (振替出勤の日曜は通常労働日)
-        is_legal_holiday: isLegalHolidayRow(r),
+        is_legal_holiday: isLegalHolidayRow(),
         // legacy 列。paid_leave_type IS NOT NULL と同義になるよう同期して書く
         is_paid_leave: r.paid_leave_type !== null,
         paid_leave_type: r.paid_leave_type,
@@ -660,7 +660,7 @@ export default function AttendanceTab({
           start_time: r.start_time,
           end_time: r.end_time,
           break_minutes: r.break_minutes,
-          is_legal_holiday: isLegalHolidayRow(r),
+          is_legal_holiday: isLegalHolidayRow(),
           paid_leave_type: r.paid_leave_type,
           note: r.note,
           business_km: r.business_km,

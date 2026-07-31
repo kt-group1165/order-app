@@ -263,7 +263,8 @@ export async function POST(req: Request) {
       start_time: time(r.start_time),
       end_time: time(r.end_time),
       break_minutes: Number.isFinite(breakMin) ? Math.max(0, Math.floor(breakMin)) : 0,
-      is_legal_holiday: r.is_legal_holiday === true,
+      // 法定休日労働は週次判定 (7 連勤の週の日曜) なので行データには立てない
+      is_legal_holiday: false,
       is_paid_leave: paidLeave !== null,
       paid_leave_type: paidLeave,
       note: typeof r.note === "string" && r.note.trim() ? r.note.trim().slice(0, 500) : null,

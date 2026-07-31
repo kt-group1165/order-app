@@ -84,11 +84,10 @@ function parseHolidayCount(v: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-// 法定休日 = 日曜で固定 (AttendanceTab.tsx と同一運用)。手動チェック無しの自動判定。
-// 振替は管理者画面のみの機能なので、本人入力では単純に日曜 = 法定休日とする。
-const LEGAL_HOLIDAY_DOW = 0; // 0 = 日曜
-function isLegalHolidayDow(dow: number): boolean {
-  return dow === LEGAL_HOLIDAY_DOW;
+// 法定休日労働は「週 1 日の休みが無かった週」の日曜のみ (AttendanceTab.tsx と同一運用)。
+// 判定は attendance-calc の週次処理が行うため、行データにはフラグを立てない。
+function isLegalHolidayDow(): boolean {
+  return false;
 }
 
 function currentMonth(): string {
@@ -163,7 +162,7 @@ function toRecord(r: RowState): AttendanceRecord {
     start_time: r.start_time || null,
     end_time: r.end_time || null,
     break_minutes: r.break_minutes,
-    is_legal_holiday: isLegalHolidayDow(r.dow),
+    is_legal_holiday: isLegalHolidayDow(),
     paid_leave_type: r.paid_leave_type,
     // 代休 (振替元あり) は休み扱い → 欠勤に積まれない
     substitute_for_date: r.substitute_for_date || r.substitute_for_date2 || null,
@@ -379,7 +378,7 @@ function SelfAttendanceInner() {
       end_time: r.end_time ? `${r.end_time}:00` : null,
       break_minutes: r.break_minutes,
       // 法定休日 = 日曜固定の自動判定
-      is_legal_holiday: isLegalHolidayDow(r.dow),
+      is_legal_holiday: isLegalHolidayDow(),
       paid_leave_type: r.paid_leave_type,
       business_km: r.business_km.trim() || null,
       business_trip_km: r.business_trip_km.trim() || null,

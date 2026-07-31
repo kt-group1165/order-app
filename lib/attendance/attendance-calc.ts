@@ -445,10 +445,17 @@ export function calcDailyListWithWeekly(
     list.sort((a, b) => a.r.work_date.localeCompare(b.r.work_date));
 
     // ─── 法定休日労働 auto-detect (労基 §35) ───
-    // 7 日揃った週で全日 work_minutes>0 (= 休み無し) なら、最終日を法定休日労働扱いに。
-    // ユーザーが既に該当日を manual 法休指定済みの場合は何もしない (manual 優先)。
+    // 週 1 日の休みが無かった場合 (= 7 日揃った週で全日 work_minutes>0) にだけ
+    // 法定休日労働が発生する。どの日を法定休日とみなすかは 日曜 で固定する
+    // (2026-07-31 user 確定。日曜に出勤しても、その週に休みがあれば通常労働)。
+    // 週内に日曜が無い (月跨ぎで欠けている) 場合は最終日にフォールバック。
+    // manual 法休指定済みの場合は何もしない (manual 優先)。
     if (list.length === 7 && list.every((it) => it.daily.work_minutes > 0)) {
-      const last = list[list.length - 1];
+      const sunday = list.find((it) => {
+        const dt = parseDateUTC(it.r.work_date);
+        return dt?.getUTCDay() === 0;
+      });
+      const last = sunday ?? list[list.length - 1];
       if (!last.r.is_legal_holiday) {
         // holiday_work に work_minutes 全部を移動、日次/週次残業はリセット
         // (calcDaily の is_legal_holiday=true と同じ扱い。深夜は別割増として残す)

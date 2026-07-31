@@ -19,7 +19,6 @@ import { buildAttendancePdf, loadJapaneseFont, type PdfRow } from "@/lib/attenda
 
 const TENANT_ID = "kt-group";
 const MONTH_RE = /^\d{4}-\d{2}$/;
-const LEGAL_HOLIDAY_DOW = 0; // 日曜
 
 export async function GET(req: Request) {
   const supabase = await createClient();
@@ -146,7 +145,8 @@ export async function GET(req: Request) {
       start_time: start_time || null,
       end_time: end_time || null,
       break_minutes: (db?.break_minutes as number | null) ?? 0,
-      is_legal_holiday: dow === LEGAL_HOLIDAY_DOW,
+      // 法定休日労働は attendance-calc の週次判定に任せる (7 連勤の週の日曜)
+      is_legal_holiday: false,
       paid_leave_type: paid,
       substitute_for_date: sub || sub2 || null,
     });
