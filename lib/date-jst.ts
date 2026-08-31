@@ -69,3 +69,15 @@ export function todayYmd(): string {
   const now = new Date();
   return `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
 }
+
+/**
+ * "YYYY-MM-DD" に日数を足す（負数で引く）。
+ *
+ * ⚠ `new Date(t + n*86400000)` をローカル Date でやると夏時間のある地域でズレる。
+ *   Date.UTC で組めば 1 日は必ず 86400000ms なので安全。
+ */
+export function addDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + days * 86400000);
+  return `${t.getUTCFullYear()}-${p2(t.getUTCMonth() + 1)}-${p2(t.getUTCDate())}`;
+}

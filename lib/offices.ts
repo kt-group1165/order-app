@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { cached, invalidateCache } from "./cache";
+import { todayYmd } from "./date-jst";
 
 export type Office = {
   id: string;
@@ -232,7 +233,7 @@ export async function ensureActiveAssignment(
     .limit(1);
   if (selErr) throw selErr;
   if (existing && existing.length > 0) return null;
-  const start = startDate ?? new Date().toISOString().split("T")[0];
+  const start = startDate ?? todayYmd();
   const { data, error } = await supabase
     .from("client_office_assignments")
     .insert({
@@ -254,7 +255,7 @@ export async function closeActiveAssignment(
   officeId: string,
   endDate?: string | null,
 ): Promise<number> {
-  const end = endDate ?? new Date().toISOString().split("T")[0];
+  const end = endDate ?? todayYmd();
   const { data, error } = await supabase
     .from("client_office_assignments")
     .update({ end_date: end })

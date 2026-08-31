@@ -6,8 +6,9 @@
 // 台帳の追加・編集は本体アプリの「デモ機管理」タブのみ。
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { todayYmd } from "@/lib/date-jst";
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => todayYmd();
 
 // 事業所 slug → 表示名 (id の解決・検証はサーバー側 /api/demo が行う)
 const OFFICE_LABELS: Record<string, string> = {

@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { MeetingNoteSheet, printMeetingNoteSheet } from "@/components/MeetingNoteSheet";
+import { todayYmd } from "@/lib/date-jst";
 
 const DEFAULTS = {
   discussed_items: "居宅サービス計画書原案について\n①全体の援助方針について\n②サービス内容について",
@@ -16,7 +17,7 @@ const DEFAULTS = {
   remaining_issues: "モニタリングの上、計画変更がある場合に開催する。",
 };
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => todayYmd();
 
 // 事業所 slug → 表示名 (id の解決・検証はサーバー側 /api/meeting-submit が行う)
 const OFFICE_LABELS: Record<string, string> = {

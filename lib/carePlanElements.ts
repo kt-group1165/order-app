@@ -1,4 +1,5 @@
 import { supabase, CarePlanElement, CarePlanElementType } from "./supabase";
+import { todayYmd, addDaysYmd } from "./date-jst";
 
 /** 書類種別 → 対象 element_type のマップ (発生要因の絞り込み用)
  *  個別援助計画書が最大集合、他はそのサブセット。
@@ -70,10 +71,8 @@ export async function getCertRenewalVirtuals(
   tenantId: string,
   officeId: string,
 ): Promise<CarePlanElement[]> {
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const horizonDate = new Date(today.getTime() + 30 * 86400000);
-  const horizonStr = horizonDate.toISOString().slice(0, 10);
+  const todayStr = todayYmd();
+  const horizonStr = addDaysYmd(todayStr, 30);
 
   // 認定終了 30 日前以内の record
   const { data: records, error: recErr } = await supabase

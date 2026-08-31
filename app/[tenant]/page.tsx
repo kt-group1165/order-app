@@ -48,7 +48,7 @@ import {
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
-import { monthEndYmd } from "@/lib/date-jst";
+import { monthEndYmd, todayYmd } from "@/lib/date-jst";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, getEquipmentSetItems, saveEquipmentSetItems, findPriceCorrectionTargets, applyPriceCorrection, getPurchasePrices, getPurchasePriceForMonth, type ImportResult, type PriceCorrectionTarget } from "@/lib/equipment";
@@ -812,7 +812,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
     return visibleGroups.filter((g) => row.chars.includes((g.furigana ?? "").trim().charAt(0)));
   }, [orders, filter, clientByIdOrders, nameRow, orderSearch, equipmentByCodeOrders]);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayYmd();
 
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"], parentOrder?: OrderWithItems) => {
     if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
@@ -3751,7 +3751,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
   const [similarProvisionalCandidates, setSimilarProvisionalCandidates] = useState<Client[] | null>(null);
   // 入退院日付入力ダイアログ
   const [hospDateDialog, setHospDateDialog] = useState<{ client: Client; mode: "admit" | "discharge"; currentHospId?: string } | null>(null);
-  const [hospDateInput, setHospDateInput] = useState(() => new Date().toISOString().slice(0, 10));
+  const [hospDateInput, setHospDateInput] = useState(() => todayYmd());
   // 実績表
   const [showJissekiModal, setShowJissekiModal] = useState(false);
   const [jissekiMonth, setJissekiMonth] = useState(() => new Date().toISOString().slice(0, 7)); // YYYY-MM
@@ -3961,7 +3961,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `利用者一覧_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `利用者一覧_${todayYmd()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -4881,7 +4881,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
   // 入退院ボタン → 日付入力ダイアログを開く
   const toggleHospitalization = (client: Client) => {
     const current = hospitalizations.find(h => h.client_id === client.id && h.discharge_date === null);
-    setHospDateInput(new Date().toISOString().slice(0, 10));
+    setHospDateInput(todayYmd());
     setHospDateDialog({ client, mode: current ? "discharge" : "admit", currentHospId: current?.id });
   };
 
@@ -6538,7 +6538,7 @@ function ClientDetail({
   // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount-time async fetch / mount init)
   useEffect(() => { loadItems(); }, [loadItems]);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayYmd();
 
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"]) => {
     if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
@@ -6579,7 +6579,7 @@ function ClientDetail({
           const officeId = (orderData as Order | null)?.office_id ?? currentOfficeId;
           if (officeId) {
             try {
-              const startDate = date ?? item.rental_start_date ?? new Date().toISOString().split("T")[0];
+              const startDate = date ?? item.rental_start_date ?? todayYmd();
               await ensureActiveAssignment(client.id, officeId, tenantId, startDate);
               await reloadAssignments();
             } catch (e) { console.error("利用期間の自動作成に失敗", e); }
@@ -6600,7 +6600,7 @@ function ClientDetail({
                 .eq("orders.office_id", officeId)
                 .neq("id", item.id);
               if ((remaining ?? []).length === 0) {
-                const endDate = date ?? item.rental_end_date ?? new Date().toISOString().split("T")[0];
+                const endDate = date ?? item.rental_end_date ?? todayYmd();
                 await closeActiveAssignment(client.id, officeId, endDate);
                 await reloadAssignments();
               }
@@ -7316,7 +7316,7 @@ function ClientDetail({
                     {o.id === currentOfficeId ? (
                       <button
                         onClick={() => {
-                          const today = new Date().toISOString().split("T")[0];
+                          const today = todayYmd();
                           if (isActive) {
                             setEndDatePicker({ officeId: o.id, officeName: o.name, date: today });
                           } else {
@@ -7342,7 +7342,7 @@ function ClientDetail({
               <div className="flex gap-1.5">
                 <button
                   onClick={() => {
-                    const today = new Date().toISOString().split("T")[0];
+                    const today = todayYmd();
                     const defaultOffice = currentOfficeId ?? assignmentOffices[0]?.id ?? "";
                     setAssignmentAdding({ office_id: defaultOffice, start_date: today, end_date: "" });
                   }}
@@ -13630,7 +13630,7 @@ function OrderEmailPreviewModal({
 }) {
   const isResend = (order.email_sent_count ?? 0) > 0;
   const client = clients.find((c) => c.id === order.client_id);
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayYmd();
   // 解約・キャンセルメール用: 返却日・返却方法
   const terminatedItem = orderItems.find((i) => i.status === "terminated");
   const [returnDate, setReturnDate] = useState(
@@ -15403,7 +15403,7 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       const toUpdate = userNums.filter((u) => existingClientNums.has(u)).length;
       const toSoftDelete = Array.from(existingClientNums).filter((u) => !p.clients.has(u)).length;
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayYmd();
       const insuranceCurrent = p.insurance.filter((r) => {
         const s = r.certification_start_date, e = r.certification_end_date;
         return (!s || s <= today) && (!e || e >= today);
@@ -15556,7 +15556,7 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       await supabase.from("care_managers").delete().eq("tenant_id", tenantId);
       await supabase.from("care_offices").delete().eq("tenant_id", tenantId);
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayYmd();
       // 現在期間の記録から care_offices を生成
       const currentInsurance = parsed.insurance.filter((r) => {
         const s = r.certification_start_date, e = r.certification_end_date;
@@ -16349,7 +16349,7 @@ function CarePlanModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [step, setStep] = useState<1 | 2>(1);
   const [templates, setTemplates] = useState<CarePlanTemplate[]>([]);
 
@@ -16713,7 +16713,7 @@ function ProposalModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [step, setStep] = useState<1 | 2>(1);
   const selectableItems = clientItems.filter((i) =>
     ["ordered", "delivered", "trial", "rental_started"].includes(i.status)
@@ -17038,7 +17038,7 @@ function ContractDocumentsModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [step, setStep] = useState<1 | 2>(1);
   const [explanationDate, setExplanationDate] = useState(todayStr);
   const [contractDate, setContractDate] = useState(todayStr);
@@ -17508,7 +17508,7 @@ function ImportantMattersModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [explanationDate, setExplanationDate] = useState(todayStr);
   const [step, setStep] = useState<1 | 2>(1);
   const [saving, setSaving] = useState(false);
@@ -17835,7 +17835,7 @@ function RentalContractModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [step, setStep] = useState<1 | 2>(1);
   const [contractDate, setContractDate] = useState(todayStr);
   const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">("1");
@@ -18211,7 +18211,7 @@ function ChangeContractModal({
   onSaved?: () => void;
   initialParams?: Record<string, unknown>;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const today = new Date();
   const todayYM = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   const nextDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
@@ -20928,7 +20928,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
         getEquipment(tenantId),
         getTenantById(tenantId),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
-          .or(`end_date.is.null,end_date.gte.${new Date().toISOString().split("T")[0]}`),
+          .or(`end_date.is.null,end_date.gte.${todayYmd()}`),
       ]);
       // orders をページングで全件取得
       const allOrders: { id: string; client_id: string }[] = [];
@@ -21598,7 +21598,7 @@ function SendRentalReportModal({
       if (!html) throw new Error("プレビュー DOM が見つかりません");
 
       // タイトル
-      const dateForTitle = visitDate || reportDate || new Date().toISOString().split("T")[0];
+      const dateForTitle = visitDate || reportDate || todayYmd();
       const title = `貸与報告書 ${dateForTitle} ${client.name} 様`;
 
       // shared_documents INSERT
@@ -22049,7 +22049,7 @@ function MonitoringFormModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [visitDate, setVisitDate] = useState(existingRecord?.visit_date ?? todayStr);
   const [reportDate, setReportDate] = useState(existingRecord?.report_date ?? todayStr);
   const [staffName, setStaffName] = useState(existingRecord?.staff_name ?? companyInfo.staffName ?? "");
@@ -22923,7 +22923,7 @@ function MeetingNotesTab({ tenantId, currentOfficeId, currentOfficeName, officeV
   }, [notes, search]);
 
   // ── 編集フォーム state ──
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clientName, setClientName] = useState("");
   const [creatorName, setCreatorName] = useState("");
@@ -23343,7 +23343,7 @@ const DEMO_RETURN_LOCATIONS = ["事務所", "消毒庫", "社用車", "その他
 type DemoStatusFilter = "all" | "out" | "stock" | "overdue";
 
 function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayYmd();
 
   const [offices, setOffices] = useState<Office[]>([]);
   // ログイン中の事業所がある場合はそこに固定 (他事業所のデモ機は見せない)。無い場合のみ全事業所+セレクト

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Clock, Plus, Loader2, Check, X, AlertTriangle } from "lucide-react";
 import { supabase, OvertimeRequest, Member } from "@/lib/supabase";
+import { todayYmd } from "@/lib/date-jst";
 import {
   getOvertimeRequests,
   createOvertimeRequest,
@@ -536,7 +537,7 @@ function NewRequestModal({
   onSaved: () => void;
 }) {
   const [memberId, setMemberId] = useState("");
-  const [targetDate, setTargetDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [targetDate, setTargetDate] = useState(() => todayYmd());
   const [scheduledEnd, setScheduledEnd] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
