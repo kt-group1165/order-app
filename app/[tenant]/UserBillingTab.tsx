@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, ChevronLeft, ChevronRight, Printer, FileText, Receipt } from "lucide-react";
+import { monthEndYmd } from "@/lib/date-jst";
 import type {
   Client,
   ClientInsuranceRecord,
@@ -405,7 +406,7 @@ export default function UserBillingTab({
   // 当月に対象月が掛かる insurance_record
   const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
     const monthStart = `${billingMonth}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const monthEnd = monthEndYmd(y, m);
     const recs = insuranceRecords
       .filter((r) => r.client_id === clientId)
       .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
