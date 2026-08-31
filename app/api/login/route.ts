@@ -109,14 +109,35 @@ export async function POST(request: Request) {
 
     if (!trustRow) {
       // 初見端末 → pending 行作成
-      await admin.from("trusted_devices").insert({
+      //
+      // app: どのアプリ由来の端末登録か (2026-08-31 監査)。
+      //   kt_device_id はドメイン単位 cookie なので、同じ PC でもアプリごとに
+      //   別 device_id になる。承認上限 2 台をアプリ単位で数えるために要る。
+      //   ⚠ migrations/trusted_devices_app_scope.sql 未適用の環境では列が無く
+      //     INSERT が 42703 で落ちる。そのまま落とすと pending 行が作られず
+      //     「承認待ち」と言われたまま admin が承認できない = ログイン不能になるので、
+      //     列無しでもう一度 INSERT し直す。
+      const devicePayload = {
         user_id: targetUser.id,
         device_id: device_id,
         device_label: typeof device_label === "string" ? device_label : null,
         status: "pending",
         first_seen_ua: ua,
         first_seen_ip: ip,
-      });
+      };
+      const { error: insErr } = await admin
+        .from("trusted_devices")
+        .insert({ ...devicePayload, app: "order" });
+      if (insErr) {
+        if (insErr.code === "42703") {
+          const { error: retryErr } = await admin.from("trusted_devices").insert(devicePayload);
+          if (retryErr) {
+            console.error("trusted_devices pending insert failed:", retryErr.message);
+          }
+        } else {
+          console.error("trusted_devices pending insert failed:", insErr.message);
+        }
+      }
       return gateUntrusted(
         "approval_required",
         202,
