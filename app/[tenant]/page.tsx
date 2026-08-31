@@ -10203,7 +10203,24 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       }
       if (details.length === 0) continue;
       // 給付率 (benefit_rate は 90/80/70 の給付率で保存済み)、福祉用具は単価 10 円固定
-      const benefitRate = parseInt(client.benefit_rate ?? "90", 10) || 90;
+      // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
+      //   clients.benefit_rate は実測で NULL が 583 名。2割負担者を 1割で出すと
+      //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
+      //   `|| 90` のせいで "0" も 90 になっていた。
+      //   既定 (90) は変えず、必ず気づけるように警告を出す。
+      const benefitRateRaw = (client.benefit_rate ?? "").trim();
+      const benefitRateParsed = parseInt(benefitRateRaw, 10);
+      const benefitRate =
+        Number.isFinite(benefitRateParsed) && benefitRateParsed > 0 ? benefitRateParsed : 90;
+      if (!benefitRateRaw) {
+        preWarnings.push(
+          `${client.name}: 給付率が未設定のため 1 割 (90) で計算しました — 2割/3割なら過大請求になります。負担割合証を確認してください`,
+        );
+      } else if (!Number.isFinite(benefitRateParsed) || benefitRateParsed <= 0) {
+        preWarnings.push(
+          `${client.name}: 給付率 "${benefitRateRaw}" を読めないため 1 割 (90) で計算しました — 値を確認してください`,
+        );
+      }
       const copayRate = Math.max(0, 100 - benefitRate) / 100;
       const totalCost = totalUnits * 10;
       const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
@@ -10218,7 +10235,12 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       rows.push({
         userName: client.name,
         insurerNumber: client.insurer_number,
-        insuredNumber: client.insured_number ?? client.user_number,
+        // 2026-08-31 監査: `?? client.user_number` で**社内の利用者番号**にフォールバック
+        //   していた。無関係な番号で請求/実績が立ち、しかも build.ts の
+        //   `if (!insured) warnings.push(...)` が user_number で埋まって発火しない
+        //   = 完全な silent failure。実測で insured_number が空の client は 1,047 名。
+        //   空のまま渡して警告を出させる (返戻にはなるが、誤った番号で通るより良い)。
+        insuredNumber: client.insured_number ?? null,
         birthDate: client.birth_date,
         gender: client.gender,
         careLevel: client.care_level,
@@ -10328,7 +10350,12 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       byCareOffice.get(receiverNumber)!.users.push({
         name: client.name,
         insurerNumber: client.insurer_number,
-        insuredNumber: client.insured_number ?? client.user_number,
+        // 2026-08-31 監査: `?? client.user_number` で**社内の利用者番号**にフォールバック
+        //   していた。無関係な番号で請求/実績が立ち、しかも build.ts の
+        //   `if (!insured) warnings.push(...)` が user_number で埋まって発火しない
+        //   = 完全な silent failure。実測で insured_number が空の client は 1,047 名。
+        //   空のまま渡して警告を出させる (返戻にはなるが、誤った番号で通るより良い)。
+        insuredNumber: client.insured_number ?? null,
         planStaffName: client.care_manager || careOffice.name,
         items: jissekiItems,
       });
@@ -10478,7 +10505,24 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
           totalUnits += units;
         }
         if (details.length === 0) continue;
-        const benefitRate = parseInt(client.benefit_rate ?? "90", 10) || 90;
+        // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
+        //   clients.benefit_rate は実測で NULL が 583 名。2割負担者を 1割で出すと
+        //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
+        //   `|| 90` のせいで "0" も 90 になっていた。
+        //   既定 (90) は変えず、必ず気づけるように警告を出す。
+        const benefitRateRaw = (client.benefit_rate ?? "").trim();
+        const benefitRateParsed = parseInt(benefitRateRaw, 10);
+        const benefitRate =
+          Number.isFinite(benefitRateParsed) && benefitRateParsed > 0 ? benefitRateParsed : 90;
+        if (!benefitRateRaw) {
+          allWarnings.push(
+            `[${ym}] ${client.name}: 給付率が未設定のため 1 割 (90) で計算しました — 2割/3割なら過大請求になります。負担割合証を確認してください`,
+          );
+        } else if (!Number.isFinite(benefitRateParsed) || benefitRateParsed <= 0) {
+          allWarnings.push(
+            `[${ym}] ${client.name}: 給付率 "${benefitRateRaw}" を読めないため 1 割 (90) で計算しました — 値を確認してください`,
+          );
+        }
         const copayRate = Math.max(0, 100 - benefitRate) / 100;
         const totalCost = totalUnits * 10;
         const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
@@ -10490,7 +10534,12 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
         rows.push({
           userName: client.name,
           insurerNumber: client.insurer_number,
-          insuredNumber: client.insured_number ?? client.user_number,
+          // 2026-08-31 監査: `?? client.user_number` で**社内の利用者番号**にフォールバック
+          //   していた。無関係な番号で請求/実績が立ち、しかも build.ts の
+          //   `if (!insured) warnings.push(...)` が user_number で埋まって発火しない
+          //   = 完全な silent failure。実測で insured_number が空の client は 1,047 名。
+          //   空のまま渡して警告を出させる (返戻にはなるが、誤った番号で通るより良い)。
+          insuredNumber: client.insured_number ?? null,
           birthDate: client.birth_date,
           gender: client.gender,
           careLevel: client.care_level,

@@ -213,7 +213,11 @@ export function buildFukuyoguDensou(
     const insured = (r.insuredNumber ?? "").trim();
     if (!insurerRaw) warnings.push(`${r.userName}: 証記載保険者番号が未登録です`);
     if (!insured) warnings.push(`${r.userName}: 被保険者番号が未登録です`);
-    const careLevelCode = CARE_LEVEL_CODE[(r.careLevel ?? "").trim()] ?? "";
+    // 2026-08-31 監査: CARE_LEVEL_CODE のキーは半角だが、clients.care_level は
+    //   ほのぼの由来で**全角のことがある** (実測 306 件: 要介護１〜５ / 要支援１・２)。
+    //   そのまま引くと項15 が空欄で出力される。NFKC で寄せてから引く。
+    const careLevelKey = (r.careLevel ?? "").normalize("NFKC").replace(/\s/g, "");
+    const careLevelCode = CARE_LEVEL_CODE[careLevelKey] ?? "";
     if (!careLevelCode) warnings.push(`${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードに変換できません`);
     if (!r.birthDate) warnings.push(`${r.userName}: 生年月日が未登録です`);
     if (!r.careOfficeNumber) warnings.push(`${r.userName}: 担当居宅介護支援事業所 (事業所番号) が未登録です`);
