@@ -67,12 +67,22 @@ export async function deleteOffice(id: string): Promise<void> {
 
 export async function getOfficePrices(tenantId: string): Promise<EquipmentOfficePrice[]> {
   return cached(`office_prices:${tenantId}`, async () => {
-    const { data, error } = await supabase
-      .from("equipment_office_prices")
-      .select("*")
-      .eq("tenant_id", tenantId);
-    if (error) throw error;
-    return data ?? [];
+    // ⚠ 用具 × 事業所 の積なので 1000 行を超えうる。しかも cached() で使い回すため、
+    //   欠けたまま価格解決に使われる。必ず回しきる (2026-08-31 是正)。
+    const PAGE = 1000;
+    const all: EquipmentOfficePrice[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("equipment_office_prices")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("id")
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...((data ?? []) as EquipmentOfficePrice[]));
+      if (!data || data.length < PAGE) break;
+    }
+    return all;
   });
 }
 
@@ -144,12 +154,23 @@ export type ClientOfficeAssignment = {
 
 export async function getClientOfficeAssignments(tenantId: string): Promise<ClientOfficeAssignment[]> {
   return cached(`client_office_assignments:${tenantId}`, async () => {
-    const { data, error } = await supabase
-      .from("client_office_assignments")
-      .select("*")
-      .eq("tenant_id", tenantId);
-    if (error) throw error;
-    return data ?? [];
+    // ⚠ PostgREST は 1 回 1000 行しか返さない。割当は約 5,000 行あるので
+    //   ページングしないと **自事業所フィルタから利用者が静かに消える**
+    //   (2026-08-31 是正。同じ Promise.all の中で保険レコードだけページング済みだった)。
+    const PAGE = 1000;
+    const all: ClientOfficeAssignment[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("client_office_assignments")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("id")
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...((data ?? []) as ClientOfficeAssignment[]));
+      if (!data || data.length < PAGE) break;
+    }
+    return all;
   });
 }
 

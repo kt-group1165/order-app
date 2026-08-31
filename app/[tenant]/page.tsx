@@ -3783,7 +3783,26 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
           getOrders(tenantId, officeFilter),
           getSuppliers(),
           getMembers(tenantId),
-          supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).order("admission_date", { ascending: false }),
+          // ⚠ 入院データは **単位数計算 (半月ルール・入院控除) に流れる**ので
+          //   1000 行で切れると請求額が狂う。同ファイル内の請求タブ側は
+          //   fetchAllPaged を使っており、ここだけ素の select だった (2026-08-31 是正)。
+          (async () => {
+            const PAGE = 1000;
+            const all: ClientHospitalization[] = [];
+            for (let from = 0; ; from += PAGE) {
+              const { data, error } = await supabase
+                .from("client_hospitalizations")
+                .select("*")
+                .eq("tenant_id", tenantId)
+                .order("admission_date", { ascending: false })
+                .order("id")
+                .range(from, from + PAGE - 1);
+              if (error) throw error;
+              all.push(...((data ?? []) as ClientHospitalization[]));
+              if (!data || data.length < PAGE) break;
+            }
+            return all;
+          })(),
           getTenantById(tenantId),
           getClientOfficeAssignments(tenantId),
         ]);
@@ -3793,7 +3812,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
         setOrders(ords);
         setSuppliers(sup);
         setMembers(mem);
-        setHospitalizations((hospRes.data ?? []) as ClientHospitalization[]);
+        setHospitalizations(hospRes);
         setTenantInfo(tenant);
         // 事業所別利用者マップ
         if (currentOfficeId) {
@@ -4230,7 +4249,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
             // memo は DROP 済（client_memos に移行）。型互換のため後で undefined を許容。
             .select("id,user_number,name,furigana,phone,mobile,address,gender,care_level,benefit_rate,care_manager,care_manager_org,certification_end_date,insured_number,birth_date,certification_start_date,insurer_number,copay_rate,public_expense,is_facility,is_provisional,deleted_at,referrer_org,care_office_id,care_manager_id")
             .eq("tenant_id", tenantId)
-            .range(from, from + PAGE - 1);
+            .order("id").range(from, from + PAGE - 1);
           if (!data || data.length === 0) break;
           freshClients.push(...(data as FreshClient[]));
           if (data.length < PAGE) break;
@@ -15446,7 +15465,7 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       const PAGE = 1000;
       let from = 0;
       while (true) {
-        const { data } = await supabase.from("clients").select("user_number").eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+        const { data } = await supabase.from("clients").select("user_number").eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
         if (!data || data.length === 0) break;
         data.forEach((c: { user_number: string | null }) => { if (c.user_number) existingClientNums.add(c.user_number); });
         if (data.length < PAGE) break;
@@ -15562,7 +15581,7 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
         const PAGE = 1000;
         let from = 0;
         while (true) {
-          const { data } = await supabase.from("clients").select("id, user_number").eq("tenant_id", tenantId).is("deleted_at", null).range(from, from + PAGE - 1);
+          const { data } = await supabase.from("clients").select("id, user_number").eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, from + PAGE - 1);
           if (!data || data.length === 0) break;
           allClientIds.push(...(data as { id: string; user_number: string | null }[]));
           if (data.length < PAGE) break;
@@ -20174,7 +20193,7 @@ function DocTasksTab({
         const allClients: Client[] = [];
         let from = 0;
         while (true) {
-          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).range(from, from + PAGE - 1);
+          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, from + PAGE - 1);
           if (officeIds && officeIds.length > 0) q = q.in("office_id", officeIds);
           const { data, error } = await q;
           if (error) throw error;
@@ -20964,7 +20983,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
         const all: Client[] = [];
         let from = 0;
         while (true) {
-          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
           if (officeFilter) q = q.eq("office_id", officeFilter);
           const { data, error } = await q;
           if (error) throw error;
@@ -22517,7 +22536,7 @@ function StaffTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: stri
               .from("member_offices")
               .select("member_id")
               .in("office_id", officeIds)
-              .range(from, from + PAGE - 1);
+              .order("member_id").order("office_id").range(from, from + PAGE - 1);
             if (error) {
               console.warn("member_offices fetch failed:", error.message);
               break;
