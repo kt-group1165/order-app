@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getVisiblePayrollOfficeIds } from "@/lib/authz";
 import {
   calcDailyListWithWeekly,
   calcMonthlySummary,
@@ -47,6 +48,17 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: `職員の取得に失敗: ${empErr.message}` }, { status: 500 });
   }
   if (!emp) return NextResponse.json({ error: "職員が見つかりません" }, { status: 404 });
+
+  // 認可 (2026-08-31 監査): 任意の employee_id を渡すだけで他事業所の
+  // 勤怠 + 手当 PDF が取れていた。対象職員の事業所が自分に見えるか確認する。
+  const visibleOffices = await getVisiblePayrollOfficeIds(supabase);
+  if (!visibleOffices) {
+    return NextResponse.json({ error: "permission_check_failed" }, { status: 500 });
+  }
+  const empOfficeId = (emp as { office_id?: string | null }).office_id ?? null;
+  if (!empOfficeId || !visibleOffices.includes(empOfficeId)) {
+    return NextResponse.json({ error: "permission_denied" }, { status: 403 });
+  }
 
   const { data: po, error: poErr } = await admin
     .from("payroll_offices")

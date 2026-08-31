@@ -13,17 +13,20 @@
 //   - 端末信頼のみ bypass される (= 不正端末からでも入れる) ので、運用上は
 //     開発者本人の email のみ登録する想定
 
-/** ハードコード: 常に trust check bypass する test 用 account */
-const ALWAYS_TRUSTED_EMAILS = ["test@kt-group.co.jp"] as const;
+// 2026-08-31 監査での是正:
+//   以前は ALWAYS_TRUSTED_EMAILS = ["test@kt-group.co.jp"] をハードコードしており、
+//   env ガード無しで本番でも端末承認を bypass できた。ハードコードを廃止し、
+//   MASTER_USER_EMAILS (Vercel env) だけを唯一の入口にする。
+//   ⚠ test 用アカウントの bypass を続けるなら、Vercel の MASTER_USER_EMAILS に
+//     test@kt-group.co.jp を明示的に追加すること (コードに戻さない)。
 
-/** env から master user email list を取得 (lowercase 正規化済) + hardcoded test account */
+/** env から master user email list を取得 (lowercase 正規化済) */
 export function getMasterUserEmails(): string[] {
   const raw = process.env.MASTER_USER_EMAILS ?? "";
-  const envList = raw
+  return raw
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
-  return [...ALWAYS_TRUSTED_EMAILS, ...envList];
 }
 
 /** email が master user か判定 (大文字小文字無視) */

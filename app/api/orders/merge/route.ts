@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getVisibleTenantIds } from "@/lib/authz";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 // POST /api/orders/merge
@@ -108,6 +109,17 @@ export async function POST(request: Request) {
   const targetTenant = target.tenant_id as string;
   if (sources.some((s) => s.tenant_id !== targetTenant)) {
     return NextResponse.json({ error: "tenant_mismatch" }, { status: 400 });
+  }
+
+  // 認可 (2026-08-31 監査): tenant を「取得した行そのもの」から導出していたため、
+  // 任意のログインユーザが他事業所の受注を統合し元行を削除できた。
+  // 呼出ユーザに見える tenant かを必ず確認する。
+  const visibleTenants = await getVisibleTenantIds(supabase);
+  if (!visibleTenants) {
+    return NextResponse.json({ error: "permission_check_failed" }, { status: 500 });
+  }
+  if (!visibleTenants.includes(targetTenant)) {
+    return NextResponse.json({ error: "permission_denied" }, { status: 403 });
   }
 
   // 2) source の supplier_email 書類をチェック (警告のみ、統合は実行)

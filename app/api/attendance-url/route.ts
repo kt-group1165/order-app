@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { issueAttendanceToken } from "@/lib/attendanceToken";
+import { getVisiblePayrollOfficeIds } from "@/lib/authz";
 
 // 出勤簿 自己入力 URL の発行・個別制御 API (管理者用)。
 // 認証: Supabase Auth (middleware 通過後、念のため getUser でも確認)。
@@ -16,19 +17,28 @@ import { issueAttendanceToken } from "@/lib/attendanceToken";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-async function requireAuth(): Promise<NextResponse | null> {
+type AuthOk = { ok: true; supabase: Awaited<ReturnType<typeof createClient>> };
+type AuthNg = { ok: false; res: NextResponse };
+
+// 認証 + 以降の認可判定に使う user-scoped client を返す。
+// ⚠ この後に必ず「対象の payroll_office が呼出ユーザに見えるか」を確認すること。
+//    ここを通っただけでは「ログインしている」以上の意味は無い (2026-08-31 監査)。
+async function requireAuth(): Promise<AuthOk | AuthNg> {
   const supabase = await createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData?.user) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return { ok: false, res: NextResponse.json({ error: "unauthenticated" }, { status: 401 }) };
   }
   if (!process.env.ATTENDANCE_FORM_SECRET) {
-    return NextResponse.json(
-      { error: "サーバー側の設定が未完了です (ATTENDANCE_FORM_SECRET 未設定)" },
-      { status: 503 },
-    );
+    return {
+      ok: false,
+      res: NextResponse.json(
+        { error: "サーバー側の設定が未完了です (ATTENDANCE_FORM_SECRET 未設定)" },
+        { status: 503 },
+      ),
+    };
   }
-  return null;
+  return { ok: true, supabase };
 }
 
 function buildUrl(origin: string, employeeId: string, version: number): string | null {
@@ -37,13 +47,24 @@ function buildUrl(origin: string, employeeId: string, version: number): string |
 }
 
 export async function GET(req: Request) {
-  const authErr = await requireAuth();
-  if (authErr) return authErr;
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.res;
 
   const url = new URL(req.url);
   const payrollOfficeId = url.searchParams.get("payroll_office_id");
   if (!payrollOfficeId) {
     return NextResponse.json({ error: "payroll_office_id が必要です" }, { status: 400 });
+  }
+
+  // 認可: 自分に見える payroll_office か。
+  //   これが無いと ?payroll_office_id= を差し替えるだけで全社の職員分の
+  //   自己入力 URL (= /api/attendance-self の唯一の認証要素) を発行できた。
+  const visibleOffices = await getVisiblePayrollOfficeIds(auth.supabase);
+  if (!visibleOffices) {
+    return NextResponse.json({ error: "permission_check_failed" }, { status: 500 });
+  }
+  if (!visibleOffices.includes(payrollOfficeId)) {
+    return NextResponse.json({ error: "permission_denied" }, { status: 403 });
   }
 
   const admin = createAdminClient();
@@ -105,8 +126,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const authErr = await requireAuth();
-  if (authErr) return authErr;
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.res;
 
   let body: unknown;
   try {
@@ -127,7 +148,7 @@ export async function POST(req: Request) {
   // 対象職員の存在確認 (payroll_employees に居ない id への row 作成を防ぐ)
   const { data: emp, error: empErr } = await admin
     .from("payroll_employees")
-    .select("id")
+    .select("id, office_id")
     .eq("id", employee_id)
     .maybeSingle();
   if (empErr) {
@@ -136,6 +157,16 @@ export async function POST(req: Request) {
   }
   if (!emp) {
     return NextResponse.json({ error: "職員が見つかりません" }, { status: 404 });
+  }
+
+  // 認可: その職員の事業所が自分に見えるか (無いと他事業所の URL を失効/再発行できた)
+  const visibleOffices = await getVisiblePayrollOfficeIds(auth.supabase);
+  if (!visibleOffices) {
+    return NextResponse.json({ error: "permission_check_failed" }, { status: 500 });
+  }
+  const empOfficeId = (emp as { office_id: string | null }).office_id;
+  if (!empOfficeId || !visibleOffices.includes(empOfficeId)) {
+    return NextResponse.json({ error: "permission_denied" }, { status: 403 });
   }
 
   const { data: current, error: curErr } = await admin

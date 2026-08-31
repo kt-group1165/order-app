@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getVisibleTenantIds } from "@/lib/authz";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
 // POST /api/orders/unmerge
@@ -89,6 +90,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "target_not_found" }, { status: 404 });
   }
   const target = targetRow as Record<string, unknown> & { merged_from_order_ids?: MergedFromEntry[] | null };
+
+  // 認可 (2026-08-31 監査): tenant を取得行そのものから導出していたため、
+  // 任意のログインユーザが他事業所の受注を分解できた。
+  const visibleTenants = await getVisibleTenantIds(supabase);
+  if (!visibleTenants) {
+    return NextResponse.json({ error: "permission_check_failed" }, { status: 500 });
+  }
+  if (!visibleTenants.includes(target.tenant_id as string)) {
+    return NextResponse.json({ error: "permission_denied" }, { status: 403 });
+  }
+
   const merged = target.merged_from_order_ids ?? [];
   if (!Array.isArray(merged) || merged.length === 0) {
     return NextResponse.json({ error: "no_merged_sources" }, { status: 400 });
