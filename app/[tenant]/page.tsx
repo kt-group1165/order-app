@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
+import { monthEndYmd } from "@/lib/date-jst";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
 import { getEquipment, getSuppliers, importEquipment, parseEquipmentCSV, updateEquipment, createEquipmentItem, updateEquipmentSortOrders, getPriceHistory, addPriceHistory, getPriceForMonth, getActiveEquipmentPrices, revisePurchasePrice, getAllActivePurchasePrices, bulkUpsertPurchasePrices, getActiveSuppliers, createSupplier, updateSupplier, getEquipmentSetItems, saveEquipmentSetItems, findPriceCorrectionTargets, applyPriceCorrection, getPurchasePrices, getPurchasePriceForMonth, type ImportResult, type PriceCorrectionTarget } from "@/lib/equipment";
@@ -3846,7 +3847,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
     if (!hospFilter) return null;
     const [year, month] = hospModalMonth.split("-").map(Number);
     const firstDay = `${hospModalMonth}-01`;
-    const lastDay = new Date(year, month, 0).toISOString().split("T")[0];
+    const lastDay = monthEndYmd(year, month);
     return new Set(
       hospitalizations
         .filter(h => h.admission_date <= lastDay && (h.discharge_date === null || h.discharge_date >= firstDay))
@@ -5967,7 +5968,7 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
 
         // 入院中（その月）
         const monthStart = `${jissekiMonth}-01`;
-        const monthEnd = new Date(jYear, jMonth, 0).toISOString().split("T")[0];
+        const monthEnd = monthEndYmd(jYear, jMonth);
         const hospInMonth = new Set(
           hospitalizations
             .filter(h => h.admission_date <= monthEnd && (h.discharge_date === null || h.discharge_date >= monthStart))
@@ -9568,7 +9569,7 @@ function MonthlyInfoTab({
   // 当月に対象月が掛かる insurance_record を引く (effective_date <= 月末 && (cert_end >= 月初 || null))
   const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
     const monthStart = `${billingMonth}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const monthEnd = monthEndYmd(y, m);
     const recs = insuranceRecords
       .filter((r) => r.client_id === clientId)
       .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
@@ -9874,7 +9875,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
   const autoLateClients = useMemo(() => {
     const [y, m] = billingMonth.split("-").map(Number);
     const monthStart = `${billingMonth}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const monthEnd = monthEndYmd(y, m);
     const lateSet = new Set<string>();
     for (const client of clients) {
       const recs = insuranceRecords
@@ -10152,7 +10153,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
 
     // 公費 (生保 等) 情報を当月分だけ取得。生保(法別12)は本人負担を公費が全額負担する前提 (v1)。
     const monthStart = `${billingMonth}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+    const monthEnd = monthEndYmd(y, m);
     const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
     {
       const clientIds = billingGroups.map((g) => g.client.id);
@@ -10433,7 +10434,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
       const [yy, mm] = ym.split("-").map(Number);
       // 公費 (当該月有効分)
       const monthStart = `${ym}-01`;
-      const monthEnd = new Date(yy, mm, 0).toISOString().split("T")[0];
+      const monthEnd = monthEndYmd(yy, mm);
       const clientIds = entries.map((e) => e.client.id);
       const { data: kohiData, error: kohiErr } = await supabase
         .from("client_public_expenses")
@@ -10845,7 +10846,7 @@ function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOf
                 const isDetail = detailClient?.client.id === client.id;
                 // 申請中バッジ
                 const monthStart = `${billingMonth}-01`;
-                const monthEnd = new Date(y, m, 0).toISOString().split("T")[0];
+                const monthEnd = monthEndYmd(y, m);
                 const insRecs = insuranceRecords
                   .filter(r => r.client_id === client.id)
                   .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
@@ -11204,7 +11205,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   // 当月の売上帳票行を生成（自動集計）
   const rows = useMemo(() => {
     const monthStart = `${month}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10);
+    const monthEnd = monthEndYmd(y, m);
 
     type RowType = {
       key: string;
@@ -11333,7 +11334,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   //   利益 = 売上 − 経費。現金（買掛支払）とは別軸の客観的な月次損益。
   const pnl = useMemo(() => {
     const monthStart = `${month}-01`;
-    const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10);
+    const monthEnd = monthEndYmd(y, m);
     // その月有効な月額レンタル（rental 履歴優先）
     const monthlyRentalOf = (productCode: string): number => {
       const hist = priceHistory
