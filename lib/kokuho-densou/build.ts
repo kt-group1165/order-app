@@ -192,7 +192,11 @@ export function buildFukuyoguDensou(
       String(hRows.length), // 7 件数
       String(hRows.reduce((s, r) => s + r.totalUnits, 0)), // 8 単位数
       String(hRows.reduce((s, r) => s + r.totalCost, 0)), // 9 費用合計
-      String(hRows.reduce((s, r) => s + r.insuranceAmount, 0)), // 10 保険請求額
+      // 2026-08-31 監査: ここに保険請求額を再掲していたため、生保利用者が居る月は
+      //   国保連の取込で**保険請求が公費件数分だけ二重計上**されていた。
+      //   kaigo-app 側 (src/lib/kokuho-densou/build.ts:233) は明示的に "0" にしており、
+      //   ほのぼの実伝送でも公費行の項10 は 0。
+      "0", // 10 保険請求額 (公費請求分レコードでは再掲しない)
       String(hRows.reduce((s, r) => s + (r.kohiAmount ?? 0), 0)), // 11 公費請求額
       "0", // 12 利用者負担 (公費振替後は 0)
       "", "", "", "", "", "", // 13-18 特定入所者 (対象外)
@@ -201,9 +205,13 @@ export function buildFukuyoguDensou(
 
   // ── 7131 明細書 (利用者ごと: 基本 01 → 明細 02×n → 集計 10) ──
   for (const r of rows) {
-    const insurer = (r.insurerNumber ?? "").trim();
+    // 2026-08-31 監査: padStart が無く 6 桁のまま出していた (仕様は数字8)。
+    //   clients.insurer_number は実測で 6 桁が 5,393 件 = 福祉用具伝送は全件が桁不足だった。
+    //   kaigo-app build.ts:246 / build-sougou.ts:231 と同じく 8 桁に 0 埋めする。
+    const insurerRaw = (r.insurerNumber ?? "").trim();
+    const insurer = insurerRaw ? insurerRaw.padStart(8, "0") : "";
     const insured = (r.insuredNumber ?? "").trim();
-    if (!insurer) warnings.push(`${r.userName}: 証記載保険者番号が未登録です`);
+    if (!insurerRaw) warnings.push(`${r.userName}: 証記載保険者番号が未登録です`);
     if (!insured) warnings.push(`${r.userName}: 被保険者番号が未登録です`);
     const careLevelCode = CARE_LEVEL_CODE[(r.careLevel ?? "").trim()] ?? "";
     if (!careLevelCode) warnings.push(`${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードに変換できません`);
@@ -236,7 +244,12 @@ export function buildFukuyoguDensou(
       "", // 16 旧措置入所者特例コード
       dateNum(r.certStart), // 17 認定有効期間 開始
       dateNum(r.certEnd), // 18 認定有効期間 終了
-      "1", // 19 居宅サービス計画作成区分コード (1=居宅介護支援事業所作成)
+      // 2026-08-31 監査: "1" 固定だったため、担当居宅が未登録だと
+      //   「区分1 (居宅介護支援事業所作成) なのに項20 が空」= IF 必須欠落で返戻。
+      //   kaigo-app build.ts:328 と同じく居宅事業所番号の有無で 1/2 を出し分ける。
+      //   ⚠ "2" (被保険者が自己作成) は実際にケアマネが居る利用者に付けると
+      //     居宅側の給付管理票と突合できず返戻になり得る。上の warning を必ず潰すこと。
+      r.careOfficeNumber ? "1" : "2", // 19 居宅サービス計画作成区分コード
       r.careOfficeNumber ?? "", // 20 事業所番号 (居宅介護支援事業所)
       "", // 21 開始年月日
       "", // 22 中止年月日
@@ -324,10 +337,24 @@ export function buildFukuyoguDensou(
   // ── レコード番号を付与してファイルを組む ──
   const lines: string[] = [];
   let recNo = 1;
+  // 2026-08-31 監査:
+  //   媒体区分を "1"、処理対象年月を提供年月 (ym) で出していたが、ほのぼの実伝送は
+  //   全ファイルで **媒体区分 7 (インターネット伝送) / 処理対象年月 = 審査月**。
+  //   kaigo-app build.ts:560-568 は是正済みなので同じ形に揃える。
+  //   処理対象年月 = 審査月 = 提出バッチの月 + 1。提供月 M の請求は M+1 月 10 日までに
+  //   提出し M+1 月に審査される (_if_kyotaku.txt 注1「国保連合会での電算処理を
+  //   実行する年月を設定する」)。
+  //   ⚠ 提出が遅れる (月遅れ・再請求) 場合は本来 提出月+1 を指定する必要がある。
+  //     order-app 側に提出月の指定 UI が無いので、当面は提供月+1 で出す。
+  const shinsaYm =
+    opts.month === 12
+      ? `${opts.year + 1}01`
+      : `${opts.year}${String(opts.month + 1).padStart(2, "0")}`;
   // コントロールレコード: 種別1, 連番, ボリューム通番0, データ件数, データ種別711,
-  //   福祉事務所0, 保険者番号0, 事業所番号, 都道府県番号0, 媒体区分1(伝送), 処理対象年月, 管理番号1
+  //   福祉事務所0, 保険者番号0, 事業所番号, 都道府県番号0,
+  //   媒体区分7(インターネット伝送), 処理対象年月(審査月), 管理番号1
   lines.push(
-    ["1", String(recNo++), "0", String(dataParts.length), "711", "0", "0", office, "0", "1", ym, "1"].join(","),
+    ["1", String(recNo++), "0", String(dataParts.length), "711", "0", "0", office, "0", "7", shinsaYm, "1"].join(","),
   );
   for (const parts of dataParts) {
     lines.push(["2", String(recNo++), ...parts].join(","));
