@@ -104,7 +104,7 @@ async function main() {
     const { data, error } = await sb.from("equipment_master")
       .select("id, name, category, selection_reason")
       .eq("tenant_id", TENANT_ID)
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...data);

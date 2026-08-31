@@ -160,7 +160,7 @@ async function main() {
       .select("id, user_number, name, insured_number, address, postal_code, phone")
       .eq("tenant_id", TENANT_ID)
       .eq("address", BAD_ADDRESS)
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     badClients.push(...data);

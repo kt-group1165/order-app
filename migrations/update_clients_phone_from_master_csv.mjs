@@ -112,7 +112,7 @@ async function main() {
       .eq("tenant_id", TENANT_ID)
       .is("phone", null)
       .not("insured_number", "is", null)
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     targets.push(...data);

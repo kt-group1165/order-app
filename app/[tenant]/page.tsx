@@ -21009,7 +21009,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
         let ordQ = supabase
           .from("orders").select("id, client_id")
           .eq("tenant_id", tenantId)
-          .range(ordFrom, ordFrom + 999);
+          .order("id").range(ordFrom, ordFrom + 999);
         if (officeFilter) ordQ = ordQ.eq("office_id", officeFilter);
         const { data: ordChunk } = await ordQ;
         if (!ordChunk || ordChunk.length === 0) break;
@@ -21051,7 +21051,7 @@ function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId:
           .select("*")
           .eq("tenant_id", tenantId)
           .in("status", ["rental_started", "delivered", "trial"])
-          .range(itemFrom, itemFrom + 999);
+          .order("id").range(itemFrom, itemFrom + 999);
         if (!chunk || chunk.length === 0) break;
         items.push(...(chunk as OrderItem[]));
         if (chunk.length < 1000) break;

@@ -83,7 +83,7 @@ async function main() {
     const { data, error } = await supabase
       .from("clients")
       .select("id, tenant_id, user_number")
-      .range(from, from + 999);
+      .order("id").range(from, from + 999);
     if (error) { console.error("clients取得エラー:", error); process.exit(1); }
     if (!data || data.length === 0) break;
     clients.push(...data);

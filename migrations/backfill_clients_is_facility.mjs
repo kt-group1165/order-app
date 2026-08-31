@@ -71,7 +71,7 @@ async function fetchAll() {
       .select("id, name, furigana, is_facility")
       .eq("tenant_id", TENANT_ID)
       .is("deleted_at", null)
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...data);

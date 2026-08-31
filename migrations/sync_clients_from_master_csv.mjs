@@ -220,7 +220,7 @@ async function main() {
       .select("id, name, insured_number, address, postal_code, phone")
       .eq("tenant_id", TENANT_ID)
       .not("insured_number", "is", null)
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     allClients.push(...data);

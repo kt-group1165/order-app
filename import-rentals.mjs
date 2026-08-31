@@ -102,7 +102,7 @@ async function main() {
     const { data, error } = await sb.from('clients')
       .select('id, user_number')
       .eq('tenant_id', TENANT_ID)
-      .range(from, from + 999);
+      .order("id").range(from, from + 999);
     if (error) { console.error('clients取得エラー:', error.message); process.exit(1); }
     if (!data || data.length === 0) break;
     data.forEach(c => clientMap.set(c.user_number, c.id));
@@ -118,7 +118,7 @@ async function main() {
     const { data, error } = await sb.from('equipment_master')
       .select('product_code, tais_code, name, rental_price')
       .eq('tenant_id', EQ_TENANT)
-      .range(from, from + 999);
+      .order("id").range(from, from + 999);
     if (error) { console.error('equipment_master取得エラー:', error.message); process.exit(1); }
     if (!data || data.length === 0) break;
     data.forEach(e => { if (e.tais_code && !eqMap.has(e.tais_code)) eqMap.set(e.tais_code, e); });

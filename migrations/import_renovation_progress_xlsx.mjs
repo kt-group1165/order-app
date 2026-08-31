@@ -550,7 +550,7 @@ async function main() {
         .select("id,name")
         .eq("tenant_id", TENANT_ID)
         .is("deleted_at", null)
-        .range(from, from + PAGE - 1);
+        .order("id").range(from, from + PAGE - 1);
       if (error) { console.error("clients 取得に失敗:", error.message); process.exit(1); }
       if (!data || data.length === 0) break;
       for (const c of data) {
