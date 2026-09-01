@@ -20244,21 +20244,27 @@ function DocTasksTab({
         }
 
         // 4. client_insurance_records (cert_renewal 計算用)
+        //    chunk は並列 fetch (lib/renovations.ts と同じ型)。直列だと全社規模で
+        //    chunk 数 × 往復時間が積み上がってページ読み込みが遅くなる。
         const clientIdSet = new Set(allClients.map((c) => c.id));
         const insRecs: ClientInsuranceRecord[] = [];
         if (clientIdSet.size > 0) {
           const ids = Array.from(clientIdSet);
           const CHUNK = 200;
-          for (let i = 0; i < ids.length; i += CHUNK) {
-            const slice = ids.slice(i, i + CHUNK);
-            const { data, error } = await supabase
-              .from("client_insurance_records")
-              .select("*")
-              .eq("tenant_id", tenantId)
-              .in("client_id", slice);
-            if (error) throw error;
-            insRecs.push(...((data ?? []) as ClientInsuranceRecord[]));
-          }
+          const idChunks: string[][] = [];
+          for (let i = 0; i < ids.length; i += CHUNK) idChunks.push(ids.slice(i, i + CHUNK));
+          const results = await Promise.all(
+            idChunks.map(async (slice) => {
+              const { data, error } = await supabase
+                .from("client_insurance_records")
+                .select("*")
+                .eq("tenant_id", tenantId)
+                .in("client_id", slice);
+              if (error) throw error;
+              return (data ?? []) as ClientInsuranceRecord[];
+            }),
+          );
+          for (const rows of results) insRecs.push(...rows);
         }
 
         // 5. care_plan documents (cert_renewal で「対応 care_plan が無い場合のみ」絞るため)
