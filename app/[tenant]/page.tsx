@@ -76,19 +76,20 @@ import { getCareOffices, upsertCareOffice, deleteCareOffice, sendFax, getCareMan
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
-import UserBillingTab from "./UserBillingTab";
-import CeilingPriceTab from "./CeilingPriceTab";
-import OvertimeTab from "./OvertimeTab";
-import AttendanceTab from "./AttendanceTab";
-import RenovationTab from "./RenovationTab";
-// 2026-09-02: 残りタブを next/dynamic で段階的に切り出し中 (PERF_CLEANUP_MISSION.md 案A)。
-//   上の5タブは静的importのため実は同一chunkにバンドルされたまま (コード分割の効果なし)。
-//   ここから下は dynamic() + ssr:false でタブを開くまでロードしない。
+// 2026-09-02: 全タブを next/dynamic 化 (PERF_CLEANUP_MISSION.md 案A)。
+//   以前は静的importのため既に別ファイルのタブも同一chunkにバンドルされていた
+//   (ファイル分割はできていたがコード分割=バンドルサイズ削減の効果は無かった)。
+//   dynamic() + ssr:false でタブを開くまでロードしないようにする。
 const TabLoadingFallback = () => (
   <div className="flex items-center justify-center py-20 text-gray-400">
     <Loader2 size={24} className="animate-spin" />
   </div>
 );
+const UserBillingTab = dynamic(() => import("./UserBillingTab"), { ssr: false, loading: TabLoadingFallback });
+const CeilingPriceTab = dynamic(() => import("./CeilingPriceTab"), { ssr: false, loading: TabLoadingFallback });
+const OvertimeTab = dynamic(() => import("./OvertimeTab"), { ssr: false, loading: TabLoadingFallback });
+const AttendanceTab = dynamic(() => import("./AttendanceTab"), { ssr: false, loading: TabLoadingFallback });
+const RenovationTab = dynamic(() => import("./RenovationTab"), { ssr: false, loading: TabLoadingFallback });
 const NotificationsTab = dynamic(() => import("./NotificationsTab"), { ssr: false, loading: TabLoadingFallback });
 const StaffTab = dynamic(() => import("./StaffTab"), { ssr: false, loading: TabLoadingFallback });
 const MeetingNotesTab = dynamic(() => import("./MeetingNotesTab"), { ssr: false, loading: TabLoadingFallback });
