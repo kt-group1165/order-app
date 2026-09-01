@@ -8,7 +8,9 @@
 // 呼ばなければ partner_company_id が null のまま溜まり、集中減算の集計から漏れる
 // (2026-09-01 事業所マスタ整理で発覚: 344件が未リンクのまま蓄積していた)。
 
-const norm = (s) => (s ?? "").replace(/[\s　]/g, "");
+// NFKC で全角/半角の表記ゆれも吸収する (2026-09-01: 「SOMPOケア株式会社」/
+// 「ＳＯＭＰＯケア株式会社」が空白除去だけでは別法人として重複登録されていた)
+const norm = (s) => (s ?? "").normalize("NFKC").replace(/[\s　]/g, "");
 const isValidCorpNumber = (v) => /^\d{13}$/.test(v ?? "");
 
 let ownCompanyNamesCache = null;
@@ -25,6 +27,21 @@ async function getSelfOfficesByNumber(sb) {
   const { data } = await sb.from("offices").select("id, business_number").not("business_number", "is", null);
   selfOfficesByNumberCache = new Map((data ?? []).map((o) => [o.business_number, o.id]));
   return selfOfficesByNumberCache;
+}
+
+// partner_companies の名前検索は NFKC 正規化した完全一致で行いたいが、PostgREST の
+// .eq() は DB 側の生の文字列としか比較できない (全角/半角ゆれを吸収できない)。
+// 呼び出しの都度 fetch するのは高頻度パスではないので、プロセス内キャッシュを
+// 都度リフレッシュして正規化名 → id のマップを JS 側で作る。
+let partnersCache = null;
+async function getPartnersByNormName(sb) {
+  if (partnersCache) return partnersCache;
+  const { data } = await sb.from("partner_companies").select("id, name, corp_number");
+  partnersCache = new Map((data ?? []).map((p) => [norm(p.name), p]));
+  return partnersCache;
+}
+function invalidatePartnersCache() {
+  partnersCache = null;
 }
 
 /**
@@ -67,12 +84,13 @@ export async function linkPartnerCompany(sb, careOfficeId, officeNumber) {
     corpId = byNum?.id ?? null;
   }
   if (!corpId && name) {
-    const { data: byName } = await sb.from("partner_companies").select("id, corp_number").eq("name", name).limit(1);
-    const hit = byName?.[0];
+    const byNormName = await getPartnersByNormName(sb);
+    const hit = byNormName.get(norm(name));
     if (hit?.id) {
       corpId = hit.id;
       if (validNumber && !hit.corp_number) {
         await sb.from("partner_companies").update({ corp_number: validNumber, updated_at: new Date().toISOString() }).eq("id", corpId);
+        invalidatePartnersCache();
       }
     }
   }
@@ -92,6 +110,7 @@ export async function linkPartnerCompany(sb, careOfficeId, officeNumber) {
       }
     } else {
       corpId = inserted.id;
+      invalidatePartnersCache();
     }
   }
   if (!corpId) return null;
