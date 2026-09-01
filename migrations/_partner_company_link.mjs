@@ -19,14 +19,34 @@ async function getOwnCompanyNames(sb) {
   return ownCompanyNamesCache;
 }
 
+let selfOfficesByNumberCache = null;
+async function getSelfOfficesByNumber(sb) {
+  if (selfOfficesByNumberCache) return selfOfficesByNumberCache;
+  const { data } = await sb.from("offices").select("id, business_number").not("business_number", "is", null);
+  selfOfficesByNumberCache = new Map((data ?? []).map((o) => [o.business_number, o.id]));
+  return selfOfficesByNumberCache;
+}
+
 /**
  * office_number から opendata を引き、partner_companies を find-or-create して
  * care_offices.partner_company_id を PATCH する。
- * 解決できない場合 (opendata不在・番号なし・自社法人) は何もせず null を返す。
- * @returns {Promise<string|null>} 設定した partner_company_id、または未リンクなら null
+ * office_number が自社 (offices.business_number) と一致する場合は他社リンクをせず
+ * self_office_id を直接張る (opendata は居宅介護支援のみの収録なので、それ以外の
+ * サービス種別の自社事業所はこちらでしか拾えない)。
+ * 解決できない場合 (opendata不在・番号なし・自社法人で番号不一致) は何もせず null を返す。
+ * @returns {Promise<string|null>} 設定した partner_company_id、自社リンクまたは未リンクなら null
  */
 export async function linkPartnerCompany(sb, careOfficeId, officeNumber) {
   if (!officeNumber) return null;
+
+  const selfByNumber = await getSelfOfficesByNumber(sb);
+  const selfOfficeId = selfByNumber.get(officeNumber);
+  if (selfOfficeId) {
+    const { error } = await sb.from("care_offices").update({ self_office_id: selfOfficeId }).eq("id", careOfficeId);
+    if (error) console.error(`  ⚠ care_offices.self_office_id 更新失敗 (${careOfficeId}): ${error.message}`);
+    return null;
+  }
+
   const { data: od } = await sb
     .from("care_offices_opendata")
     .select("corp_name, corp_number")
