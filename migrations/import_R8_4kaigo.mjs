@@ -22,6 +22,7 @@ import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { execFileSync } from "child_process";
 import { linkPartnerCompany } from "./_partner_company_link.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -559,7 +560,22 @@ async function main() {
   }
   console.log(`   inserted=${ovIns}`);
 
+  if (EXECUTE && coInserted > 0) syncFacilities();
+
   console.log("\n✅ 完了\n");
+}
+
+// facility_master_v1 Phase2: 新規care_officesをfacilities/facility_designationsにも
+// 反映する (既にテスト済みの seed_facilities_partner.mjs を再利用。ロジックの二重実装を避ける)。
+// 失敗しても本体の取込結果は無効にならないため、ここは警告に留めて処理は続行する。
+function syncFacilities() {
+  const script = join(__dirname, "..", "..", "..", "migrations", "seed_facilities_partner.mjs");
+  try {
+    execFileSync(process.execPath, [script, "--execute"], { stdio: "inherit" });
+  } catch (e) {
+    console.error(`⚠ facilities同期(seed_facilities_partner.mjs)に失敗: ${e.message}`);
+    console.error(`  手動で実行してください: node migrations/seed_facilities_partner.mjs --execute (repo root)`);
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
