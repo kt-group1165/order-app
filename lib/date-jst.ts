@@ -81,3 +81,19 @@ export function addDaysYmd(ymd: string, days: number): string {
   const t = new Date(Date.UTC(y, m - 1, d) + days * 86400000);
   return `${t.getUTCFullYear()}-${p2(t.getUTCMonth() + 1)}-${p2(t.getUTCDate())}`;
 }
+
+/** Date を和暦の「令和N年N月N日」表記に変換 (帳票の日付表示用)。 */
+export function toJapaneseEra(date: Date): string {
+  if (isNaN(date.getTime())) return "";
+  const y = date.getFullYear(), m = date.getMonth() + 1, d = date.getDate();
+  if (y > 2019 || (y === 2019 && m >= 5)) return `令和${y - 2018}年${m}月${d}日`;
+  if (y > 1989 || (y === 1989 && m >= 1 && d >= 8)) return `平成${y - 1988}年${m}月${d}日`;
+  return `${y}年${m}月${d}日`;
+}
+
+/** 年月を和暦の「令和N年N月」表記に変換。 */
+export function toJapaneseEraYM(year: number, month: number): string {
+  if (year > 2019 || (year === 2019 && month >= 5)) return `令和${year - 2018}年${month}月`;
+  if (year > 1989) return `平成${year - 1988}年${month}月`;
+  return `${year}年${month}月`;
+}
