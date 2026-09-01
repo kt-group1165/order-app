@@ -49,6 +49,7 @@ import {
 } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPrice, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientHospitalization, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { monthEndYmd, todayYmd } from "@/lib/date-jst";
 import { getDocTasks, completeDocTask, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
 import { getOrders, getAllOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTenant, createOrder, createOrderItem, getMembers, recordEmailSent, mergeOrders, unmergeOrder } from "@/lib/orders";
@@ -4801,51 +4802,68 @@ function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllC
       setClients(newClients);
 
       // 保険情報の書き込み
+      // 行 (利用者) ごとに独立しているので上限付き並列 (concurrency=6) で処理する。
+      // 直列時と同じく「1件失敗しても他は続行・エラーは個別に無視 (insuranceAdded に
+      // カウントしないだけ)」という挙動を維持する。行の中の insert/update 順序
+      // (existingByDate の自己参照) は 1 行内では直列のまま変えていない。
+      // ⚠ 直列版は「予期しない例外が出たらそこで残り全行を打ち切る」try/catch だったが、
+      //   並列実行では他の行の処理が既に進行中のため同じ意味を持たせられない。
+      //   1 行単位で try/catch し、失敗した行だけスキップする (他の行への影響ゼロ・
+      //   バックグラウンドに投げっぱなしの処理を残さない、という点でむしろ安全な設計)。
       let insuranceAdded = 0;
       try {
         const clientIdByUserNumber = new Map<string, string>();
         for (const c of newClients) {
           if (c.user_number) clientIdByUserNumber.set(c.user_number, c.id);
         }
-        for (const r of preview.rows) {
-          if (r.insurance.length === 0) continue;
-          const clientId = clientIdByUserNumber.get(r.user_number);
-          if (!clientId) continue;
-          const { data: existingRecords } = await supabase
-            .from("client_insurance_records")
-            .select("id, effective_date")
-            .eq("tenant_id", tenantId)
-            .eq("client_id", clientId);
-          const existingByDate = new Map<string, string>();
-          for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
-            existingByDate.set(rec.effective_date ?? "", rec.id);
-          }
-          for (const ins of r.insurance) {
-            const effectiveDate = (ins.certification_start_date as string | null) || null;
-            // 履歴行にもマスタIDを自動マッチで紐付け
-            const insOfficeId = resolveOfficeId((ins.care_manager_org as string | null) ?? null);
-            const insManagerId = resolveManagerId((ins.care_manager as string | null) ?? null, (ins.care_manager_org as string | null) ?? null);
-            const payload = {
-              tenant_id: tenantId,
-              client_id: clientId,
-              effective_date: effectiveDate,
-              ...ins,
-              care_office_id: insOfficeId,
-              care_manager_id: insManagerId,
-            };
-            const exId = existingByDate.get(effectiveDate ?? "");
-            if (exId) {
-              const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
-              if (!upErr) insuranceAdded++;
-            } else {
-              const { error: insErr } = await supabase.from("client_insurance_records").insert(payload);
-              if (!insErr) {
-                insuranceAdded++;
-                existingByDate.set(effectiveDate ?? "", "newly-inserted");
+        const rowsWithInsurance = preview.rows.filter(
+          (r) => r.insurance.length > 0 && clientIdByUserNumber.has(r.user_number),
+        );
+        await mapWithConcurrency(
+          rowsWithInsurance,
+          async (r) => {
+            try {
+            const clientId = clientIdByUserNumber.get(r.user_number)!;
+            const { data: existingRecords } = await supabase
+              .from("client_insurance_records")
+              .select("id, effective_date")
+              .eq("tenant_id", tenantId)
+              .eq("client_id", clientId);
+            const existingByDate = new Map<string, string>();
+            for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
+              existingByDate.set(rec.effective_date ?? "", rec.id);
+            }
+            for (const ins of r.insurance) {
+              const effectiveDate = (ins.certification_start_date as string | null) || null;
+              // 履歴行にもマスタIDを自動マッチで紐付け
+              const insOfficeId = resolveOfficeId((ins.care_manager_org as string | null) ?? null);
+              const insManagerId = resolveManagerId((ins.care_manager as string | null) ?? null, (ins.care_manager_org as string | null) ?? null);
+              const payload = {
+                tenant_id: tenantId,
+                client_id: clientId,
+                effective_date: effectiveDate,
+                ...ins,
+                care_office_id: insOfficeId,
+                care_manager_id: insManagerId,
+              };
+              const exId = existingByDate.get(effectiveDate ?? "");
+              if (exId) {
+                const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
+                if (!upErr) insuranceAdded++;
+              } else {
+                const { error: insErr } = await supabase.from("client_insurance_records").insert(payload);
+                if (!insErr) {
+                  insuranceAdded++;
+                  existingByDate.set(effectiveDate ?? "", "newly-inserted");
+                }
               }
             }
-          }
-        }
+            } catch {
+              // 1 行の失敗は他行に影響させない (直列版の「致命的ではない」と同じ扱い)
+            }
+          },
+          6,
+        );
       } catch {
         // 致命的ではないので握りつぶす
       }
