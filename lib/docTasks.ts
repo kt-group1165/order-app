@@ -85,7 +85,7 @@ export async function completeDocTask(
   if (task && task.trigger_type && task.trigger_ref_id) {
     const pairedType = PAIRED_DOC_TYPES[task.expected_doc_type];
     if (pairedType) {
-      await supabase
+      const { error: cancelErr } = await supabase
         .from("doc_tasks")
         .update({
           status: "cancelled",
@@ -96,6 +96,7 @@ export async function completeDocTask(
         .eq("trigger_ref_id", task.trigger_ref_id)
         .eq("expected_doc_type", pairedType)
         .eq("status", "pending");
+      if (cancelErr) throw cancelErr;
     }
   }
 }

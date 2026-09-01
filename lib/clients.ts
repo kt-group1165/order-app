@@ -98,25 +98,45 @@ export async function mergeProvisionalIntoNewClient(
   const newClient = created as Client;
 
   // 2. 参照の付け替え
-  //    events は calendar-app と共有。order-app には events テーブルが無いので直接 update する
+  //    テーブル非存在 (42P01/PGRST205) だけは「そもそも使っていない」ので無視してよいが、
+  //    それ以外のエラー (RLS・制約違反等) は付け替えが本当に失敗しているので、
+  //    3. の DELETE まで進めると旧 client_id を参照したままの孤立行が残る。
+  //    無視してよいエラーかどうかを判定し、それ以外は集めて DELETE 前に throw する。
+  const isMissingTable = (code?: string) => code === "42P01" || code === "PGRST205";
+  const realFailures: string[] = [];
+
   const { error: eventsErr } = await supabase
     .from("events")
     .update({ client_id: newClient.id })
     .eq("client_id", provisionalClientId);
-  if (eventsErr) {
-    // 失敗しても続行（テーブルが無いケース等）しつつログに残す
+  if (eventsErr && !isMissingTable(eventsErr.code)) {
     console.warn("events.client_id 付け替え失敗:", eventsErr);
+    realFailures.push(`events: ${eventsErr.message}`);
   }
   const { error: ordersErr } = await supabase
     .from("orders")
     .update({ client_id: newClient.id })
     .eq("client_id", provisionalClientId);
-  if (ordersErr) console.warn("orders.client_id 付け替え失敗:", ordersErr);
+  if (ordersErr && !isMissingTable(ordersErr.code)) {
+    console.warn("orders.client_id 付け替え失敗:", ordersErr);
+    realFailures.push(`orders: ${ordersErr.message}`);
+  }
 
   // その他の参照先（必要なら順次追加）
   for (const t of ["client_insurance_records", "client_rental_history", "client_hospitalizations", "client_documents", "monitoring_records", "client_public_expenses"]) {
     const { error } = await supabase.from(t).update({ client_id: newClient.id }).eq("client_id", provisionalClientId);
-    if (error) console.warn(`${t}.client_id 付け替え失敗（テーブル非存在なら無視可）:`, error);
+    if (error && !isMissingTable(error.code)) {
+      console.warn(`${t}.client_id 付け替え失敗:`, error);
+      realFailures.push(`${t}: ${error.message}`);
+    }
+  }
+
+  // 参照の付け替えが (テーブル非存在以外の理由で) 1 件でも失敗していたら、
+  // 旧 client 行を消さずに中断する。消してしまうと孤立参照が残り、後から気づけない。
+  if (realFailures.length > 0) {
+    throw new Error(
+      `参照の付け替えに失敗したため統合を中断しました (旧利用者は削除していません): ${realFailures.join(" / ")}`,
+    );
   }
 
   // 3. 旧仮登録の削除

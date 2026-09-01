@@ -84,11 +84,12 @@ export async function getNotifications(
  */
 export async function markRead(id: string): Promise<void> {
   if (!id) return;
-  await supabase
+  const { error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
     .eq("id", id)
     .is("read_at", null);
+  if (error) console.warn("[notifications] markRead failed:", error.message);
 }
 
 /**
@@ -119,18 +120,20 @@ export async function markSharedDocumentRead(sharedDocId: string): Promise<void>
   const { data: userData } = await supabase.auth.getUser();
   const uid = userData?.user?.id ?? null;
 
-  await supabase
+  const { error: docErr } = await supabase
     .from("shared_documents")
     .update({ read_at: now, read_by: uid })
     .eq("id", sharedDocId)
     .is("read_at", null);
+  if (docErr) console.warn("[notifications] markSharedDocumentRead (shared_documents) failed:", docErr.message);
 
   // 関連 notifications を一括既読化
-  await supabase
+  const { error: notifErr } = await supabase
     .from("notifications")
     .update({ read_at: now, read_by: uid })
     .eq("type", "document_received")
     .eq("ref_table", "shared_documents")
     .eq("ref_id", sharedDocId)
     .is("read_at", null);
+  if (notifErr) console.warn("[notifications] markSharedDocumentRead (notifications) failed:", notifErr.message);
 }

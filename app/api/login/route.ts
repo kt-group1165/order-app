@@ -153,11 +153,12 @@ export async function POST(request: Request) {
     }
     if (trustRow.status === "pending") {
       // 既に pending: last_seen_at だけ更新
-      await admin
+      const { error: lsErr } = await admin
         .from("trusted_devices")
         .update({ last_seen_at: new Date().toISOString() })
         .eq("user_id", targetUser.id)
         .eq("device_id", device_id);
+      if (lsErr) console.warn("[login] trusted_devices.last_seen_at 更新失敗 (pending):", lsErr.message);
       return gateUntrusted(
         "approval_required",
         202,
@@ -165,11 +166,12 @@ export async function POST(request: Request) {
       );
     }
     // status === 'approved' → last_seen_at 更新 + session 維持
-    await admin
+    const { error: lsErr } = await admin
       .from("trusted_devices")
       .update({ last_seen_at: new Date().toISOString() })
       .eq("user_id", targetUser.id)
       .eq("device_id", device_id);
+    if (lsErr) console.warn("[login] trusted_devices.last_seen_at 更新失敗 (approved):", lsErr.message);
   }
 
   // 緊急フラグを consume (one-shot)
