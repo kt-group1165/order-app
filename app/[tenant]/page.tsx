@@ -14670,11 +14670,25 @@ function CareOfficeSection({ tenantId }: { tenantId: string }) {
       // (テーブル/列 未適用: 42P01/PGRST205/42703/PGRST204 等で失敗しても法人リンクなしで作成は続行)
       // 名寄せキー: ①法人番号 (13桁として妥当な場合のみ。opendata には Excel 経由で
       // "3.04E+12" 状に壊れた値が混在) → ②法人名 (trim 一致)
+      // 候補を選ばず番号だけ手入力したケースも、番号が opendata に実在すれば同様に自動リンクする
+      // (2026-09-01: これが無いと partner_company_id 未リンクの care_offices が溜まり続けていた)
+      let corpToLink = pickedCorp;
+      const typedNumber = form.office_number?.trim() || null;
+      if (!corpToLink && typedNumber) {
+        const { data: od } = await supabase
+          .from("care_offices_opendata")
+          .select("corp_number, corp_name")
+          .eq("office_number", typedNumber)
+          .maybeSingle();
+        if (od && (od.corp_number || od.corp_name)) {
+          corpToLink = { corp_number: od.corp_number, corp_name: od.corp_name };
+        }
+      }
       let partnerCompanyId: string | null = null;
-      if (pickedCorp) {
+      if (corpToLink) {
         try {
-          const validNumber = /^\d{13}$/.test(pickedCorp.corp_number ?? "") ? pickedCorp.corp_number : null;
-          const corpName = pickedCorp.corp_name?.trim() || null;
+          const validNumber = /^\d{13}$/.test(corpToLink.corp_number ?? "") ? corpToLink.corp_number : null;
+          const corpName = corpToLink.corp_name?.trim() || null;
           let found: string | null = null;
           if (validNumber) {
             const { data, error } = await supabase

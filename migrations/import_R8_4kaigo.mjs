@@ -22,6 +22,7 @@ import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { linkPartnerCompany } from "./_partner_company_link.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -415,7 +416,7 @@ async function main() {
     const sameName = existingByName.get(v.name);
     if (sameName) {
       const { error } = await sb.from("care_offices").update({ office_number: no }).eq("id", sameName.id);
-      if (!error) { careOfficeIdMap.set(no, sameName.id); coMatched++; }
+      if (!error) { careOfficeIdMap.set(no, sameName.id); coMatched++; await linkPartnerCompany(sb, sameName.id, no); }
       else console.warn(`   ⚠️  update office_number ${no}: ${error.message}`);
       continue;
     }
@@ -425,7 +426,7 @@ async function main() {
       office_number: no,
     }).select("id").single();
     if (error) console.warn(`   ⚠️  insert ${no}: ${error.message}`);
-    else { careOfficeIdMap.set(no, data.id); coInserted++; }
+    else { careOfficeIdMap.set(no, data.id); coInserted++; await linkPartnerCompany(sb, data.id, no); }
   }
   console.log(`   matched=${coMatched} / inserted=${coInserted}`);
 
