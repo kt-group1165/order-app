@@ -6703,7 +6703,8 @@ function ClientDetail({
 
   const handleDeleteInsuranceRecord = async (id: string) => {
     if (!confirm("この保険情報を削除しますか？")) return;
-    await supabase.from("client_insurance_records").delete().eq("id", id);
+    const { error } = await supabase.from("client_insurance_records").delete().eq("id", id);
+    if (error) { alert(`保険情報の削除に失敗しました: ${error.message}`); return; }
     await loadItems();
   };
 
@@ -6736,7 +6737,8 @@ function ClientDetail({
 
   const handleDeleteRentalHistory = async (id: string) => {
     if (!confirm("このレンタル履歴を削除しますか？")) return;
-    await supabase.from("client_rental_history").delete().eq("id", id);
+    const { error } = await supabase.from("client_rental_history").delete().eq("id", id);
+    if (error) { alert(`レンタル履歴の削除に失敗しました: ${error.message}`); return; }
     await loadItems();
   };
 
@@ -7153,8 +7155,9 @@ function ClientDetail({
                       care_office_id: basicForm.care_office_id || null,
                       care_manager_id: basicForm.care_manager_id || null,
                     };
-                    await supabase.from("clients").update(payload).eq("id", client.id);
+                    const { error } = await supabase.from("clients").update(payload).eq("id", client.id);
                     setBasicSaving(false);
+                    if (error) { alert(`基本情報の保存に失敗しました: ${error.message}`); return; }
                     setEditingBasic(false);
                     Object.assign(client, payload);
                   }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
@@ -8202,8 +8205,9 @@ function ClientDetail({
           const saveEdit = async () => {
             if (!pf || !editingPeId) return;
             setPeSaving(true);
-            await supabase.from("client_public_expenses").update(pf).eq("id", editingPeId);
+            const { error } = await supabase.from("client_public_expenses").update(pf).eq("id", editingPeId);
             setPeSaving(false);
+            if (error) { alert(`公費情報の保存に失敗しました: ${error.message}`); return; }
             setPublicExpenses(prev => prev.map(r => r.id === editingPeId ? { ...r, ...pf } : r));
             setEditingPeId(null);
             setPeForm(null);
@@ -8221,7 +8225,8 @@ function ClientDetail({
           };
           const deleteRec = async (id: string) => {
             if (!confirm("この公費情報を削除しますか？")) return;
-            await supabase.from("client_public_expenses").delete().eq("id", id);
+            const { error } = await supabase.from("client_public_expenses").delete().eq("id", id);
+            if (error) { alert(`公費情報の削除に失敗しました: ${error.message}`); return; }
             setPublicExpenses(prev => prev.filter(r => r.id !== id));
             if (selectedPeId === id) { setSelectedPeId(null); setPeForm(null); setEditingPeId(null); }
           };
@@ -15539,9 +15544,18 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
     try {
       // Phase 1: 発注関連削除
       setProgress("1/5 発注データを削除中...");
-      await supabase.from("sales_records").delete().eq("tenant_id", tenantId);
-      await supabase.from("order_items").delete().eq("tenant_id", tenantId);
-      await supabase.from("orders").delete().eq("tenant_id", tenantId);
+      {
+        const { error } = await supabase.from("sales_records").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
+      {
+        const { error } = await supabase.from("order_items").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
+      {
+        const { error } = await supabase.from("orders").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
 
       // Phase 2: 利用者マスタ upsert
       setProgress("2/5 利用者マスタを upsert 中...");
@@ -15588,7 +15602,10 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       // Phase 3: 保険情報の入れ替え
       setProgress("3/5 介護保険情報を入替中...");
       // 既存全削除
-      await supabase.from("client_insurance_records").delete().eq("tenant_id", tenantId);
+      {
+        const { error } = await supabase.from("client_insurance_records").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
       // client_id を再取得 (1810 件等あるためページング)
       const allClientIds: { id: string; user_number: string | null }[] = [];
       {
@@ -15637,10 +15654,19 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
       // Phase 4: 居宅・ケアマネマスタ再構築
       setProgress("4/5 居宅・ケアマネマスタを再構築中...");
       // clients.care_office_id / care_manager_id をクリア
-      await supabase.from("clients").update({ care_office_id: null, care_manager_id: null }).eq("tenant_id", tenantId);
+      {
+        const { error } = await supabase.from("clients").update({ care_office_id: null, care_manager_id: null }).eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
       // care_managers, care_offices を削除
-      await supabase.from("care_managers").delete().eq("tenant_id", tenantId);
-      await supabase.from("care_offices").delete().eq("tenant_id", tenantId);
+      {
+        const { error } = await supabase.from("care_managers").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
+      {
+        const { error } = await supabase.from("care_offices").delete().eq("tenant_id", tenantId);
+        if (error) throw error;
+      }
 
       const today = todayYmd();
       // 現在期間の記録から care_offices を生成
