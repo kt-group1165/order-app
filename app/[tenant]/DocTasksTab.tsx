@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { FileWarning, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase, Client, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
+import { todayYmd, addDaysYmd } from "@/lib/date-jst";
 
 // ─── DocTasksTab v3 ───────────────────────────────────────────────────────────
 // v1 (commit da99236) の「client × 書類種別」計算ベースから、event-driven な
@@ -214,9 +215,12 @@ export default function DocTasksTab({
 
   // cert_renewal の仮想 task 生成 (DB 未 INSERT)
   const certRenewalRows = useMemo<DocTaskRow[]>(() => {
-    const today = new Date();
-    const todayMs = today.getTime();
-    const warningMs = todayMs + CERT_RENEWAL_WARNING_DAYS * 24 * 3600 * 1000;
+    // ⚠ 日付の比較は **JST の暦日の文字列**で行う (2026-09-03 是正)。
+    //   以前は `new Date("YYYY-MM-DD")` (= UTC 0 時) と `new Date().getTime()` (= ローカル)
+    //   を比べていたため、**有効期限当日の朝 9 時 (JST) を過ぎるとその日のうちに
+    //   警告が消えていた**。todayYmd / addDaysYmd は JST 前提の helper。
+    const today = todayYmd();
+    const warningEnd = addDaysYmd(today, CERT_RENEWAL_WARNING_DAYS);
     const out: DocTaskRow[] = [];
     // client × end_date 単位で最新 1 件のみ拾う (重複認定 record 対応)
     const seen = new Set<string>();
@@ -224,16 +228,33 @@ export default function DocTasksTab({
     const existingCertRefIds = new Set(
       tasks.filter((t) => t.trigger_type === "cert_renewal").map((t) => t.trigger_ref_id),
     );
+    // ⚠ **利用者ごとに一番新しい認定だけを見る** (2026-09-03 是正)。
+    //   client_insurance_records は認定の世代を全部持つ (全社 19,007 行)。
+    //   期限切れも出すようにしたので、絞らないと **2006 年に切れた古い世代**まで
+    //   「超過 7,000 日」として並ぶ (実測: 39 行 → 1,315 行に膨張した)。
+    //   更新するのは現行の認定であって、過去の世代ではない。
+    const newestEndByClient = new Map<string, string>();
+    for (const r of insuranceRecords) {
+      if (!r.certification_end_date) continue;
+      const e = String(r.certification_end_date).slice(0, 10);
+      const cur = newestEndByClient.get(r.client_id);
+      if (!cur || e > cur) newestEndByClient.set(r.client_id, e);
+    }
     for (const r of insuranceRecords) {
       if (!r.certification_end_date) continue;
       if (existingCertRefIds.has(r.id)) continue; // 実 task が居るなら仮想は出さない
-      const endMs = new Date(r.certification_end_date).getTime();
-      if (Number.isNaN(endMs)) continue;
-      // 今日 ≦ end ≦ today + 30 日 が警告対象
-      if (endMs < todayMs || endMs > warningMs) continue;
+      const end = String(r.certification_end_date).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) continue;
+      if (newestEndByClient.get(r.client_id) !== end) continue; // 古い世代は出さない
+      // ⚠ **期限切れは消さない** (2026-09-03 是正)。
+      //   以前は `end < today` で除外しており、**30 日の窓の間に誰も対応しないと
+      //   期限が来た瞬間に画面から消える**作りだった。問題が現実になったところで
+      //   警告が止まるのは向きが逆なので、超過分も残して上位に出す。
+      //   出さないのは「まだ 30 日より先」のものだけ。
+      if (end > warningEnd) continue;
       // 対応する care_plan が「認定終了日より後に作成」されていれば skip
       const lastPlan = careplanByClient.get(r.client_id);
-      if (lastPlan && new Date(lastPlan).getTime() > endMs - 90 * 24 * 3600 * 1000) {
+      if (lastPlan && String(lastPlan).slice(0, 10) > addDaysYmd(end, -90)) {
         // 認定終了の 90 日前以降に care_plan が作られていれば対応済とみなす
         continue;
       }
@@ -297,6 +318,21 @@ export default function DocTasksTab({
   // - countByTrigger: docType filter のみ反映 (= trigger ごとの「他フィルタ AND 後」件数)
   // - countByDocType: trigger filter のみ反映 (= docType ごとの「他フィルタ AND 後」件数)
   // これで chip 表示の (N) が AND 適用後の実件数となり、0 件 chip は混乱を回避
+  /**
+   * 期限からの超過日数。未超過・期限なしは null。
+   * ⚠ JST の暦日どうしを比べる (Date.UTC で組めば 1 日 = 86400000ms で固定)。
+   */
+  const overdueDays = (due: string | null | undefined): number | null => {
+    if (!due) return null;
+    const d = String(due).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+    const t = todayYmd();
+    if (d >= t) return null;
+    const [y1, m1, d1] = d.split("-").map(Number);
+    const [y2, m2, d2] = t.split("-").map(Number);
+    return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+  };
+
   const countByTrigger: Record<string, number> = {};
   const countByDocType: Record<string, number> = {};
   const countByStatus: Record<StatusFilter, number> = { pending: 0, completed: 0, received: 0, all: allRows.length };
@@ -585,6 +621,11 @@ export default function DocTasksTab({
                                 <span className="text-[11px] text-gray-700 flex-1 truncate">{row.trigger_label ?? row.trigger_date}</span>
                                 {row.isVirtual && <span className="text-[9px] text-amber-600 bg-amber-50 px-1 rounded shrink-0">仮</span>}
                                 <span className="text-[11px] text-gray-500 shrink-0">{row.due_date ?? "—"}</span>
+                                {overdueDays(row.due_date) !== null && (
+                                  <span className="text-[10px] font-medium text-rose-600 bg-rose-50 px-1 rounded shrink-0">
+                                    超過 {overdueDays(row.due_date)}日
+                                  </span>
+                                )}
                                 <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${badge.cls}`}>{badge.label}</span>
                                 {row.status === "pending" && (
                                   <button
@@ -663,6 +704,11 @@ export default function DocTasksTab({
                       </td>
                       <td className="border-b border-gray-100 px-3 py-2 text-gray-600 text-[11px]">
                         {row.due_date ?? "—"}
+                        {overdueDays(row.due_date) !== null && (
+                          <span className="ml-1 text-[10px] font-medium text-rose-600 bg-rose-50 px-1 rounded">
+                            超過 {overdueDays(row.due_date)}日
+                          </span>
+                        )}
                       </td>
                       <td className="border-b border-gray-100 px-3 py-2">
                         <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full ${badge.cls}`}>
