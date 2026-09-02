@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { Search, Upload, Download, Plus, X, ChevronLeft, ChevronRight, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { supabase, Equipment, EquipmentPrice, Supplier } from "@/lib/supabase";
 import {
@@ -16,7 +17,15 @@ import {
 } from "@/lib/offices";
 import { invalidateCache } from "@/lib/cache";
 import { matchEquipment, normalizeSearch } from "./search-utils";
-import CeilingPriceTab from "./CeilingPriceTab";
+
+const CeilingPriceTab = dynamic(() => import("./CeilingPriceTab"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center py-20 text-gray-400">
+      <Loader2 size={24} className="animate-spin" />
+    </div>
+  ),
+});
 
 export default function EquipmentTab({ tenantId }: { tenantId: string }) {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
