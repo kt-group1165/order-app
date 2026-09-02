@@ -2680,8 +2680,68 @@ function ClientDetail({
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
-  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false });
+  const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
+  // ── メモ (client_memos scope='tenant') ──────────────────────────────────────
+  // clients.memo 列は DROP 済。メモの実体は client_memos に移っており、
+  // kaigo-app の利用者詳細が同じ scope='tenant' で読み書きしている。
+  // 以前はここが旧 clients.memo を見ていたため **既存メモが表示されず、
+  // 入力しても保存時に捨てられていた** (2026-09-03 是正)。
+  const [tenantMemo, setTenantMemo] = useState<{ id: string | null; body: string }>({ id: null, body: "" });
+  const editingBasicRef = useRef(false);
+  useEffect(() => { editingBasicRef.current = editingBasic; }, [editingBasic]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("client_memos")
+        .select("id, body")
+        .eq("client_id", client.id)
+        .eq("scope", "tenant")
+        .eq("tenant_id", tenantId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) { console.error("client_memos fetch failed:", error.message); return; }
+      const next = { id: (data?.id as string) ?? null, body: (data?.body as string) ?? "" };
+      setTenantMemo(next);
+      // 編集中でなければ入力欄にも反映 (編集中は入力途中の内容を上書きしない)
+      if (!editingBasicRef.current) setBasicForm((f) => ({ ...f, memo: next.body }));
+    })();
+    return () => { cancelled = true; };
+  }, [client.id, tenantId]);
+
+  /**
+   * メモを client_memos (scope='tenant') に保存する。kaigo-app の利用者詳細と同じ規則:
+   *   既存あり + 空文字 → DELETE / 既存あり + 中身あり → UPDATE / 既存なし + 中身あり → INSERT
+   *   author_id・pinned は既定値のまま (kaigo-app 側も設定していない)
+   * @returns エラーメッセージ (成功時 null)。silent failure にしないため呼出側で必ず出す。
+   */
+  const saveTenantMemo = async (input: string): Promise<string | null> => {
+    const body = input.trim();
+    if (tenantMemo.id) {
+      if (body === "") {
+        const { error } = await supabase.from("client_memos").delete().eq("id", tenantMemo.id);
+        if (error) return error.message;
+        setTenantMemo({ id: null, body: "" });
+        return null;
+      }
+      const { error } = await supabase.from("client_memos").update({ body }).eq("id", tenantMemo.id);
+      if (error) return error.message;
+      setTenantMemo((m) => ({ ...m, body }));
+      return null;
+    }
+    if (body === "") return null; // 元から無く、入力も空 → 何もしない
+    const { data, error } = await supabase
+      .from("client_memos")
+      .insert({ client_id: client.id, scope: "tenant", tenant_id: tenantId, body })
+      .select("id")
+      .single();
+    if (error) return error.message;
+    setTenantMemo({ id: (data?.id as string) ?? null, body });
+    return null;
+  };
   // 居宅/ケアマネマスタ（ドロップダウン用）
   const [careOfficesList, setCareOfficesList] = useState<Array<{ id: string; name: string; self_office_id?: string | null }>>([]);
   const [careManagersList, setCareManagersList] = useState<Array<{ id: string; care_office_id: string; name: string }>>([]);
@@ -2766,7 +2826,7 @@ function ClientDetail({
     insurer_number: client.insurer_number ?? "",
     certification_start_date: client.certification_start_date ?? "",
     certification_end_date: client.certification_end_date ?? "",
-    memo: client.memo ?? "",
+    memo: "", // client_memos から流し込む
   });
   // 保険情報（複数レコード）
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
@@ -3452,7 +3512,7 @@ function ClientDetail({
                           insurer_number: client.insurer_number ?? "",
                           certification_start_date: client.certification_start_date ?? "",
                           certification_end_date: client.certification_end_date ?? "",
-                          memo: client.memo ?? "",
+                          memo: tenantMemo.body,
                         });
                         setPromoteOpen(true);
                       }}
@@ -3519,22 +3579,23 @@ function ClientDetail({
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: client.memo ?? "", is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                  <button onClick={() => { setEditingBasic(false); setBasicForm({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: tenantMemo.body, is_facility: client.is_facility ?? false }); }} className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
                   <button onClick={async () => {
                     setBasicSaving(true);
                     // 空文字のIDは NULL に変換して保存。
-                    // memo は clients から DROP 済のため payload から除外
-                    // （TODO §5-3: client_memos への upsert を後日実装）
-                    const { memo: _memoIgnored, ...basicWithoutMemo } = basicForm;
-                    void _memoIgnored;
+                    // memo は clients から DROP 済なので payload には含めず、
+                    // client_memos (scope='tenant') 側へ保存する (kaigo-app と同じ形)。
+                    const { memo: memoInput, ...basicWithoutMemo } = basicForm;
                     const payload = {
                       ...basicWithoutMemo,
                       care_office_id: basicForm.care_office_id || null,
                       care_manager_id: basicForm.care_manager_id || null,
                     };
                     const { error } = await supabase.from("clients").update(payload).eq("id", client.id);
+                    if (error) { setBasicSaving(false); alert(`基本情報の保存に失敗しました: ${error.message}`); return; }
+                    const memoErr = await saveTenantMemo(memoInput);
                     setBasicSaving(false);
-                    if (error) { alert(`基本情報の保存に失敗しました: ${error.message}`); return; }
+                    if (memoErr) { alert(`メモの保存に失敗しました: ${memoErr}`); return; }
                     setEditingBasic(false);
                     Object.assign(client, payload);
                   }} disabled={basicSaving} className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">{basicSaving ? "保存中…" : "保存"}</button>
@@ -3629,7 +3690,7 @@ function ClientDetail({
                   className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-0.5 outline-none focus:border-blue-400"
                 />
               ) : (
-                <span className="flex-1 text-sm text-gray-800">{client.memo || <span className="text-gray-300">—</span>}</span>
+                <span className="flex-1 text-sm text-gray-800">{tenantMemo.body || <span className="text-gray-300">—</span>}</span>
               )}
             </div>
             {/* 居宅・施設等（事業所/施設フラグ） */}
@@ -4945,8 +5006,8 @@ function ClientDetail({
                   try {
                     // 数値/日付は空文字なら null に
                     const n = (v: string) => v.trim() || null;
-                    // memo は clients から DROP 済のため payload から除外
-                    // （TODO §5-3: client_memos への upsert を後日実装）
+                    // memo は clients から DROP 済なので promoteProvisionalClient には渡さず、
+                    // 下で client_memos (scope='tenant') に保存する。
                     await promoteProvisionalClient(client.id, {
                       name: promoteForm.name.trim(),
                       furigana: n(promoteForm.furigana),
@@ -4966,6 +5027,10 @@ function ClientDetail({
                       certification_start_date: n(promoteForm.certification_start_date),
                       certification_end_date: n(promoteForm.certification_end_date),
                     });
+                    // メモは client_memos へ (旧実装は下の Object.assign で client.memo に
+                    // 入れるだけだったため、画面上は保存されたように見えてリロードで消えていた)
+                    const memoErr = await saveTenantMemo(promoteForm.memo);
+                    if (memoErr) alert(`メモの保存に失敗しました: ${memoErr}`);
                     // client オブジェクトを直接更新（local state 反映）
                     Object.assign(client, {
                       is_provisional: false,
@@ -4986,7 +5051,7 @@ function ClientDetail({
                       insurer_number: n(promoteForm.insurer_number),
                       certification_start_date: n(promoteForm.certification_start_date),
                       certification_end_date: n(promoteForm.certification_end_date),
-                      memo: n(promoteForm.memo),
+                      // memo はここには入れない (clients に列が無く、実体は client_memos 側)
                     });
                     setPromoteOpen(false);
                   } catch (e) {
