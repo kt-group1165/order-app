@@ -66,6 +66,36 @@ const TRIGGER_LABEL: Record<string, string> = {
 // cert_renewal で警告を出す日数 (認定終了 N 日前)
 const CERT_RENEWAL_WARNING_DAYS = 30;
 
+/**
+ * これを超えて期限切れの認定は、既定では一覧に出さない。
+ * ⚠ **消すのではない。**件数は常に見える場所に出し、トグルで表示に加えられる。
+ *   黙って消すと「期限切れで警告が消える」(2026-09-03 に直したもの) と同じ形になる。
+ * ⚠ 「利用者が現役か」で絞る案は採れない。order-app は rental_end_date が 1 行しか
+ *   無く **全員が現役に見える**ので、現役判定の材料が今は存在しない。
+ */
+const LONG_OVERDUE_DAYS = 365;
+
+/**
+ * 期限からの超過日数。未超過・期限なしは null。
+ * ⚠ JST の暦日どうしを比べる (Date.UTC で組めば 1 日 = 86400000ms で固定)。
+ */
+function overdueDays(due: string | null | undefined): number | null {
+  if (!due) return null;
+  const d = String(due).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const t = todayYmd();
+  if (d >= t) return null;
+  const [y1, m1, d1] = d.split("-").map(Number);
+  const [y2, m2, d2] = t.split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
+
+/** 既定の表示から外れる (= 超過が LONG_OVERDUE_DAYS を超えている) 行か */
+function isLongOverdue(due: string | null | undefined): boolean {
+  const d = overdueDays(due);
+  return d !== null && d > LONG_OVERDUE_DAYS;
+}
+
 // 表示用 task row (DB doc_task または cert_renewal の virtual row)
 type DocTaskRow = {
   id: string;                    // virtual の場合は `cert:${insurance_record_id}:${expected_doc_type}`
@@ -120,6 +150,9 @@ export default function DocTasksTab({
   const [triggerFilter, setTriggerFilter] = useState<string | null>(null);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
+  // 1 年以上前に切れた認定を一覧に加えるか。既定 false = 出さない。
+  // ⚠ **件数は常に出す** (下の longOverdueCount)。黙って消さないこと。
+  const [showLongOverdue, setShowLongOverdue] = useState(false);
   const [reload, setReload] = useState(0);
   // 表示モード: 'client' (人 → 書類 → 発生要因 grouped) / 'flat' (期限順 flat list)
   const [viewMode, setViewMode] = useState<"client" | "flat">("client");
@@ -306,33 +339,36 @@ export default function DocTasksTab({
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (triggerFilter && r.trigger_type !== triggerFilter) return false;
       if (docTypeFilter && r.expected_doc_type !== docTypeFilter) return false;
+      // 1 年以上前に切れたもの。既定では出さないが**件数は必ず出す** (longOverdueCount)
+      if (!showLongOverdue && isLongOverdue(r.due_date)) return false;
       return true;
     }).sort((a, b) => {
       // due_date あり (cert_renewal) を上に。同じカテゴリ内では trigger_date 昇順
       if (!!a.due_date !== !!b.due_date) return a.due_date ? -1 : 1;
       return a.trigger_date.localeCompare(b.trigger_date);
     });
-  }, [allRows, statusFilter, triggerFilter, docTypeFilter]);
+  }, [allRows, statusFilter, triggerFilter, docTypeFilter, showLongOverdue]);
+
+  /**
+   * 既定の表示から外れている「1 年以上前に切れた」件数。
+   * ⚠ トグル以外のフィルタは効かせる (= 今の絞り込みの中で何件隠れているか)。
+   *   0 でないのに画面に出ないのが一番まずいので、**この数字は必ず描画する**。
+   */
+  const longOverdueCount = useMemo(
+    () =>
+      allRows.filter((r) => {
+        if (statusFilter !== "all" && r.status !== statusFilter) return false;
+        if (triggerFilter && r.trigger_type !== triggerFilter) return false;
+        if (docTypeFilter && r.expected_doc_type !== docTypeFilter) return false;
+        return isLongOverdue(r.due_date);
+      }).length,
+    [allRows, statusFilter, triggerFilter, docTypeFilter],
+  );
 
   // 集計 (status / 他フィルタを反映した chip count)
   // - countByTrigger: docType filter のみ反映 (= trigger ごとの「他フィルタ AND 後」件数)
   // - countByDocType: trigger filter のみ反映 (= docType ごとの「他フィルタ AND 後」件数)
   // これで chip 表示の (N) が AND 適用後の実件数となり、0 件 chip は混乱を回避
-  /**
-   * 期限からの超過日数。未超過・期限なしは null。
-   * ⚠ JST の暦日どうしを比べる (Date.UTC で組めば 1 日 = 86400000ms で固定)。
-   */
-  const overdueDays = (due: string | null | undefined): number | null => {
-    if (!due) return null;
-    const d = String(due).slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
-    const t = todayYmd();
-    if (d >= t) return null;
-    const [y1, m1, d1] = d.split("-").map(Number);
-    const [y2, m2, d2] = t.split("-").map(Number);
-    return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
-  };
-
   const countByTrigger: Record<string, number> = {};
   const countByDocType: Record<string, number> = {};
   const countByStatus: Record<StatusFilter, number> = { pending: 0, completed: 0, received: 0, all: allRows.length };
@@ -469,6 +505,19 @@ export default function DocTasksTab({
             {STATUS_FILTER_LABEL[s]} ({countByStatus[s]})
           </button>
         ))}
+        {/* 1 年以上前に切れた認定。**既定では一覧に出さないが、件数は必ず出す**。
+            0 件のときだけ描かない (0 を出しても意味が無いため)。
+            ⚠ 黙って消すと「期限切れで警告が消える」と同じ形になるので、
+              この chip を条件付きで隠すような変更はしないこと。 */}
+        {longOverdueCount > 0 && (
+          <button
+            onClick={() => setShowLongOverdue((v) => !v)}
+            title="認定が 1 年以上前に切れている分。既に利用者でない可能性がありますが、判定材料が無いので消していません"
+            className={`ml-auto text-xs px-2.5 py-1 rounded-full border transition-colors ${showLongOverdue ? "bg-rose-600 text-white border-rose-600" : "text-rose-600 border-rose-300 hover:border-rose-500 bg-rose-50"}`}
+          >
+            1年以上前に期限切れ {longOverdueCount} 件{showLongOverdue ? " (表示中)" : " (非表示)"}
+          </button>
+        )}
       </div>
 
       {/* v3: 統合候補 banner */}
