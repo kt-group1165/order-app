@@ -482,6 +482,7 @@ function SummaryView({
           <tr>
             <th className="text-left px-3 py-2 w-32">施工月</th>
             <th className="text-right px-3 py-2 w-20">件数</th>
+            <th className="text-right px-3 py-2 w-24">金額未入力</th>
             <th className="text-right px-3 py-2 w-32">仕切り合計</th>
             <th className="text-right px-3 py-2 w-32">計上金額</th>
             <th className="text-right px-3 py-2 w-32">粗利</th>
@@ -493,6 +494,10 @@ function SummaryView({
             <tr key={r.month} className="border-b border-gray-100 hover:bg-gray-50">
               <td className="px-3 py-2 whitespace-nowrap">{monthHeading(r.month)}</td>
               <td className="px-3 py-2 text-right">{r.count}</td>
+              {/* 仕切り or 計上が未入力の件数。金額列からは除外してある (行単位の粗利と同じ扱い) */}
+              <td className={`px-3 py-2 text-right ${r.excluded ? "text-amber-600 font-medium" : "text-gray-300"}`}>
+                {r.excluded ? `${r.excluded} 件` : "—"}
+              </td>
               <td className="px-3 py-2 text-right whitespace-nowrap">{yen(r.cost)}</td>
               <td className="px-3 py-2 text-right whitespace-nowrap">{yen(r.sales)}</td>
               <td className="px-3 py-2 text-right whitespace-nowrap">{yen(r.profit)}</td>
@@ -502,6 +507,9 @@ function SummaryView({
           <tr className="bg-emerald-50 font-semibold text-emerald-900">
             <td className="px-3 py-2 whitespace-nowrap">{fiscalYearLabel(fiscalYear)} 合計</td>
             <td className="px-3 py-2 text-right">{total.count}</td>
+            <td className={`px-3 py-2 text-right ${total.excluded ? "text-amber-700" : ""}`}>
+              {total.excluded ? `${total.excluded} 件` : "—"}
+            </td>
             <td className="px-3 py-2 text-right whitespace-nowrap">{yen(total.cost)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">{yen(total.sales)}</td>
             <td className="px-3 py-2 text-right whitespace-nowrap">{yen(total.profit)}</td>
@@ -509,6 +517,12 @@ function SummaryView({
           </tr>
         </tbody>
       </table>
+      {total.excluded > 0 && (
+        <p className="mt-2 text-xs text-amber-700">
+          ⚠ 仕切り合計 または 計上金額 が未入力の {total.excluded} 件は、金額の集計から除外しています
+          (件数には含まれます)。金額を入力すると粗利・仕入率に反映されます。
+        </p>
+      )}
     </div>
   );
 }

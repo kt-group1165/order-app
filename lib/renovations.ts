@@ -269,6 +269,16 @@ export type RenovationSummaryRow = {
   profit: number;
   /** 集計後の仕入率 (合計 cost / 合計 sales)。sales 0 は null */
   rate: number | null;
+  /**
+   * 仕切り or 計上が未入力で **金額集計から除外**した件数 (count には含まれる)。
+   *   ⚠ 2026-09-03 まではここを `?? 0` で 0 として足し込んでいた。歪みは両方向に出る:
+   *     計上のみ未入力 → 売上0・原価あり = **まるごと赤字**として乗る
+   *     仕切りのみ未入力 → 原価0 = **粗利100%** として乗る
+   *   実データ (787 件) では前者が勝ち、粗利を約 105.8 万円 少なく見せていた。
+   *   行単位の grossProfit() は片方 null なら null (Excel の #DIV/0! 相当) なので、
+   *   月次だけ 0 扱いにすると画面上で辻褄が合わない。**行単位に合わせて除外する。**
+   */
+  excluded: number;
 };
 
 /** 施工月ごとに 件数 / 仕切り / 計上 / 粗利 を集計する (Excel の月次集計行の置換) */
@@ -278,12 +288,18 @@ export function summarizeByMonth(projects: RenovationProjectWithSteps[]): Renova
     const month = constructionMonth(p.steps) ?? "unscheduled";
     let row = map.get(month);
     if (!row) {
-      row = { month, count: 0, cost: 0, sales: 0, profit: 0, rate: null };
+      row = { month, count: 0, cost: 0, sales: 0, profit: 0, rate: null, excluded: 0 };
       map.set(month, row);
     }
     row.count += 1;
-    row.cost += p.cost_total ?? 0;
-    row.sales += p.sales_total ?? 0;
+    // 片方でも未入力なら金額に足さない (行単位の grossProfit と同じ扱い)。
+    //   件数には残し、excluded で「何件を金額から外したか」を画面に出せるようにする。
+    if (p.cost_total === null || p.sales_total === null) {
+      row.excluded += 1;
+      continue;
+    }
+    row.cost += p.cost_total;
+    row.sales += p.sales_total;
   }
   for (const row of map.values()) {
     row.profit = row.sales - row.cost;
@@ -299,8 +315,14 @@ export function summarizeByMonth(projects: RenovationProjectWithSteps[]): Renova
 
 export function summarizeTotal(rows: RenovationSummaryRow[]): RenovationSummaryRow {
   const total = rows.reduce(
-    (acc, r) => ({ ...acc, count: acc.count + r.count, cost: acc.cost + r.cost, sales: acc.sales + r.sales }),
-    { month: "total", count: 0, cost: 0, sales: 0, profit: 0, rate: null as number | null },
+    (acc, r) => ({
+      ...acc,
+      count: acc.count + r.count,
+      cost: acc.cost + r.cost,
+      sales: acc.sales + r.sales,
+      excluded: acc.excluded + r.excluded,
+    }),
+    { month: "total", count: 0, cost: 0, sales: 0, profit: 0, rate: null as number | null, excluded: 0 },
   );
   total.profit = total.sales - total.cost;
   total.rate = total.sales === 0 ? null : total.cost / total.sales;
