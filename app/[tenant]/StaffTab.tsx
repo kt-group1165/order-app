@@ -60,17 +60,26 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
           const orderOfficeIds = ((orderOffices ?? []) as { id: string }[]).map((o) => o.id);
           memberIds = Array.from(new Set(await fetchJunctionMemberIds(orderOfficeIds)));
         }
-        // members .in("id", ...) も IN 句が肥大化しすぎないようチャンク分割 (URL 長対策)
+        // members .in("id", ...) も IN 句が肥大化しすぎないようチャンク分割。
+        // ⚠ 2026-09-03 実測: chunk=500だとPostgresの実行計画がindex scanから
+        //   seq scanに非線形に切り替わり1回7.5秒超かかる(300件以下は数十ms、
+        //   400件で突然7秒超。membersテーブル1,197行で実測)。150件chunk+
+        //   Promise.all並列fetchに変更 (詳細: kaigo-app use-kaigo-office-users.ts)。
         if (memberIds.length === 0) {
           if (!cancelled) setMembers([]);
         } else {
-          const CHUNK = 500;
+          const CHUNK = 150;
+          const chunks: string[][] = [];
+          for (let i = 0; i < memberIds.length; i += CHUNK) chunks.push(memberIds.slice(i, i + CHUNK));
+          const results = await Promise.all(
+            chunks.map((slice) => {
+              let q = supabase.from("members").select("*").eq("tenant_id", tenantId).is("deleted_at", null).in("id", slice);
+              if (!includeInactive) q = q.eq("status", "active");
+              return q;
+            }),
+          );
           const collected: typeof members = [];
-          for (let i = 0; i < memberIds.length; i += CHUNK) {
-            const slice = memberIds.slice(i, i + CHUNK);
-            let q = supabase.from("members").select("*").eq("tenant_id", tenantId).is("deleted_at", null).in("id", slice);
-            if (!includeInactive) q = q.eq("status", "active");
-            const { data, error } = await q;
+          for (const { data, error } of results) {
             if (error) {
               console.warn("members fetch failed:", error.message);
               continue;
