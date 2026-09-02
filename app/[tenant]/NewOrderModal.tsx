@@ -7,6 +7,9 @@ import { matchEquipment, matchClient } from "./search-utils";
 import { KANA_ROWS } from "./kana-rows";
 import { createOrder, createOrderItem } from "@/lib/orders";
 import { getEquipmentSetItems, getPurchasePrices, getPurchasePriceForMonth } from "@/lib/equipment";
+import { supabase } from "@/lib/supabase";
+import { indexCeilings, judgeCeiling, type CeilingRow } from "@/lib/ceilingCheck";
+import { todayYmd } from "@/lib/date-jst";
 
 // ─── New Order Modal ─────────────────────────────────────────────────────────
 
@@ -100,6 +103,10 @@ export default function NewOrderModal({
   const [pendingSets, setPendingSets] = useState<{ equipment: Equipment; quantity: number; kind: PaymentKind }[]>([]);
   const [pendingSetLoading, setPendingSetLoading] = useState(false);
 
+  // 上限価格 (国が公表する福祉用具貸与の上限)。**警告に使うだけで入力はブロックしない**。
+  // 取得に失敗しても発注は続けられるよう、エラーは握らず console に出して空で進む。
+  const [ceilingIndex, setCeilingIndex] = useState<Map<string, CeilingRow[]>>(new Map());
+
   // 新規フィールド
   const [selectedKinds, setSelectedKinds] = useState<Set<PaymentKind>>(new Set(["介護"]));
   const [deliveryDate, setDeliveryDate] = useState("");
@@ -113,6 +120,30 @@ export default function NewOrderModal({
   const [deliveryAddress, setDeliveryAddress] = useState("");
 
   // 卸会社デフォルト：日本ケアサプライ
+  // 上限価格マスタを 1 回だけ読む。**警告表示専用**なので、失敗しても発注は止めない。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const rows: CeilingRow[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase
+          .from("equipment_price_ceilings")
+          .select("tais_code, effective_from, ceiling_price")
+          .eq("tenant_id", tenantId)
+          .order("tais_code")
+          .range(from, from + 999);
+        if (error) {
+          console.error("上限価格の取得に失敗 (警告表示のみ無効):", error.message);
+          return;
+        }
+        rows.push(...((data ?? []) as CeilingRow[]));
+        if ((data ?? []).length < 1000) break;
+      }
+      if (!cancelled) setCeilingIndex(indexCeilings(rows));
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId]);
+
   useEffect(() => {
     if (suppliers.length > 0 && !supplierId) {
       const def = suppliers.find((s) => s.name.includes("日本ケアサプライ"));
@@ -769,6 +800,26 @@ export default function NewOrderModal({
                                 ) : (
                                   <span className="text-[10px] text-amber-500 px-1">グループ内</span>
                                 )}
+                                {/* 上限価格の警告。★ ブロックはしない。判定できないときは何も出さない。
+                                    基準日は納品日 (未入力なら当日)。金額の計算には影響しない。 */}
+                                {(() => {
+                                  if (kind !== "介護") return null; // 保険給付の話なので自費は対象外
+                                  const j = judgeCeiling(
+                                    item.equipment.tais_code,
+                                    item.rental_price ? Number(item.rental_price) : null,
+                                    deliveryDate || todayYmd(),
+                                    ceilingIndex,
+                                  );
+                                  if (j.kind !== "over") return null;
+                                  return (
+                                    <div
+                                      className="mt-0.5 text-[9px] leading-tight text-rose-600"
+                                      title={`${j.effectiveFrom} 施行の上限 ${j.ceiling.toLocaleString()} 円を ${j.excess.toLocaleString()} 円超過しています。上限を超えた分は保険給付の対象外です`}
+                                    >
+                                      上限 {j.ceiling.toLocaleString()} 超過
+                                    </div>
+                                  );
+                                })()}
                               </td>
                               <td className="py-2 px-1 w-[5rem]">
                                 <input
