@@ -7,7 +7,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPrice
 import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { HW_KANA } from "./search-utils";
-import { calcMonthUnits } from "./order-item-helpers";
+import { calcMonthUnits, hasBrokenRentalDates } from "./order-item-helpers";
 import { getAllOrders, getAllOrderItemsByTenant } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
@@ -742,6 +742,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         const count = item.quantity;
         const units = unitPer * count;
         if (units <= 0) continue;
+        // ⚠ 終了日 < 開始日 のとき calcMonthUnits は **満額を返して請求に載せる**。
+        //   値は変えず (null にすると請求から消えて、それはそれで黙る) 警告だけ出す。
+        //   実測 (2026-09-03): 4,669 行中 該当 0 行。
+        if (hasBrokenRentalDates(item)) {
+          preWarnings.push(`${client.name}: ${eq?.name ?? item.product_code} の貸与期間が逆転しています (${item.rental_start_date} 〜 ${item.rental_end_date}) — 満額で請求に載ります`);
+        }
         const code = fukuyoguServiceCode(eq?.category);
         if (!code) {
           preWarnings.push(`${client.name}: 種目「${eq?.category ?? "未設定"}」(${eq?.name ?? item.product_code}) の福祉用具貸与サービスコードが不明です`);

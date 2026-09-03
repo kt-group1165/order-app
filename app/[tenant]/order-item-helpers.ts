@@ -58,6 +58,11 @@ export function calcMonthUnits(item: OrderItem, year: number, month: number, pri
   if (end   && end   < monthStart) return 0;   // 先月以前終了
   if (start && start > monthEnd) {
     // 解約済みで終了日が今月内なら半月ルール適用（開始日が来月以降の場合）
+    // ⚠ **この分岐は正常データでは到達しない** (2026-09-03 確認)。
+    //   条件は `start > 月末` かつ `end <= 月末` = **終了日が開始日より前**。
+    //   到達したときは日付が壊れているのに **黙って満額を請求に載せる**ので、
+    //   呼出側で `hasBrokenRentalDates()` を見て警告を出すこと。
+    //   実測: order_items 4,669 行中 該当 **0 行** (終了<開始 も 開始日なし も 0)。
     if (item.status === "terminated" && end && end <= monthEnd) {
       return end <= day15 ? halfUnits : halfUnits + remUnits;
     }
@@ -70,6 +75,19 @@ export function calcMonthUnits(item: OrderItem, year: number, month: number, pri
   const inLower = (!start || start <= monthEnd) && (!end || end >= day16);
 
   return (inUpper ? halfUnits : 0) + (inLower ? remUnits : 0);
+}
+
+/**
+ * 貸与期間の日付が壊れているか (終了日 < 開始日)。
+ *
+ * `calcMonthUnits` はこの状態でも **満額を返して請求に載せてしまう**ので、
+ * 請求を組む側で警告に出す。⚠ **値は変えない** (null にすると請求から消えて
+ * それはそれで黙るため。気づけるようにするのが目的)。
+ * 実測 (2026-09-03): order_items 4,669 行中 該当 0 行。
+ */
+export function hasBrokenRentalDates(item: OrderItem): boolean {
+  return !!(item.rental_start_date && item.rental_end_date &&
+    item.rental_end_date < item.rental_start_date);
 }
 
 /** 報告書用短縮日付: R8.3.15 形式 */
