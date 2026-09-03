@@ -7,6 +7,8 @@ import { Client, Equipment, Supplier } from "@/lib/supabase";
 import { getClients } from "@/lib/clients";
 import { getEquipment, getSuppliers, getPurchasePrices, getPurchasePriceForMonth } from "@/lib/equipment";
 import { createOrder, createOrderItem } from "@/lib/orders";
+import { supabase } from "@/lib/supabase";
+import { indexCeilings, judgeCeiling, type CeilingRow } from "@/lib/ceilingCheck";
 
 type PaymentKind = "介護" | "自費" | "特価自費";
 
@@ -177,6 +179,9 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
   const [submitting, setSubmitting] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [equipSearch, setEquipSearch] = useState("");
+  // 上限価格の警告用。NewOrderModal と同じ設計 (警告のみ・ブロックしない・金額に触らない)。
+  // ⚠ この画面は発注のもう一方の入口で、2026-09-03 まで上限を一度も参照していなかった。
+  const [ceilingIndex, setCeilingIndex] = useState<Map<string, CeilingRow[]>>(new Map());
 
   // 音声Q&Aモード
   const [voiceActive, setVoiceActive] = useState(false);
@@ -200,6 +205,30 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
       setEquipment(eq);
       setSuppliers(sup);
     }).finally(() => setLoading(false));
+  }, [tenantId]);
+
+  // 上限価格マスタ (警告表示のみ)。取得に失敗しても発注は続行できるようにする。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const rows: CeilingRow[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase
+          .from("equipment_price_ceilings")
+          .select("tais_code, effective_from, ceiling_price")
+          .eq("tenant_id", tenantId)
+          .order("tais_code")
+          .range(from, from + 999);
+        if (error) {
+          console.error("上限価格の取得に失敗 (警告表示のみ無効):", error.message);
+          return;
+        }
+        rows.push(...((data ?? []) as CeilingRow[]));
+        if ((data ?? []).length < 1000) break;
+      }
+      if (!cancelled) setCeilingIndex(indexCeilings(rows));
+    })();
+    return () => { cancelled = true; };
   }, [tenantId]);
 
   // ── 音声Q&Aフロー ────────────────────────────────────────────
@@ -775,6 +804,26 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
                   <label className="text-xs text-gray-500 block mb-1.5">月額レンタル料（円）</label>
                   <input type="number" value={item.rental_price} onChange={e => updateCartItem(idx, { rental_price: e.target.value })} placeholder="例: 9000" inputMode="numeric"
                     className="w-full border border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-emerald-300" />
+                  {/* 上限価格の警告。NewOrderModal と同じ設計: ブロックしない・判定できないときは何も出さない・金額の計算には影響しない。
+                      ⚠ この画面は納品日を持たないので基準日は当日。NewOrderModal は deliveryDate || 当日。 */}
+                  {(() => {
+                    if (paymentKind !== "介護") return null; // 保険給付の話なので自費は対象外
+                    const j = judgeCeiling(
+                      item.equipment.tais_code,
+                      item.rental_price ? Number(item.rental_price) : null,
+                      new Date().toLocaleDateString("sv-SE"),
+                      ceilingIndex,
+                    );
+                    if (j.kind !== "over") return null;
+                    return (
+                      <p
+                        className="mt-1 text-xs text-rose-600"
+                        title={`${j.effectiveFrom} 施行の上限 ${j.ceiling.toLocaleString()} 円を ${j.excess.toLocaleString()} 円超過しています。上限を超えた分は保険給付の対象外です`}
+                      >
+                        上限 {j.ceiling.toLocaleString()} 円を {j.excess.toLocaleString()} 円超過
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div className="mb-3">
                   <label className="text-xs text-gray-500 block mb-1.5">卸会社</label>
