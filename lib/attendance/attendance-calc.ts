@@ -15,6 +15,18 @@
 //   - 深夜割増は他の割増と独立して上乗せされるため、本 lib では別 field で集計
 //
 // 入出力単位は分 (minute)。出力 field は全て非負整数を期待する。
+//
+// ⚠ **この file が正本 (2026-09-03 統合)。**同じ内容が 3 か所にある:
+//     order-app    lib/attendance/attendance-calc.ts          ← ★ ここが正
+//     kaigo-app    src/lib/attendance/attendance-calc.ts
+//     payroll-app  src/lib/payroll/attendance-calc.ts
+//   app が別 git リポジトリなので物理的に共有できない。**直すときは 3 つとも直す。**
+//   3 つは同じ table (`payroll_kyotaku_attendance_records`) を読むので、
+//   ズレると **同じ職員・同じ月なのに開く画面で金額が変わる**。
+//   実際 2026-09-03 まで 3 実装が食い違っていて、代休 15 日 + 法定休日 12 日ぶん
+//   (10 名 2 か月で 参考時給 ¥1,947 換算 約 ¥12.9 万) の差が出ていた。
+//   ズレたら気づけるように:
+//     cd apps/order-app && npx tsx scripts/attendance-calc-parity.mts
 
 import { isJapaneseHoliday } from "./japan-holidays";
 
