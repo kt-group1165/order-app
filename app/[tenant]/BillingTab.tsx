@@ -2804,7 +2804,9 @@ function InvoiceReceiptModal({
       try {
         const { data } = await supabase
           .from("invoices")
-          .select("invoice_number, year_issued, issued_date")
+          // ⚠ 列名は `issue_date`。`issued_date` と書いていて **保存も読込も失敗**していた
+          //   (2026-09-03 実測。invoices が 0 行だったのはこれが原因)
+          .select("invoice_number, year_issued, issue_date")
           .eq("tenant_id", tenantId)
           .eq("client_id", client.id)
           .eq("billing_month", targetMonth)
@@ -2813,7 +2815,7 @@ function InvoiceReceiptModal({
         if (data) {
           setInvoiceNumber(data.invoice_number as number);
           setYearIssued(data.year_issued as number);
-          setIssuedDate((data.issued_date as string | null) ?? null);
+          setIssuedDate((data.issue_date as string | null) ?? null);
         }
       } catch {
         // invoices テーブル未作成等は無視
@@ -2907,8 +2909,13 @@ function InvoiceReceiptModal({
         billing_month: targetMonth,
         invoice_number: useNumber,
         year_issued: useYear,
-        issued_date: useDate,
-        copay_amount: copayAmount,
+        // ⚠ 列名は `issue_date` (d は入らない) / 金額の列は `total_amount`。
+        //   `issued_date` / `copay_amount` と書いていて **upsert が必ず 42703 で落ちていた**。
+        //   ★ この請求書は 利用者負担額 をそのまま請求する = copayAmount が総額。
+        //   ⚠ DB には taxable_amount / nontaxable_amount / tax_amount もあるが、
+        //     今は書いていない (内訳は data のスナップショットに入っている)。
+        issue_date: useDate,
+        total_amount: copayAmount,
         data: snapshot,
       }, { onConflict: "tenant_id,client_id,billing_month" });
       if (error) throw error;

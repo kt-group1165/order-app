@@ -8,8 +8,9 @@
  *   `invoices` が 0 行なのは「まだ使っていない」からだと思って調べ始めたが、
  *   **保存そのものが必ず失敗する**状態だった (2026-09-03 実測)。
  *
- *     BillingTab.tsx:2904 の upsert が書く列  … issued_date / copay_amount
- *     ★ どちらも **DB に存在しない** (42703 undefined_column)
+ *     BillingTab.tsx の upsert が書いていた列  … issued_date / copay_amount
+ *     ★ DB の実際の列は  **issue_date / total_amount**
+ *       (`issued_date` は d が余分なタイプミス。`copay_amount` は名前ごと違う)
  *
  *   → 「保存」を押すと必ず catch に落ち、
  *     `alert("保存に失敗しました。invoices テーブルの作成状態を確認してください。")`
@@ -53,7 +54,7 @@ console.log(`\n══ ★ ① BillingTab が読み書きする列が DB にあ�
 /** BillingTab.tsx:2807 (select) と :2904 (upsert) に出てくる列 */
 const USED = [
   "tenant_id", "client_id", "billing_month", "invoice_number", "year_issued",
-  "issued_date", "copay_amount", "data",
+  "issue_date", "total_amount", "data",
 ];
 const missing: string[] = [];
 for (const c of USED) {
@@ -120,8 +121,8 @@ const [c1, c2] = ins;
 
 const mk = (clientId: string, month: string, number: number, year: number) => ({
   tenant_id: TENANT, client_id: clientId, billing_month: month,
-  invoice_number: number, year_issued: year, issued_date: "2026-12-31",
-  copay_amount: 1000, data: { _sample_marker: "sample-c" },
+  invoice_number: number, year_issued: year, issue_date: "2026-12-31",
+  total_amount: 1000, data: { _sample_marker: "sample-c" },
 });
 
 try {
@@ -151,12 +152,27 @@ try {
     console.log(`  OK  別々の番号になった (${r1.next} / ${r2.next})`);
   }
 
-  console.log(`\n══ ★ ③ 年をまたぐと通し番号か ══`);
-  await sb.from("invoices").insert(mk(c2.id, "2025-11", 900, 2025));
-  const { data: mAll } = await sb.from("invoices").select("invoice_number")
+  console.log(`\n══ ★ ③ 採番は 年ごとにリセットか / 通し番号か ══`);
+  // ★ UNIQUE に year_issued が入っているかで **設計が決まる**。
+  //   入っていない = 年をまたいでも番号は一意でなければならない = ★ 通し番号が正しい
+  //   入っている   = 年ごとに 1 から振り直してよい
+  // 同じ番号を **違う年**で入れて、通るかどうかで判定する。
+  const { data: exist } = await sb.from("invoices").select("invoice_number")
     .eq("tenant_id", TENANT).order("invoice_number", { ascending: false }).limit(1);
-  console.log(`  実装が使う max (年で絞らない) = ${mAll?.[0]?.invoice_number}`);
-  console.log(`  ⚠ 表示は \`\${year}-\${number 4桁}-01\`。**年ごとに 1 から振り直す運用なら誤り**。`);
+  const someNumber = (exist?.[0]?.invoice_number as number) ?? 501;
+  const { error: yErr } = await sb.from("invoices").insert(mk(c2.id, "2025-11", someNumber, 2025));
+  n++;
+  if (yErr) {
+    console.log(`  OK  ★ 同じ番号 ${someNumber} を違う年 (2025) で入れると弾かれる (${yErr.code})`);
+    console.log(`      → UNIQUE に year_issued は **入っていない** = 番号は tenant で通し`);
+    console.log(`      → ★ max を年で絞らない今の実装が **正しい**。`);
+    console.log(`        年ごとに 1 から振り直すと衝突するので、そう直してはいけない。`);
+  } else {
+    ng++;
+    console.log(`  NG  ★ 同じ番号を違う年で入れられた = UNIQUE に year_issued が入っている`);
+    console.log(`      → 年ごとに振り直す設計。max を年で絞らない今の実装は **バグ**`);
+  }
+  console.log(`  ⚠ 表示の \`year\` は **表示のためだけ**に持っている、という読みになる。`);
 } finally {
   const okClean = await cleanup();
   n++;
