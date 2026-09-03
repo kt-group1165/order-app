@@ -2926,7 +2926,19 @@ function InvoiceReceiptModal({
       alert(`保存しました: No. ${useYear}-${String(useNumber).padStart(4, "0")}-01`);
     } catch (e) {
       console.error(e);
-      alert("保存に失敗しました。invoices テーブルの作成状態を確認してください。");
+      // ⚠ 原因ごとに文面を変える。**同じ文面だと原因に辿り着けない。**
+      //   実際 2026-09-03 に、列名の誤り (42703) をこの文面が
+      //   「テーブルが無いのか」と読ませて、原因の特定を遅らせた。
+      const code = (e as { code?: string } | null)?.code;
+      if (code === "23505") {
+        // 同時に 2 人が保存すると両方が同じ max を読んで同じ番号を取る。
+        // DB の UNIQUE (tenant_id, invoice_number) が 2 人目を弾く。
+        alert("他の人が同じ請求書番号を取りました。もう一度「保存」を押してください。");
+      } else if (code === "42703" || code === "PGRST204") {
+        alert("保存に失敗しました。invoices の列がコードと合っていません (管理者に連絡してください)。");
+      } else {
+        alert(`保存に失敗しました: ${(e as Error)?.message ?? "原因不明"}`);
+      }
     } finally {
       setSaving(false);
     }
