@@ -753,7 +753,14 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       if (details.length === 0) continue;
       // 給付率 (benefit_rate は 90/80/70 の給付率で保存済み)、福祉用具は単価 10 円固定
       // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
-      //   clients.benefit_rate は実測で NULL が 583 名。2割負担者を 1割で出すと
+      //   clients.benefit_rate は実測 (2026-09-03) で NULL が **5,008 名 (55%)**。
+      //   (2026-08-31 時点の「583 名」は古い数字だった。5-4: 実測日を添える)
+      //   ⚠ ただし請求に出るのはその月にレンタルがある人だけで、2026-06 は
+      //     1,056 名中 **NULL 0 名**。警告が 5,008 件出るわけではない。
+      //   ⚠ 給付率は 認定 (client_insurance_records) から導出するのが本筋。
+      //     点検 = scripts/benefit-rate-check.mts / 是正 =
+      //     kaigo-app/migrations/fix_clients_benefit_rate_from_cert.mjs
+      //   2割負担者を 1割で出すと
       //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
       //   `|| 90` のせいで "0" も 90 になっていた。
       //   既定 (90) は変えず、必ず気づけるように警告を出す。
@@ -1055,7 +1062,14 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         }
         if (details.length === 0) continue;
         // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
-        //   clients.benefit_rate は実測で NULL が 583 名。2割負担者を 1割で出すと
+        //   clients.benefit_rate は実測 (2026-09-03) で NULL が **5,008 名 (55%)**。
+      //   (2026-08-31 時点の「583 名」は古い数字だった。5-4: 実測日を添える)
+      //   ⚠ ただし請求に出るのはその月にレンタルがある人だけで、2026-06 は
+      //     1,056 名中 **NULL 0 名**。警告が 5,008 件出るわけではない。
+      //   ⚠ 給付率は 認定 (client_insurance_records) から導出するのが本筋。
+      //     点検 = scripts/benefit-rate-check.mts / 是正 =
+      //     kaigo-app/migrations/fix_clients_benefit_rate_from_cert.mjs
+      //   2割負担者を 1割で出すと
         //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
         //   `|| 90` のせいで "0" も 90 になっていた。
         //   既定 (90) は変えず、必ず気づけるように警告を出す。
