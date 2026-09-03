@@ -164,8 +164,19 @@ const REF_HOURLY = REF_MONTHLY / 160;
  *   `@/lib/...` alias を使うため order-app からは型解決できない。
  *   **割増率そのものの検証は payroll-app/scripts/payroll-sample-check.mts (22 項目) 済み**
  *   なので、ここでは労基の法定率をそのまま当てる。
- *     時間外 1.25 / 深夜 +0.25 / 法定休日 1.35 / 欠勤控除 1.00
+ *     時間外 1.25 / 深夜 +0.25 / 法定休日 1.35
  *   (60h 超 1.50 は差分の桁を見る目的では効かないので使わない)
+ *
+ * ⚠⚠ **欠勤は残業代と足し引きしない。**
+ *   `payroll/page.tsx` の `monthlyGrandTotal` は
+ *     fixedTotal + 賞与 + travelFee + commuteFee + 出張費 + 育児 + careOvertime
+ *     + yocho + overtimeExcess
+ *   で構成され **欠勤の項が 1 つも無い** (実測。`total_absence`/`absenceMin` の参照先は
+ *   3 app とも画面表示と労務チェック一覧だけで、金額計算に入る箇所は 0 件)。
+ *   → **欠勤が何時間立っても支給額は動かない。**
+ *   2026-09-03 に一度「残業代 − 欠勤控除」で出して **¥-124,334 = 支給額が減っていた**
+ *   かのような報告をしかけた。実際に動いていたのは残業代ぶんの **+¥876** だけ。
+ *   欠勤は別の列に分けて出し、**足さない**こと。
  */
 function money(s: Sum, empId: string): { ot: number; absence: number; hourly: number; real: boolean } {
   const sal = salByEmp.get(empId);
@@ -190,6 +201,7 @@ const diffs: {
   o: Sum; k: Sum; p: Sum;
   kDiff: string[]; pDiff: string[];
   kYen: number; pYen: number;
+  kAbs: number; pAbs: number;
 }[] = [];
 
 const causeDays = { kaigo: {} as Record<string, number>, payroll: {} as Record<string, number> };
@@ -233,9 +245,9 @@ for (const [k, recs] of keys) {
   diffs.push({
     key: k, name: String(emp?.name ?? "(不明)"), month, hourly: mo.hourly,
     o, k: kk, p: pp, kDiff, pDiff,
-    // 残業代の増 − 欠勤控除の増 = 支給額の動き
-    kYen: (mk.ot - mo.ot) - (mk.absence - mo.absence),
-    pYen: (mp.ot - mo.ot) - (mp.absence - mo.absence),
+    // ★ 支給額が動くのは残業代だけ。欠勤は足さず別列で出す (上の注記)
+    kYen: mk.ot - mo.ot, pYen: mp.ot - mo.ot,
+    kAbs: mk.absence - mo.absence, pAbs: mp.absence - mo.absence,
   });
 }
 
@@ -258,17 +270,21 @@ const fmt = (m: number) => `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "
 for (const d of diffs.sort((a, b) => Math.abs(b.kYen) + Math.abs(b.pYen) - Math.abs(a.kYen) - Math.abs(a.pYen))) {
   console.log(`\n  ── ${d.name} ${d.month} (時給 ¥${Math.round(d.hourly)})`);
   console.log(`     order (正) 実労${fmt(d.o.total_work)} 日残${fmt(d.o.total_daily_overtime)} 週残${fmt(d.o.total_weekly_overtime)} 法休${fmt(d.o.total_holiday)} 欠勤${fmt(d.o.total_absence)}`);
-  if (d.kDiff.length) console.log(`     kaigo   ${d.kDiff.join(" / ")}   → 割増 ${d.kYen >= 0 ? "+" : ""}¥${d.kYen}`);
-  if (d.pDiff.length) console.log(`     payroll ${d.pDiff.join(" / ")}   → 割増 ${d.pYen >= 0 ? "+" : ""}¥${d.pYen}`);
+  const yen = (ot: number, abs: number) =>
+    `→ 残業代 ${ot >= 0 ? "+" : ""}¥${ot} / 欠勤 ${abs >= 0 ? "+" : ""}¥${abs} (支給には効かない)`;
+  if (d.kDiff.length) console.log(`     kaigo   ${d.kDiff.join(" / ")}   ${yen(d.kYen, d.kAbs)}`);
+  if (d.pDiff.length) console.log(`     payroll ${d.pDiff.join(" / ")}   ${yen(d.pYen, d.pAbs)}`);
 }
 
-const kTotal = diffs.reduce((s, d) => s + d.kYen, 0);
-const pTotal = diffs.reduce((s, d) => s + d.pYen, 0);
+const sum = (f: (d: typeof diffs[number]) => number) => diffs.reduce((s, d) => s + f(d), 0);
+const yenStr = (v: number) => `${v >= 0 ? "+" : ""}¥${v.toLocaleString()}`;
 console.log(`\n══ ② 金額差 (order を正としたときの、他 app 画面が出す額のズレ) ══`);
 console.log(`  ⚠ 出勤簿を持つ 10 名は **payroll_salary_settings が 0 行**。実支給額は出せない。`);
 console.log(`     設定を持つ職員の中央値 (月 ¥${REF_MONTHLY.toLocaleString()} / 160h = 時給 ¥${Math.round(REF_HOURLY)}) を当てた **参考値**。`);
-console.log(`  kaigo-app   ${kTotal >= 0 ? "+" : ""}¥${kTotal.toLocaleString()}   (${diffs.filter((d) => d.kDiff.length).length} 組)`);
-console.log(`  payroll-app ${pTotal >= 0 ? "+" : ""}¥${pTotal.toLocaleString()}   (${diffs.filter((d) => d.pDiff.length).length} 組)`);
+console.log(`                ★ 残業代 (支給に効く)      欠勤 (支給に効かない)`);
+console.log(`  kaigo-app     ${yenStr(sum((d) => d.kYen)).padEnd(24)} ${yenStr(sum((d) => d.kAbs))}   (${diffs.filter((d) => d.kDiff.length).length} 組)`);
+console.log(`  payroll-app   ${yenStr(sum((d) => d.pYen)).padEnd(24)} ${yenStr(sum((d) => d.pAbs))}   (${diffs.filter((d) => d.pDiff.length).length} 組)`);
+console.log(`  ⚠ **2 列を足さないこと。**欠勤は monthlyGrandTotal に入っていない (上の注記)。`);
 
 // ── ③ 実装差が「発動しうる」条件が実データにどれだけあるか ─────────────
 console.log(`\n══ ②-2 その差は 3 つのどれで出たのか (日単位で分類) ══`);
