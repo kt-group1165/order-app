@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, Fragment } from "react";
+import { calcNextDueMonth } from "@/lib/monitoring-cycle";
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Send, Eye, Download } from "lucide-react";
 import { supabase, Client, Equipment, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientInsuranceRecord, OrderItem } from "@/lib/supabase";
 import { getEquipment } from "@/lib/equipment";
@@ -8,12 +9,6 @@ import { getTenantById } from "@/lib/tenants";
 import { todayYmd } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import SendRentalReportModal from "./SendRentalReportModal";
-
-function calcNextDueMonth(base: string): string {
-  const [y, m] = base.split("-").map(Number);
-  const total = y * 12 + m - 1 + 6;
-  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
-}
 
 export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
   const [selectedMonth, setSelectedMonth] = useState(() => {
