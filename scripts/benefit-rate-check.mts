@@ -20,7 +20,18 @@
  *   ③ 給付率が 90/80/70/0 以外
  *   ④ 給付率が未設定 (BillingTab は 90 で計算し警告を出す)
  *   ⑤ 給付率が数値として読めない (parseInt が NaN)
+ *   ⑥ ★ **`clients.benefit_rate` が 認定 (`client_insurance_records`) と食い違う**
+ *      ← ①②③④⑤ より強い検査。認定は ほのぼの由来なので **こちらが正**。
+ *        ①だけだと「clients の 2 列が揃って古い」ケースを取り逃がす。
  *   分母は **その月に介護レンタルがある利用者**に絞る (請求に出ない人は今は関係ない)。
+ *
+ * ── 認定を正とする根拠 (2026-09-03 実測) ────────────────────────────────
+ *   ① で出た 2 名を認定と突き合わせたら、**認定側に負担割合証がそのまま入っていた**。
+ *     髙畠 孝祐  認定 2025-08-01〜2028-07-31  copay_rate "3" / benefit_rate "70"
+ *     村上 正幸  認定 2026-03-01〜2030-02-28  copay_rate "2" / benefit_rate "80"
+ *                (負担割合証の期間 2025-08-01〜2026-07-31 も入っている)
+ *   どちらも `clients.copay_rate` (30 / 20) とは一致し、
+ *   **`clients.benefit_rate` の 90 だけが古い**。→ 請求は 90 を使うので過大請求。
  */
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -64,7 +75,28 @@ type Item = {
   quantity: number | null; rental_price: number | null;
 };
 
+type Cert = {
+  client_id: string; copay_rate: string | null; benefit_rate: string | null;
+  certification_start_date: string | null; certification_end_date: string | null;
+  effective_date: string | null;
+};
+
 const clients = await all<Client>("clients", "id, name, benefit_rate, copay_rate, insured_number", "id");
+const certs = await all<Cert>(
+  "client_insurance_records",
+  "client_id, copay_rate, benefit_rate, certification_start_date, certification_end_date, effective_date",
+  "id",
+);
+// 対象月に有効な認定のうち effective_date 最新の 1 件
+const certOf = new Map<string, Cert>();
+for (const r of certs) {
+  const s = r.certification_start_date ?? r.effective_date;
+  const e = r.certification_end_date;
+  if (s != null && s > ME) continue;
+  if (e != null && e < MS) continue;
+  const cur = certOf.get(r.client_id);
+  if (!cur || (r.effective_date ?? "") > (cur.effective_date ?? "")) certOf.set(r.client_id, r);
+}
 const orders = await all<Order>("orders", "id, client_id, payment_type", "id");
 const items = await all<Item>("order_items", "order_id, status, payment_type, rental_start_date, rental_end_date, quantity, rental_price", "id");
 
@@ -90,11 +122,26 @@ console.log(`══ 分母 (${MONTH}) ══`);
 console.log(`  clients ${clients.length} 名 / うち **その月に介護レンタルがある** ${active.size} 名`);
 
 const isTandoku = (c: Client) => /^[Hh]/.test((c.insured_number ?? "").trim());
+/** `clients.copay_rate` は **percent 表記** ("10"/"20"/"30")。0.1 のような比率も受ける */
 const pct = (v: string | null) => {
   if (v == null) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
-  return n >= 1 ? n : n * 100; // "10"/"20"/"30" も 0.1 も受ける
+  return n >= 1 ? n : n * 100;
+};
+/**
+ * ⚠ `client_insurance_records.copay_rate` は **割 表記** ("1"/"2"/"3")。
+ *   `clients.copay_rate` (percent) と **同じ列名なのに単位が違う**。
+ *   最初これを混同して `"1"` を 1% と読み、給付率 99 として
+ *   **正常な 2 名を「認定と食い違う」と誤検出**した (2026-09-03)。
+ *   1〜3 は割、それ以上は percent とみなす (実データは "1"/"2"/"3" のみ)。
+ */
+const certCopayPct = (v: string | null) => {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (n > 0 && n <= 3) return n * 10; // "1"/"2"/"3" = 1割/2割/3割
+  return n >= 1 ? n : n * 100;
 };
 
 const buckets = {
@@ -103,9 +150,12 @@ const buckets = {
   odd: [] as string[],
   missing: [] as string[],
   nan: [] as string[],
+  vsCert: [] as string[],
   tandokuOk: 0,
+  noCert: 0,
 };
 let yenAtRisk = 0;
+let yenVsCert = 0;
 
 for (const c of clients) {
   const a = active.get(c.id);
@@ -114,6 +164,26 @@ for (const c of clients) {
   const b = raw == null ? null : parseInt(raw, 10);
   const p = pct(c.copay_rate);
   const where = `${c.name} (レンタル ${a.n} 件 / 貸与価格計 ¥${a.yen.toLocaleString()})`;
+
+  // ⑥ ★ 認定 (ほのぼの由来 = 正) と突き合わせる。①より強い
+  const cert = certOf.get(c.id);
+  if (!cert) buckets.noCert++;
+  else {
+    // 認定の給付率。無ければ 認定の負担割合から導く (copay "1"/"2"/"3" = 割)
+    const cb = cert.benefit_rate != null && Number.isFinite(parseInt(cert.benefit_rate, 10))
+      ? parseInt(cert.benefit_rate, 10)
+      : (() => { const p = certCopayPct(cert.copay_rate); return p == null ? null : 100 - p; })();
+    const mine = raw == null ? null : parseInt(raw, 10);
+    if (cb != null && mine != null && Number.isFinite(mine) && cb !== mine) {
+      const ins = Math.floor(a.yen * mine / 100);
+      const ins2 = Math.floor(a.yen * cb / 100);
+      yenVsCert += ins - ins2;
+      buckets.vsCert.push(
+        `${where}\n     clients=${mine} / 認定=${cb} (認定の負担割合 ${JSON.stringify(cert.copay_rate)} 給付率 ${JSON.stringify(cert.benefit_rate)} ${cert.certification_start_date ?? "?"}〜${cert.certification_end_date ?? "?"})` +
+        `\n     clients どおり 保険 ¥${ins.toLocaleString()} / 認定どおり 保険 ¥${ins2.toLocaleString()} → ★ 差 ¥${(ins - ins2).toLocaleString()}/月`,
+      );
+    }
+  }
 
   if (raw == null) { buckets.missing.push(`${where} — 給付率 未設定 → BillingTab は 90 で計算する`); continue; }
   if (b == null || !Number.isFinite(b)) { buckets.nan.push(`${where} — 給付率 ${JSON.stringify(raw)} が数値として読めない`); continue; }
@@ -152,6 +222,9 @@ show("② 給付率 0 なのに 公費単独 (H) でない", buckets.zeroNotTand
 show("③ 給付率が 90/80/70/0 以外", buckets.odd);
 show("④ 給付率が未設定", buckets.missing, "BillingTab は 90 で計算し警告を出す (2割/3割なら過大請求)");
 show("⑤ 給付率が数値として読めない", buckets.nan);
+show("⑥ ★ clients.benefit_rate が 認定と食い違う", buckets.vsCert,
+  "認定は ほのぼの由来 = **こちらが正**。請求は clients のほうを使うので差額がそのまま誤請求");
+console.log(`   (対象月に有効な認定が無い利用者 ${buckets.noCert} 名は ⑥ の判定から除外)`);
 
 console.log(`\n✅ 公費単独 (H) で 給付率 0 — ${buckets.tandokuOk} 名 (**これは正常**)`);
 console.log(`   ⚠ ここを分けないと「給付率 0 = 異常」で ${buckets.tandokuOk} 件の誤報になる`);
@@ -159,5 +232,11 @@ if (yenAtRisk !== 0) {
   console.log(`\n★ ① の金額規模: ¥${yenAtRisk.toLocaleString()}/月`);
   console.log(`   ⚠ 貸与価格 (rental_price × quantity) を元にした概算。`);
   console.log(`     実際の請求は単位数マスタから引くので端数が違う。**桁を見るための値**。`);
-  console.log(`   ⚠ どちらが正かは **負担割合証**でしか決まらない。DB だけでは直せない。`);
+  console.log(`   ⚠ ①だけでは どちらが正か決まらない。⑥ (認定との突合) を見ること。`);
+}
+if (yenVsCert !== 0) {
+  console.log(`\n★ ⑥ の金額規模: ¥${yenVsCert.toLocaleString()}/月 (認定を正としたときの 保険への過大請求)`);
+  console.log(`   ⚠ 貸与価格 (rental_price × quantity) を元にした概算。桁を見るための値。`);
+  console.log(`   ★ 直すなら **clients.benefit_rate を認定から導出する**のが本筋`);
+  console.log(`     (2 つの列を人が両方正しく保つ運用は必ず破れる)。`);
 }
