@@ -87,6 +87,14 @@ const certs = await all<Cert>(
   "client_id, copay_rate, benefit_rate, certification_start_date, certification_end_date, effective_date",
   "id",
 );
+// 利用者ごとの「最新の認定終了日」(対象月に有効でなくてもよい)
+const latestCertEnd = new Map<string, string>();
+for (const r of certs) {
+  const e = r.certification_end_date;
+  if (!e) continue;
+  const cur = latestCertEnd.get(r.client_id);
+  if (!cur || e > cur) latestCertEnd.set(r.client_id, e);
+}
 // 対象月に有効な認定のうち effective_date 最新の 1 件
 const certOf = new Map<string, Cert>();
 for (const r of certs) {
@@ -151,6 +159,7 @@ const buckets = {
   missing: [] as string[],
   nan: [] as string[],
   vsCert: [] as string[],
+  certExpired: [] as { line: string; end: string; yen: number }[],
   tandokuOk: 0,
   noCert: 0,
 };
@@ -167,8 +176,18 @@ for (const c of clients) {
 
   // ⑥ ★ 認定 (ほのぼの由来 = 正) と突き合わせる。①より強い
   const cert = certOf.get(c.id);
-  if (!cert) buckets.noCert++;
-  else {
+  if (!cert) {
+    buckets.noCert++;
+    // 公費単独は認定が無くても正常 (保険を使わない)
+    if (!isTandoku(c)) {
+      const last = latestCertEnd.get(c.id);
+      buckets.certExpired.push({
+        line: `${where} — 最新の認定は ${last ?? "(1 件も無い)"} まで`,
+        end: last ?? "(無)",
+        yen: a.yen,
+      });
+    }
+  } else {
     // 認定の給付率。無ければ 認定の負担割合から導く (copay "1"/"2"/"3" = 割)
     const cb = cert.benefit_rate != null && Number.isFinite(parseInt(cert.benefit_rate, 10))
       ? parseInt(cert.benefit_rate, 10)
@@ -224,7 +243,23 @@ show("④ 給付率が未設定", buckets.missing, "BillingTab は 90 で計算�
 show("⑤ 給付率が数値として読めない", buckets.nan);
 show("⑥ ★ clients.benefit_rate が 認定と食い違う", buckets.vsCert,
   "認定は ほのぼの由来 = **こちらが正**。請求は clients のほうを使うので差額がそのまま誤請求");
-console.log(`   (対象月に有効な認定が無い利用者 ${buckets.noCert} 名は ⑥ の判定から除外)`);
+// ⑦ 対象月に有効な認定が無いまま保険請求されている
+console.log(`
+${buckets.certExpired.length ? "★ " : "OK "}⑦ 対象月に有効な認定が無いのに保険で請求している — ${buckets.certExpired.length} 名`);
+if (buckets.certExpired.length) {
+  const byEnd: Record<string, number> = {};
+  for (const x of buckets.certExpired) byEnd[x.end.slice(0, 7)] = (byEnd[x.end.slice(0, 7)] ?? 0) + 1;
+  const yen = buckets.certExpired.reduce((s2, x) => s2 + x.yen, 0);
+  console.log(`   最新の認定終了年月: ${JSON.stringify(Object.fromEntries(Object.entries(byEnd).sort()))}`);
+  console.log(`   ⚠ **対象月の直前に固まっている = 更新の取込が追いついていない**可能性が高い`);
+  console.log(`     (本当に失効しているなら終了月はもっとばらける)`);
+  console.log(`   貸与価格計 ¥${yen.toLocaleString()}/月 が **認定の裏付け無しに給付率90 で請求**されている`);
+  console.log(`   ⚠ ただし請求は \`clients.benefit_rate\` を使い認定を見ないので、**止まらない**。`);
+  console.log(`     更新で負担割合が変わっていた人だけが誤請求になる (人数は認定を入れ直さないと分からない)。`);
+  for (const x of buckets.certExpired.slice(0, 15)) console.log(`   ${x.line}`);
+  if (buckets.certExpired.length > 15) console.log(`   … 他 ${buckets.certExpired.length - 15} 名`);
+}
+console.log(`   (公費単独 ${buckets.tandokuOk} 名は認定が無くても正常なので ⑦ から除外)`);
 
 console.log(`\n✅ 公費単独 (H) で 給付率 0 — ${buckets.tandokuOk} 名 (**これは正常**)`);
 console.log(`   ⚠ ここを分けないと「給付率 0 = 異常」で ${buckets.tandokuOk} 件の誤報になる`);
