@@ -64,7 +64,12 @@ export function fukuyoguServiceCode(category: string | null | undefined): string
   return FUKUYOGU_SERVICE_CODES[category.trim()] ?? null;
 }
 
-// 福祉用具貸与の単位数単価 (円)。地域区分の対象外で 10.00 円固定
+// 福祉用具貸与の単位数単価 (円)。地域区分の対象外で 10.00 円固定。
+// ⚠ **同じ前提がもう 1 か所にある** (2026-09-03 実測):
+//     kaigo-app/src/app/(authenticated)/reports/[type]/reports-content.tsx
+//       beppyoUnitPrice(): `if (t.includes("福祉用具")) return 10.0;`
+//   利用票別表の印字に使う。**片方だけ変えると別表と請求が食い違う。**
+//   検査: order-app && npx tsx scripts/fukuyogu-units-check.mts
 const FUKUYOGU_UNIT_PRICE = 10;
 
 const HOKEN_KOHI_KUBUN_HOKEN = "1"; // 保険・公費等区分コード: 保険請求分
