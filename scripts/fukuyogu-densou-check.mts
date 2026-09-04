@@ -20,8 +20,12 @@
  *
  * DB は読まない (純関数のみ)。
  */
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
+
+const BASELINE = "scripts/fukuyogu-densou-check-baseline.json";
+const UPDATE = process.argv.includes("--update");
 
 let n = 0, ng = 0;
 const eq = (label: string, a: unknown, b: unknown) => {
@@ -194,8 +198,49 @@ if (fmtDiff === 0) {
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);
 console.log(`⚠ この検査の期待値は **仕様書 _if_svc.txt と手計算** から作っている`);
 console.log(`  (ほのぼのの福祉用具伝送が手元に無いため)。★ 入手したら突合し直すこと。`);
-// ⚠ 2026-09-05 是正: ng を数えるだけで exit code に反映していなかった (payroll-app 側の
-//   billing-issue-check.mts / payroll-sample-check.mts と同じ穴)。この検査は現に
-//   「ほのぼの書式との差 (NG 1件)」を検出済みなのに、その検知が exit code に出ず check:all
-//   のようなゲートで PASS 扱いになっていた。
-process.exitCode = ng > 0 ? 1 : 0;
+
+// =====================================================================
+// 基準値方式 (2026-09-05 / DECISIONS_PENDING.md B-2t・B-2x)
+//   ★ 「既知だから緑にする」のではなく「既知の件数を固定して、それ以上を検出する」。
+//   fixture ベースの純関数テストなので (DBの実データに依存しない)、指紋は持たない —
+//   このファイル自体が変われば git diff でわかる。
+// =====================================================================
+type Baseline = { _readme: string[]; asOf: string; ng: number };
+
+let baseline: Baseline | null = null;
+if (existsSync(BASELINE)) baseline = JSON.parse(readFileSync(BASELINE, "utf8"));
+
+if (UPDATE || !baseline) {
+  const out: Baseline = {
+    _readme: [
+      "npm run check:fukuyogu-densou の基準値。",
+      "",
+      "■ なぜ 1 件なのか",
+      "  order-app の build.ts (buildFukuyoguDensou) が formatRecordLikeHonobono を",
+      "  通していない (kaigo-app の build.ts は通している)。ほのぼの福祉用具の実出力が",
+      "  手元に無いため、この書式差自体を『直すべきか』は未確定 — 通せば 0 になるはず",
+      "  だが、それが国保連の取込仕様として正しいかは実出力入手まで断定できない。",
+      "  (DECISIONS_PENDING.md B-2t / B-2x)",
+      "",
+      "■ 0件を目指さない (今は)",
+      "  user 判断 (formatRecordLikeHonobono を通すか) が決まるまでは 1 件のまま。",
+      "  0 になったら基準値を更新すること。",
+    ],
+    asOf: new Date().toISOString().slice(0, 10),
+    ng,
+  };
+  writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n", "utf8");
+  console.log(`\n--update: 基準値を書きました (${BASELINE})`);
+  process.exit(0);
+}
+
+console.log(`\n基準値 (${baseline.asOf} 時点): NG ${baseline.ng} 件`);
+if (ng > baseline.ng) {
+  console.log(`★ FAIL — NGが基準値 (${baseline.ng}件) より増えた (現在 ${ng}件)。新しい乖離を確認すること。`);
+  process.exit(1);
+}
+if (ng < baseline.ng) {
+  console.log(`✓ PASS — NGが基準値 (${baseline.ng}件) より減った (現在 ${ng}件)。改善している。--update で基準値を下げてよい。`);
+  process.exit(0);
+}
+console.log(`✓ PASS — 基準値どおり ${ng} 件 (既知・DECISIONS_PENDING.md B-2t/B-2x で user 判断待ち)。`);

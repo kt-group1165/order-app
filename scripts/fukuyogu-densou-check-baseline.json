@@ -1,0 +1,18 @@
+{
+  "_readme": [
+    "npm run check:fukuyogu-densou の基準値。",
+    "",
+    "■ なぜ 1 件なのか",
+    "  order-app の build.ts (buildFukuyoguDensou) が formatRecordLikeHonobono を",
+    "  通していない (kaigo-app の build.ts は通している)。ほのぼの福祉用具の実出力が",
+    "  手元に無いため、この書式差自体を『直すべきか』は未確定 — 通せば 0 になるはず",
+    "  だが、それが国保連の取込仕様として正しいかは実出力入手まで断定できない。",
+    "  (DECISIONS_PENDING.md B-2t / B-2x)",
+    "",
+    "■ 0件を目指さない (今は)",
+    "  user 判断 (formatRecordLikeHonobono を通すか) が決まるまでは 1 件のまま。",
+    "  0 になったら基準値を更新すること。"
+  ],
+  "asOf": "2026-09-04",
+  "ng": 1
+}
