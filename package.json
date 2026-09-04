@@ -7,7 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:ceiling": "tsx scripts/ceiling-baseline-check.mts"
+    "check:ceiling": "tsx scripts/ceiling-baseline-check.mts",
+    "check:ceiling-boundary": "tsx scripts/ceiling-boundary-test.mts",
+    "check:fukuyogu-units": "tsx scripts/fukuyogu-units-check.mts",
+    "check:fukuyogu-rounding": "tsx scripts/fukuyogu-price-and-rounding-check.mts",
+    "check:fukuyogu-densou": "tsx scripts/fukuyogu-densou-check.mts",
+    "check:invoice-number": "tsx scripts/invoice-number-check.mts",
+    "check:densou-builder-diff": "cd ../kaigo-app && npx tsx scripts/densou-builder-cross-diff.mts",
+    "check:all": "tsx scripts/check-all.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",

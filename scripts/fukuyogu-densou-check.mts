@@ -194,3 +194,8 @@ if (fmtDiff === 0) {
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);
 console.log(`⚠ この検査の期待値は **仕様書 _if_svc.txt と手計算** から作っている`);
 console.log(`  (ほのぼのの福祉用具伝送が手元に無いため)。★ 入手したら突合し直すこと。`);
+// ⚠ 2026-09-05 是正: ng を数えるだけで exit code に反映していなかった (payroll-app 側の
+//   billing-issue-check.mts / payroll-sample-check.mts と同じ穴)。この検査は現に
+//   「ほのぼの書式との差 (NG 1件)」を検出済みなのに、その検知が exit code に出ず check:all
+//   のようなゲートで PASS 扱いになっていた。
+process.exitCode = ng > 0 ? 1 : 0;
