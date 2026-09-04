@@ -3,6 +3,7 @@
 // ContractDocumentsModal/RentalReportModal の両方から参照するため独立させている。
 import type { CSSProperties } from "react";
 import type { OrderItem } from "@/lib/supabase";
+import { halfMonthUnits } from "@/lib/half-month-units";
 
 export const STATUS_LABEL: Record<OrderItem["status"], string> = {
   ordered: "発注済",
@@ -43,8 +44,6 @@ export function calcMonthUnits(item: OrderItem, year: number, month: number, pri
   if (item.status === "cancelled") return 0;
 
   const fullUnits = Math.round(price / 10);
-  const halfUnits = Math.floor(fullUnits / 2);
-  const remUnits  = fullUnits - halfUnits; // ceil(fullUnits / 2)
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const monthStart  = new Date(year, month - 1, 1);
@@ -64,7 +63,7 @@ export function calcMonthUnits(item: OrderItem, year: number, month: number, pri
     //   呼出側で `hasBrokenRentalDates()` を見て警告を出すこと。
     //   実測: order_items 4,669 行中 該当 **0 行** (終了<開始 も 開始日なし も 0)。
     if (item.status === "terminated" && end && end <= monthEnd) {
-      return end <= day15 ? halfUnits : halfUnits + remUnits;
+      return end <= day15 ? halfMonthUnits(fullUnits, true, false) : fullUnits;
     }
     return null; // 翌月以降開始
   }
@@ -74,7 +73,7 @@ export function calcMonthUnits(item: OrderItem, year: number, month: number, pri
   // 下半期（16〜末日）に1日でも利用
   const inLower = (!start || start <= monthEnd) && (!end || end >= day16);
 
-  return (inUpper ? halfUnits : 0) + (inLower ? remUnits : 0);
+  return halfMonthUnits(fullUnits, inUpper, inLower);
 }
 
 /**

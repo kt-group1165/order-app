@@ -11,15 +11,27 @@
  *   16〜末日に 1 日でも貸与 → 半月分
  *   両方にかかる → 満額
  *
- * ── ⚠ 期待値の出どころ ───────────────────────────────────────────────────
+ * ── ⚠ 端数の丸め (2026-09-04 是正: lib/half-month-units.ts に統一) ─────────
  *   「両方にかかれば満額 / 片方なら半月」という **枠組み**は制度どおり。
- *   ★ ただし **端数をどちらの半月に寄せるか**は告示の文言を確認していない。
- *     実装は floor を前半・ceil を後半に割り当てている:
- *       単位 301 → 前半のみ 150 / 後半のみ 151
- *     → **前半だけ借りた人のほうが 1 単位 (10 円) 少ない**。
- *     この非対称は制度由来か実装の都合か **未確認**。ここでは
- *     「実装がこう動く」ことを固定するだけで、**正しさは主張しない**。
- *   ⚠ ほのぼのの福祉用具伝送が手元に無いので突合もできない (3-5)。
+ *   端数 (単位が奇数) をどちらの半月に寄せるかは告示に明記が無い
+ *   (web確認: 老企第36号を引く各自治体Q&A は「半月単位の計算方法で請求
+ *   しても差し支えない」とのみ述べ、端数処理は事業所の運営規程・重要
+ *   事項説明書で定める事項とされている。KT Group の重要事項説明書には
+ *   記載が無い)。
+ *
+ *   以前は `calcMonthUnits` だけ 前半=floor・後半=ceil という**独自の**
+ *   非対称ルールを持ち、`BillingTab.tsx` の `getUnits`/`computeUnitsForMonth`
+ *   (= 実際に国保連へ伝送される計算) は前半・後半とも round という
+ *   **別の実装**だった。同じ事実 (半月按分) を2か所で別々に持っていたため、
+ *   前半のみ×単位が奇数の月だけ 請求書 (旧floor) と伝送 (round) が
+ *   1 単位 (10円) 食い違っていた (規律3-14)。
+ *
+ *   → **`lib/half-month-units.ts` の `halfMonthUnits()` に統一**した
+ *     (前半・後半とも round = 実際に伝送されていた側の挙動)。
+ *   ⚠ 2026-09-04 実測: 実データ (order_items 4,669行) では半月按分が
+ *     一度も発火しておらず (rental_start_date が全件「月の1日」、
+ *     terminated は1件のみでその単位数は偶数だった)。この統一によって
+ *     過去の請求書・伝送の実績値は 1 円も変わらない。
  *
  * DB は読まない (純関数のみ)。
  */
@@ -79,17 +91,33 @@ eq("★ 3,005 円 → 301 単位 (JS の round は 0.5 を切り上げ)", U({ re
 eq("2,995 円 → 300 単位 (299.5 → 300)", U({ rental_price: 2995 }), 300);
 eq("priceOverride が rental_price より優先", U({ rental_price: 3000 }, 5000), 500);
 
-console.log("\n══ ★ 端数の割り当て (単位 301 = 奇数) ══");
-console.log("  ⚠ 告示の文言を確認していない。**実装がこう動く**ことを固定するだけ。");
-eq("前半のみ (12/15 終了) → 150 (floor)",
-  U({ status: "terminated", rental_price: 3005, rental_end_date: "2026-12-15" }), 150);
-eq("★ 後半のみ (12/16 開始) → 151 (ceil)",
+console.log("\n══ 端数の丸め (単位 301 = 奇数。前半・後半とも round に統一済み) ══");
+eq("前半のみ (12/15 終了) → 151 (round。旧実装は floor で 150 だった)",
+  U({ status: "terminated", rental_price: 3005, rental_end_date: "2026-12-15" }), 151);
+eq("後半のみ (12/16 開始) → 151 (round)",
   U({ rental_price: 3005, rental_start_date: "2026-12-16" }), 151);
-eq("前半 + 後半 = 満額 301 (端数が消えない)",
-  (U({ status: "terminated", rental_price: 3005, rental_end_date: "2026-12-15" }) ?? 0) +
-  (U({ rental_price: 3005, rental_start_date: "2026-12-16" }) ?? 0), 301);
-console.log("  ⚠ **前半だけ借りた人のほうが 1 単位 (10 円) 少ない。**");
-console.log("     制度由来か実装の都合かは未確認。告示を確認すること。");
+eq("前半・後半で単位が対称になった (以前は 150 vs 151 で非対称だった)",
+  U({ status: "terminated", rental_price: 3005, rental_end_date: "2026-12-15" }),
+  U({ rental_price: 3005, rental_start_date: "2026-12-16" }));
+
+// ★ 負のコントロール: 丸めを壊したら NG になることを確認してから常設にする。
+//   (「通るだけで何も検証していないテスト」になっていないかの確認。3-9)
+{
+  const before = ng;
+  const savedRound = Math.round;
+  // round を floor に差し替えて、本来 151 になるべき値が 150 に壊れることを確認する。
+  Math.round = Math.floor;
+  const broken = U({ status: "terminated", rental_price: 3005, rental_end_date: "2026-12-15" });
+  Math.round = savedRound;
+  if (broken === 151) {
+    console.log("  ✗✗✗ 負のコントロール失敗: round を floor に壊しても 151 のまま (このテストは丸めを検証できていない)");
+    ng++;
+  } else {
+    console.log(`  ✓ 負のコントロール OK (round を floor に壊すと ${broken} になり、151 との差が検出できる)`);
+  }
+  n++;
+  if (ng !== before + (broken === 151 ? 1 : 0)) { /* 型チェック用の到達不能ガードではなく単なる説明 */ }
+}
 
 console.log("\n══ 月の長さ ══");
 // 2 月 (28 日) でも 15/16 で切る
@@ -106,11 +134,13 @@ console.log("\n══ ⚠ 到達しない分岐 (実装の指摘) ══");
 // status=terminated / start が月末より後 / end が月末以内 → end < start でないと成立しない
 const weird = U({ status: "terminated", rental_start_date: "2027-01-05", rental_end_date: "2026-12-20" });
 eq("★ 開始 > 終了 の壊れたデータでも **満額が出る** (弾かれない)", weird, 300);
-console.log("  ⚠ `calcMonthUnits` の 61-63 行は `start > monthEnd && end <= monthEnd`、");
+console.log("  ⚠ `calcMonthUnits` の該当分岐は `start > monthEnd && end <= monthEnd`、");
 console.log("     つまり **終了日が開始日より前**のときしか通らない。正常データでは到達しない。");
 console.log("     壊れたデータを黙って請求に載せるので、**null を返すか警告を出す**ほうが安全。");
 console.log("     ★ 実データでの該当件数は別途要確認 (この harness は DB を読まない)。");
 
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);
-console.log(`⚠ 「両方にかかれば満額 / 片方なら半月」の枠組みは制度どおりだが、`);
-console.log(`  ★ **端数をどちらの半月に寄せるか**は告示未確認。ほのぼのの福祉用具伝送も手元に無い。`);
+console.log(`「両方にかかれば満額 / 片方なら半月」の枠組みは制度どおり。`);
+console.log(`端数の丸めは lib/half-month-units.ts の halfMonthUnits() に統一済み`);
+console.log(`(実際に伝送されていた round 方式。実データへの影響は 0 円で確認済み)。`);
+if (ng > 0) process.exitCode = 1;

@@ -8,6 +8,7 @@ import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { HW_KANA } from "./search-utils";
 import { calcMonthUnits, hasBrokenRentalDates } from "./order-item-helpers";
+import { halfMonthUnits } from "@/lib/half-month-units";
 import { getAllOrders, getAllOrderItemsByTenant } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
 import { getClients } from "@/lib/clients";
@@ -86,6 +87,7 @@ function MonthlyInfoTab({
   hospitalizations,
   careOffices,
   dataLoading,
+  priceHistory,
 }: {
   tenantId: string;
   currentOfficeId: string | null;
@@ -97,6 +99,7 @@ function MonthlyInfoTab({
   hospitalizations: ClientHospitalization[];
   careOffices: CareOffice[];
   dataLoading: boolean;
+  priceHistory: EquipmentPriceHistory[];
 }) {
   const [billingMonth, setBillingMonth] = useState(() => {
     const d = new Date();
@@ -166,10 +169,13 @@ function MonthlyInfoTab({
         units = unitOverrides.get(item.id)!;
       } else {
         const eq = equipment.find((e) => e.product_code === item.product_code);
-        const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+        // ⚠ 価格改定があれば当月時点の価格を使う (equipment.rental_price は現在価格なので
+        //   過去月を見ているときは食い違いうる)。InvoiceReceiptModal と同じ経路。
+        const price = getPriceForMonth(priceHistory, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+        const base = price ? Math.round(price / 10) : 0;
         const rentalStart = parseLocalDate(item.rental_start_date);
         const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
-        let billingDays = 0, firstHalf = false, secondHalf = false;
+        let firstHalf = false, secondHalf = false;
         for (let d = 1; d <= daysInMonth; d++) {
           const date = new Date(y, m - 1, d);
           if (date < rentalStart || date > rentalEnd) continue;
@@ -179,14 +185,10 @@ function MonthlyInfoTab({
             return date >= admit && date <= discharge;
           });
           if (!inHosp) {
-            billingDays++;
             if (d <= 15) firstHalf = true; else secondHalf = true;
           }
         }
-        if (billingDays === 0) units = 0;
-        else if (firstHalf && !secondHalf) units = Math.round(base / 2);
-        else if (secondHalf && !firstHalf) units = Math.round(base / 2);
-        else units = base;
+        units = halfMonthUnits(base, firstHalf, secondHalf);
       }
       total += units * item.quantity;
     }
@@ -552,12 +554,13 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
   const getUnits = (item: OrderItem, clientId: string) => {
     if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
     const eq = equipment.find((e) => e.product_code === item.product_code);
-    const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    // ⚠ 価格改定があれば当月時点の価格を使う (2026-09-04 是正: 以前は equipment.rental_price
+    //   = 現在価格を直参照しており、価格改定後に過去月ぶんを組むと現在価格で計算されていた)。
+    const price = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+    const base = price ? Math.round(price / 10) : 0;
     // 入院による半月判定
     const [y, m] = billingMonth.split("-").map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
-    const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     const clientHosp = hospitalizations.filter(h => h.client_id === clientId);
     // 貸与期間のうち入院でない日をカウント（タイムゾーン問題を避けるため文字列分割でパース）
@@ -565,7 +568,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
     const rentalStart = item.rental_start_date ? parseLocalDate(item.rental_start_date) : null;
     const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
     if (!rentalStart) return base;
-    let billingDays = 0, firstHalf = false, secondHalf = false;
+    let firstHalf = false, secondHalf = false;
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(y, m - 1, d);
       if (date < rentalStart || date > rentalEnd) continue;
@@ -575,22 +578,19 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         return date >= admit && date <= discharge;
       });
       if (!inHosp) {
-        billingDays++;
         if (d <= 15) firstHalf = true; else secondHalf = true;
       }
     }
-    if (billingDays === 0) return 0;
-    // 前半か後半のみ → 半月分
-    if (firstHalf && !secondHalf) return Math.round(base / 2);
-    if (secondHalf && !firstHalf) return Math.round(base / 2);
-    return base;
+    return halfMonthUnits(base, firstHalf, secondHalf);
   };
 
   // 指定年月(ym="YYYY-MM")での単位数計算 (返戻・過誤の過去月伝送用)。
   // getUnits の billingMonth 依存を外した版。過去月は単位上書きを読まない(未ロードのため)。
   const computeUnitsForMonth = (item: OrderItem, clientId: string, ym: string): number => {
     const eq = equipment.find((e) => e.product_code === item.product_code);
-    const base = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    // ⚠ 過去月 (返戻・過誤の再伝送) を組むので、当時の価格改定を必ず反映する。
+    const price = getPriceForMonth(priceHistoryAll, item.product_code, ym) ?? eq?.rental_price ?? 0;
+    const base = price ? Math.round(price / 10) : 0;
     const [yy, mm] = ym.split("-").map(Number);
     const daysInMonth = new Date(yy, mm, 0).getDate();
     const monthEnd = new Date(yy, mm, 0, 23, 59, 59);
@@ -599,7 +599,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
     const rentalStart = item.rental_start_date ? parseLocalDate(item.rental_start_date) : null;
     const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
     if (!rentalStart) return base;
-    let billingDays = 0, firstHalf = false, secondHalf = false;
+    let firstHalf = false, secondHalf = false;
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(yy, mm - 1, d);
       if (date < rentalStart || date > rentalEnd) continue;
@@ -608,11 +608,9 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
         return date >= admit && date <= discharge;
       });
-      if (!inHosp) { billingDays++; if (d <= 15) firstHalf = true; else secondHalf = true; }
+      if (!inHosp) { if (d <= 15) firstHalf = true; else secondHalf = true; }
     }
-    if (billingDays === 0) return 0;
-    if (firstHalf !== secondHalf) return Math.round(base / 2);
-    return base;
+    return halfMonthUnits(base, firstHalf, secondHalf);
   };
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -1242,6 +1240,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           hospitalizations={hospitalizations}
           careOffices={careOffices}
           dataLoading={dataLoading}
+          priceHistory={priceHistoryAll}
         />
       </div>
     );
