@@ -33,8 +33,12 @@
  *   どちらも `clients.copay_rate` (30 / 20) とは一致し、
  *   **`clients.benefit_rate` の 90 だけが古い**。→ 請求は 90 を使うので過大請求。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+
+const BASELINE = "scripts/benefit-rate-check-baseline.json";
+const UPDATE = process.argv.includes("--update");
 
 const MONTH = process.env.MONTH ?? "2026-06";
 const [Y, M] = MONTH.split("-").map(Number);
@@ -275,3 +279,93 @@ if (yenVsCert !== 0) {
   console.log(`   ★ 直すなら **clients.benefit_rate を認定から導出する**のが本筋`);
   console.log(`     (2 つの列を人が両方正しく保つ運用は必ず破れる)。`);
 }
+
+// =====================================================================
+// 基準値方式 (2026-09-05 / DECISIONS_PENDING.md B-2w)
+//   ★ この検査は今まで process.exit(0) 固定で、誰も気づかないまま
+//   実データの過大請求リスクを検出していた (2026-09-05 に発見)。
+//   「51名で正常」ではない — 「51名という既知の問題があり、原因(A/B)は
+//   user判断待ち。それ以上増えたら落ちる」という形で基準値化する。
+//   (check:ceiling / kyotaku-python と同じ形。0件を目指さない)
+// =====================================================================
+type Bucket = {
+  mismatch: number; zeroNotTandoku: number; odd: number;
+  missing: number; nan: number; vsCert: number; certExpired: number;
+};
+type Baseline = { _readme: string[]; fingerprint: string; asOf: string; month: string; counts: Bucket };
+
+const current: Bucket = {
+  mismatch: buckets.mismatch.length,
+  zeroNotTandoku: buckets.zeroNotTandoku.length,
+  odd: buckets.odd.length,
+  missing: buckets.missing.length,
+  nan: buckets.nan.length,
+  vsCert: buckets.vsCert.length,
+  certExpired: buckets.certExpired.length,
+};
+
+// 指紋: 判定に使った実データ (clients の給付率/負担割合/被保番 + 認定 + 当月アクティブ額) の値ハッシュ。
+const clientById = new Map(clients.map((c) => [c.id, c]));
+const fpRows = [...active.keys()].sort().map((cid) => {
+  const c = clientById.get(cid);
+  const a = active.get(cid)!;
+  const cert = certOf.get(cid);
+  return [
+    cid, c?.benefit_rate ?? null, c?.copay_rate ?? null, c?.insured_number ?? null,
+    a.n, a.yen, cert?.benefit_rate ?? null, cert?.copay_rate ?? null,
+    cert?.certification_start_date ?? null, cert?.certification_end_date ?? null,
+  ];
+});
+const fingerprint = createHash("sha256").update(JSON.stringify(fpRows)).digest("hex").slice(0, 16);
+const today = new Date().toISOString().slice(0, 10);
+
+let baseline: Baseline | null = null;
+if (existsSync(BASELINE)) baseline = JSON.parse(readFileSync(BASELINE, "utf8"));
+
+if (UPDATE || !baseline) {
+  const out: Baseline = {
+    _readme: [
+      "npm run check:benefit-rate (order-app) の基準値。",
+      "",
+      "■ 「51名で正常」ではない (2026-09-05 実測。DECISIONS_PENDING.md B-2w 参照)",
+      "  certExpired (⑦ 対象月に有効な認定が無いのに保険請求) は 51 名・貸与価格計",
+      "  ¥706,170/月 という既知の問題があり、原因が A(本当に認定切れ) か",
+      "  B(取込漏れ) かは user 判断待ち。それ以上増えたら FAIL とする。",
+      "  mismatch(①) / vsCert(⑥) も同様に 2 名・¥10,133/月 という既知の問題として",
+      "  基準値化する (clients.benefit_rate を認定から導出する設計に変えるかは別途判断)。",
+      "",
+      "■ 公費単独 (H) の 11 名は基準値の対象外 (母数から除外済み、正常なパターン)",
+      "",
+      "■ 指紋 (値のハッシュ)",
+      "  当月アクティブな利用者の給付率/負担割合/被保番/認定/貸与額から算出。",
+      "  指紋が変わっているのに件数が同じなら、たまたま入れ替わっている可能性が",
+      "  あるので中身を確認してから --update すること。",
+      "",
+      "■ 0件を目指さない",
+      "  user判断(B-2w)が決まるまでは現状件数のまま。減ったら「改善した」と出す。",
+    ],
+    fingerprint,
+    asOf: today,
+    month: MONTH,
+    counts: current,
+  };
+  writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n", "utf8");
+  console.log(`\n--update: 基準値を書きました (${BASELINE})`);
+  process.exit(0);
+}
+
+const fingerprintMatch = baseline.fingerprint === fingerprint;
+console.log(`\n══ 基準値比較 ══`);
+console.log(`指紋: ${fingerprintMatch ? "一致" : "★ 不一致"}`);
+console.log(`基準値 (${baseline.asOf} / ${baseline.month} 時点): ${JSON.stringify(baseline.counts)}`);
+console.log(`現状値 (${MONTH} 時点):                     ${JSON.stringify(current)}`);
+
+const worse = (Object.keys(current) as (keyof Bucket)[]).some((k) => current[k] > baseline!.counts[k]);
+if (worse) {
+  console.log("\n★ FAIL — 既知の問題より件数が増えた。新しい乖離が出た可能性が高い。中身を確認すること。");
+  process.exit(1);
+}
+const improved = (Object.keys(current) as (keyof Bucket)[]).some((k) => current[k] < baseline!.counts[k]);
+console.log(`\n✓ PASS — 既知の問題 (DECISIONS_PENDING.md B-2w で user 判断待ち) のまま、増えてはいない。`);
+if (improved) console.log("  改善した項目がある。中身を確認したうえで --update で基準値を下げてよい。");
+if (!fingerprintMatch) console.log("  ⚠ 指紋は不一致だが件数は悪化していない。元データを確認のうえ --update してよい。");

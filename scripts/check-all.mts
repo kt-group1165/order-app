@@ -27,14 +27,12 @@ const CHECKS: Check[] = [
   { name: "fukuyogu-densou", script: "check:fukuyogu-densou", why: "福祉用具伝送の仕様書突合 (ほのぼの実出力は未入手)" },
   { name: "densou-builder-diff", script: "check:densou-builder-diff", why: "★ 福祉用具⇔訪問介護の伝送ビルダー クロス突合 (kaigo-app側の実体を呼ぶ)" },
   { name: "invoice-number", script: "check:invoice-number", why: "利用者請求書の保存・採番 (列の突合まで。--executeはしない)" },
+  { name: "benefit-rate", script: "check:benefit-rate", why: "★ 給付率/負担割合の食い違い・認定なし請求 (基準値方式。B-2w=user判断待ちのまま増減だけ見る)", slow: true },
   { name: "ceiling", script: "check:ceiling", why: "上限価格超過の回帰 (実データ + 基準値)", slow: true },
 ];
 
 /** ★ この一覧が見ていないもの。緑でも安心しないための明示 */
 const NOT_COVERED = [
-  "★ benefit-rate-check.mts — 現状 process.exit(0) 固定で常にPASS扱い (exit codeに反映されていない)。" +
-    "2026-06実データで ¥10,133/月 (給付率と負担割合の食い違い) + ¥706,170/月 (認定の裏付け無し請求) を検出済み。" +
-    "gateに入れる前に「どのbucketで落とすか」の設計判断が要るため今回は含めていない (user/リーダー判断待ち)",
   "★ attendance-calc-parity.mts — 3app(kaigo/payroll/order)横断の出勤簿計算突合。" +
     "現状レポート専用でPASS/FAIL閾値が無く exit codeが常に0。2026-06時点で実害は無いと報告済みだが、" +
     "同じ理由でgateには未編入",
