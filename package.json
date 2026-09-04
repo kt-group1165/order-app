@@ -14,6 +14,7 @@
     "check:fukuyogu-densou": "tsx scripts/fukuyogu-densou-check.mts",
     "check:invoice-number": "tsx scripts/invoice-number-check.mts",
     "check:benefit-rate": "tsx scripts/benefit-rate-check.mts",
+    "check:attendance-parity": "tsx scripts/attendance-calc-parity.mts",
     "check:densou-builder-diff": "cd ../kaigo-app && npx tsx scripts/densou-builder-cross-diff.mts",
     "check:all": "tsx scripts/check-all.mts"
   },

@@ -328,3 +328,21 @@ console.log(`  substitute_for_date (代休) あり     ${subRows.length} 行`);
 const unfilled = rows.filter((r) => !r.start_time && !r.end_time && !r.paid_leave_type && !r.substitute_for_date);
 console.log(`  完全未入力の日                      ${unfilled.length} 行`);
 console.log(`  ⚠ この 3 つが実装差の発動条件。file が揃っていれば差は出ない。`);
+
+// ⚠ 2026-09-05 是正: diffs を数えるだけで exit code に反映していなかった (B-2x と同型)。
+// このcheckは「3app(order/kaigo/payroll)のattendance-calc.tsが同じ入力に同じ値を返すか」を
+// 実データで見るもの。基準値は使わない — 期待値は常に「差0」であり、1件でも出たら
+// 3コピーのうちどれかが最近の変更で他と食い違った、という意味になる (常設の回帰ガード)。
+console.log(`\n══ 判定 ══`);
+if (diffs.length > 0) {
+  console.log(`★ FAIL — attendance-calc.ts が 3 アプリで ${diffs.length} 組 食い違った (出勤簿の計算が分かれた)。`);
+  console.log(`  order-app を正本として kaigo-app / payroll-app 側の attendance-calc.ts を揃えること`);
+  console.log(`  (このscriptの ⓪/②-2 の出力で どのfileが・どの条件で 相違しているかが分かる)。`);
+  process.exitCode = 1;
+} else {
+  console.log(`✓ PASS — 3app の attendance-calc.ts は 実データ ${keys.size} 組すべてで同じ値を返した。`);
+  if (!SRC_IDENTICAL) {
+    console.log(`  ⚠ ただし file 自体は同一ではない (⓪ 参照)。今のデータで発動していないだけで、`);
+    console.log(`  差が出る条件 (7日連続勤務の週 / substitute_for_date / 未入力日) が増えると FAIL しうる。`);
+  }
+}

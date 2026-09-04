@@ -28,14 +28,12 @@ const CHECKS: Check[] = [
   { name: "densou-builder-diff", script: "check:densou-builder-diff", why: "★ 福祉用具⇔訪問介護の伝送ビルダー クロス突合 (kaigo-app側の実体を呼ぶ)" },
   { name: "invoice-number", script: "check:invoice-number", why: "利用者請求書の保存・採番 (列の突合まで。--executeはしない)" },
   { name: "benefit-rate", script: "check:benefit-rate", why: "★ 給付率/負担割合の食い違い・認定なし請求 (基準値方式。B-2w=user判断待ちのまま増減だけ見る)", slow: true },
+  { name: "attendance-parity", script: "check:attendance-parity", why: "★ 出勤簿計算 (attendance-calc.ts) が kaigo/payroll/order の3app間で食い違わないか (実データ。期待値は常に差0)", slow: true },
   { name: "ceiling", script: "check:ceiling", why: "上限価格超過の回帰 (実データ + 基準値)", slow: true },
 ];
 
 /** ★ この一覧が見ていないもの。緑でも安心しないための明示 */
 const NOT_COVERED = [
-  "★ attendance-calc-parity.mts — 3app(kaigo/payroll/order)横断の出勤簿計算突合。" +
-    "現状レポート専用でPASS/FAIL閾値が無く exit codeが常に0。2026-06時点で実害は無いと報告済みだが、" +
-    "同じ理由でgateには未編入",
   "福祉用具のTAISコード・貸与期間・半月按分そのものの実出力照合 — ほのぼの福祉用具伝送が未入手",
   "住宅改修 — 請求の実装が存在しない",
   "移動支援 (千葉市) — 伝送に乗らず市へExcel直接請求のため国保連系チェックの対象外",
