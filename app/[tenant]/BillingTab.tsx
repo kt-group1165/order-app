@@ -2696,6 +2696,8 @@ function InvoiceReceiptModal({
   const [yearIssued, setYearIssued] = useState<number | null>(null);
   const [issuedDate, setIssuedDate] = useState<string | null>(null);
   const [loadingExisting, setLoadingExisting] = useState(true);
+  // ★ 読込エラーを画面に出すため。以前は error を捨てていて「未発行」と区別が付かなかった
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [y, m] = targetMonth.split("-").map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
@@ -2800,25 +2802,40 @@ function InvoiceReceiptModal({
     setInvoiceNumber(null);
     setYearIssued(null);
     setIssuedDate(null);
+    setLoadError(null);
     (async () => {
       try {
-        const { data } = await supabase
+        // ⚠ ★ error を捨てていた。PostgREST は列名が違っても **throw しない**ので、
+        //   `const { data }` だけだと catch にも入らず、★ 黙って「未発行」に見える。
+        //   実際 `issued_date` (正: `issue_date`) の誤りで 保存も読込も失敗していたのに、
+        //   この画面には ★ 何も出なかった (2026-09-03 実測。invoices が 0 行だった原因)。
+        const { data, error } = await supabase
           .from("invoices")
-          // ⚠ 列名は `issue_date`。`issued_date` と書いていて **保存も読込も失敗**していた
-          //   (2026-09-03 実測。invoices が 0 行だったのはこれが原因)
           .select("invoice_number, year_issued, issue_date")
           .eq("tenant_id", tenantId)
           .eq("client_id", client.id)
           .eq("billing_month", targetMonth)
           .maybeSingle();
         if (cancelled) return;
+        if (error) {
+          // 42P01 = テーブル未作成。それ以外 (42703 = 列が無い 等) は ★ 握りつぶさない
+          if (error.code === "42P01") {
+            console.warn("invoices テーブルが未作成です (請求書番号の再利用はできません)");
+          } else {
+            console.error("請求書番号の読込に失敗:", error.code, error.message);
+            setLoadError(`請求書番号を読めませんでした: ${error.message}`);
+          }
+          return;
+        }
         if (data) {
           setInvoiceNumber(data.invoice_number as number);
           setYearIssued(data.year_issued as number);
           setIssuedDate((data.issue_date as string | null) ?? null);
         }
-      } catch {
-        // invoices テーブル未作成等は無視
+      } catch (e) {
+        // 通信断など (PostgREST のエラーはここに来ない)
+        console.error("請求書番号の読込で例外:", e);
+        setLoadError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setLoadingExisting(false);
       }
@@ -3012,6 +3029,15 @@ function InvoiceReceiptModal({
             領収書
           </button>
         </div>
+        {loadError && (
+          // ★ 読込に失敗したことを画面に出す。出さないと「未発行」と見分けが付かない
+          <span
+            title={loadError}
+            className="ml-3 truncate rounded border border-amber-400 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800"
+          >
+            ⚠ 既存の請求書番号を読めませんでした
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <button onClick={handleSave} disabled={saving || loadingExisting}
             className="flex items-center gap-1.5 bg-white text-emerald-600 border border-emerald-300 hover:bg-emerald-50 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50">
