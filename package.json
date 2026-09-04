@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:ceiling": "tsx scripts/ceiling-baseline-check.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",

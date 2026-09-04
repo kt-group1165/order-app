@@ -1,0 +1,38 @@
+{
+  "_readme": [
+    "npm run check:ceiling の基準値。",
+    "",
+    "■ ①(入力ミス濃厚) と ②(上限改定への追従漏れ) の違い",
+    "  閾値: 上限の2倍以上を①、それ未満を②とする。",
+    "  2026-09-04 実測: ①は11.5倍・115.3倍の2件、②の最大は1.4倍で、",
+    "  2倍という閾値の前後に実例が無くきれいに割れた。",
+    "",
+    "■ 指紋 (行数ではなく値のハッシュ)",
+    "  equipment_master / equipment_price_ceilings の中身が変わっていないのに",
+    "  件数が悪化したら、上限価格の新しい世代の施行日をカレンダーが跨いだ",
+    "  ことが原因 (=この検査が検出したい現象そのもの)。それでもFAILにして",
+    "  人に見せる。指紋が変わっていれば品目追加・価格変更等でデータが",
+    "  変わっただけなので、中身を読んでから --update する。",
+    "",
+    "■ 0件を目指さない",
+    "  ②は制度上すぐには0にならない。増えたらFAILにするだけで、",
+    "  現状の件数をそのまま基準値にする。"
+  ],
+  "fingerprint": {
+    "equipmentMaster": "c33e7a2ee08add77",
+    "ceilings": "4a1087a0c886d9b1"
+  },
+  "asOf": "2026-09-05",
+  "dataEntryErrors": {
+    "total": 2,
+    "rentedItems": 0,
+    "rentedLines": 0,
+    "monthlyExcessYen": 0
+  },
+  "ceilingDrift": {
+    "total": 267,
+    "rentedItems": 1,
+    "rentedLines": 1,
+    "monthlyExcessYen": 150
+  }
+}
