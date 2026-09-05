@@ -37,6 +37,9 @@ const CHECKS: Check[] = [
   { name: "densou-builder-diff", script: "check:densou-builder-diff", why: "★ 福祉用具⇔訪問介護の伝送ビルダー クロス突合 (kaigo-app側の実体を呼ぶ)",
     kind: "baseline", knownDiff: 3 }, // 公費0円行/番号欠損行の除外差/NFKC (既知・B-2t)
   { name: "invoice-number", script: "check:invoice-number", why: "利用者請求書の保存・採番 (列の突合まで。--executeはしない)" },
+  // ★ 2026-09-05 新設 (B-6d)。★ テーブル未適用の間は 基準値比較をスキップして exit 0 になる。
+  //   ★ 「合格」ではなく「まだ測れていない」なので 出力本文を読むこと。
+  { name: "keido-exception", script: "check:keido-exception", why: "★ 軽度者(要支援1・2/要介護1)への原則対象外品目 — 例外給付の記録なし件数 (基準値120件)" },
   { name: "benefit-rate", script: "check:benefit-rate", why: "★ 給付率/負担割合の食い違い・認定なし請求 (基準値方式。B-2w=user判断待ちのまま増減だけ見る)", slow: true,
     kind: "baseline" }, // 件数がREADME内で複数指標(51/2/2名)に分かれるため合計には含めない
   { name: "attendance-parity", script: "check:attendance-parity", why: "★ 出勤簿計算 (attendance-calc.ts) が kaigo/payroll/order の3app間で食い違わないか (実データ。期待値は常に差0)", slow: true },
