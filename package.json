@@ -16,6 +16,9 @@
     "check:benefit-rate": "tsx scripts/benefit-rate-check.mts",
     "check:attendance-parity": "tsx scripts/attendance-calc-parity.mts",
     "check:densou-builder-diff": "cd ../kaigo-app && npx tsx scripts/densou-builder-cross-diff.mts",
+    "check:careplan-jisseki": "tsx scripts/careplan-jisseki-verify.mts",
+    "check:ceiling-all": "tsx scripts/ceiling-check.mts",
+    "check:pnl-half-month": "tsx scripts/pnl-half-month-rounding-check.mts",
     "check:all": "tsx scripts/check-all.mts"
   },
   "dependencies": {
