@@ -1,0 +1,26 @@
+{
+  "_readme": [
+    "npm run check:order-items-integrity の基準値。",
+    "",
+    "■ なぜ0件が基準値か",
+    "  この5種はいずれも「業務として起こり得ない」壊れたデータ (2026-09-05 実測で",
+    "  全項目0件、②は元々1件あったが status='ordered'(納品前) の正常な null なので",
+    "  対象から除外している)。B-6g (国保連請求と利用者請求書で別の値になる) の",
+    "  温床になるため、増えたら即座に気づけるようにする。",
+    "",
+    "■ 他のfukuyogu-*系チェックとの違い",
+    "  fukuyogu-coverage-check/fukuyogu-keido-exception-checkは「0を目指さない」",
+    "  (現実のデータが自然にそうなっているものを測るだけ)。★ このチェックは逆に",
+    "  0を維持するのが目的の検査。1件でも増えたらFAIL。",
+    "",
+    "■ 更新のしかた",
+    "  npx tsx scripts/order-items-integrity-check.mts -- --update",
+    "  ★ 0件以外の値で--updateする前に、本当に正常な状態か確認すること",
+    "  (焼き付けると以後同じ件数までの悪化に気づけなくなる)。"
+  ],
+  "reversed": 0,
+  "nullStartWhenStarted": 0,
+  "farFutureStart": 0,
+  "zeroOrNullPrice": 0,
+  "zeroOrNegativeQty": 0
+}
