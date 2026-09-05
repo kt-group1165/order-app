@@ -19,6 +19,8 @@
     "check:careplan-jisseki": "tsx scripts/careplan-jisseki-verify.mts",
     "check:ceiling-all": "tsx scripts/ceiling-check.mts",
     "check:pnl-half-month": "tsx scripts/pnl-half-month-rounding-check.mts",
+    "check:fukuyogu-coverage": "tsx scripts/fukuyogu-coverage-check.mts",
+    "check:keido-exception": "tsx scripts/fukuyogu-keido-exception-check.mts",
     "check:all": "tsx scripts/check-all.mts"
   },
   "dependencies": {

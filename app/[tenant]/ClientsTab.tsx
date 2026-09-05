@@ -2676,7 +2676,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi">(initialViewMode === "insurance" ? "insurance" : "usage");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "keido">(initialViewMode === "insurance" ? "insurance" : "usage");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
@@ -2869,6 +2869,19 @@ function ClientDetail({
     application_type: null, outpatient_copay: null, special_type: null, inpatient_copay: null,
   });
 
+  // 福祉用具 軽度者 例外給付記録 (B-6d・2026-09-05)
+  const [keidoGrants, setKeidoGrants] = useState<import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant[]>([]);
+  const [keidoTableMissing, setKeidoTableMissing] = useState(false);
+  const [selectedGrantId, setSelectedGrantId] = useState<string | null>(null);
+  const [grantForm, setGrantForm] = useState<Omit<import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant, "id" | "tenant_id" | "client_id" | "created_at" | "updated_at"> | null>(null);
+  const [editingGrantId, setEditingGrantId] = useState<string | null>(null);
+  const [grantSaving, setGrantSaving] = useState(false);
+  const emptyGrantForm = () => ({
+    restriction_group: "車いす系", judgment_route: null,
+    doctor_opinion_date: null, meeting_confirmed_date: null, insurer_confirmed_date: null,
+    valid_from: new Date().toISOString().slice(0, 10), valid_end: null, notes: null,
+  });
+
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
@@ -2960,16 +2973,27 @@ function ClientDetail({
     setLoading(true);
     try {
       // 第1バッチ：全て並列
-      const [{ data: ordersData }, insurResult, rentalResult, peResult, docs] = await Promise.all([
+      const [{ data: ordersData }, insurResult, rentalResult, peResult, grantResult, docs] = await Promise.all([
         supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
         supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("effective_date", { ascending: false }),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("start_date", { ascending: false }),
         supabase.from("client_public_expenses").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("valid_start", { ascending: false }),
+        supabase.from("fukuyogu_exception_grants").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("valid_from", { ascending: false }),
         getClientDocuments(tenantId, client.id),
       ]);
       setInsuranceRecords((insurResult.data ?? []) as ClientInsuranceRecord[]);
       setRentalHistoryRecords((rentalResult.data ?? []) as ClientRentalHistory[]);
       if (!peResult.error) setPublicExpenses((peResult.data ?? []) as import("@/lib/supabase").ClientPublicExpense[]);
+      // ⚠ migrations/fukuyogu_exception_grants.sql 未適用の間は 42P01 (table不在) になる。
+      //   その場合はタブ自体に「テーブル未作成」の案内を出す (握りつぶさない)。
+      if (grantResult.error) {
+        const missing = grantResult.error.code === "42P01" || grantResult.error.code === "PGRST205";
+        setKeidoTableMissing(missing);
+        if (!missing) console.error("例外給付記録の取得失敗:", grantResult.error.message);
+      } else {
+        setKeidoTableMissing(false);
+        setKeidoGrants((grantResult.data ?? []) as import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant[]);
+      }
       setDocuments(docs);
       if (ordersData && ordersData.length > 0) {
         const orderIds = ordersData.map((o: { id: string; payment_type: string }) => o.id);
@@ -3445,7 +3469,7 @@ function ClientDetail({
 
       {/* トップタブ */}
       <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
-        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"]] as [typeof topTab, string][]).map(([t, label]) => (
+        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"],["keido","福祉用具 例外給付"]] as [typeof topTab, string][]).map(([t, label]) => (
           <button key={t} onClick={() => setTopTab(t)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
             {label}
@@ -4847,6 +4871,234 @@ function ClientDetail({
               {pf === null && sel === null && (
                 <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
                   「＋ 新規」から公費情報を登録してください
+                </div>
+              )}
+            </div>
+          );
+        })()
+      ) : topTab === "keido" ? (
+        /* 福祉用具 軽度者 例外給付タブ (B-6d・2026-09-05) */
+        (() => {
+          const RESTRICTION_GROUPS = ["車いす系", "特殊寝台系", "床ずれ防止用具", "体位変換器", "徘徊感知機器", "移動用リフト", "自動排泄処理装置"];
+          const JUDGMENT_ROUTES = ["医師意見書", "サービス担当者会議等", "その他"];
+          const sel = keidoGrants.find(r => r.id === selectedGrantId) ?? null;
+          const gf = grantForm;
+          const sgf = <K extends keyof NonNullable<typeof gf>>(k: K, v: NonNullable<typeof gf>[K]) =>
+            setGrantForm(f => f ? { ...f, [k]: v } : f);
+
+          const saveNew = async () => {
+            if (!gf) return;
+            setGrantSaving(true);
+            const { data, error } = await supabase.from("fukuyogu_exception_grants").insert({
+              tenant_id: tenantId, client_id: client.id, ...gf,
+            }).select().single();
+            setGrantSaving(false);
+            if (error) { alert(`例外給付記録の保存に失敗しました: ${error.message}`); return; }
+            if (data) {
+              setKeidoGrants(prev => [data as import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant, ...prev]);
+              setSelectedGrantId(data.id);
+              setGrantForm(null);
+              setEditingGrantId(null);
+            }
+          };
+          const saveEdit = async () => {
+            if (!gf || !editingGrantId) return;
+            setGrantSaving(true);
+            const { error } = await supabase.from("fukuyogu_exception_grants").update(gf).eq("id", editingGrantId);
+            setGrantSaving(false);
+            if (error) { alert(`例外給付記録の保存に失敗しました: ${error.message}`); return; }
+            setKeidoGrants(prev => prev.map(r => r.id === editingGrantId ? { ...r, ...gf } : r));
+            setEditingGrantId(null);
+            setGrantForm(null);
+          };
+          const startEdit = (rec: import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant) => {
+            setSelectedGrantId(rec.id);
+            setEditingGrantId(rec.id);
+            setGrantForm({
+              restriction_group: rec.restriction_group, judgment_route: rec.judgment_route,
+              doctor_opinion_date: rec.doctor_opinion_date, meeting_confirmed_date: rec.meeting_confirmed_date,
+              insurer_confirmed_date: rec.insurer_confirmed_date,
+              valid_from: rec.valid_from, valid_end: rec.valid_end, notes: rec.notes,
+            });
+          };
+          const deleteRec = async (id: string) => {
+            if (!confirm("この例外給付記録を削除しますか？")) return;
+            const { error } = await supabase.from("fukuyogu_exception_grants").delete().eq("id", id);
+            if (error) { alert(`削除に失敗しました: ${error.message}`); return; }
+            setKeidoGrants(prev => prev.filter(r => r.id !== id));
+            if (selectedGrantId === id) { setSelectedGrantId(null); setGrantForm(null); setEditingGrantId(null); }
+          };
+
+          if (keidoTableMissing) {
+            return (
+              <div className="flex-1 flex items-center justify-center text-sm text-gray-400 px-4 text-center">
+                このテーブルはまだ作成されていません (migrations/fukuyogu_exception_grants.sql 未適用)。<br />
+                適用後にこのタブが使えるようになります。
+              </div>
+            );
+          }
+
+          return (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="mx-4 mt-3 mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                ⚠ このタブは「軽度者(要支援1・2/要介護1)への原則対象外品目」の例外給付を<b>記録するだけ</b>の場所です。
+                <b>記録が無い = 例外給付を取っていない、ではありません。</b>現場で例外給付を受けている場合は、その内容をここに記録してください。
+                自動排泄処理装置は判定を保留しています(要介護4・5のみ対象という別ルールがあり、当システムでは型を区別できないため)。
+              </div>
+              {/* 一覧テーブル */}
+              <div className="shrink-0 mx-4 mb-3 border border-gray-200 rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <span className="text-xs font-semibold text-gray-700">例外給付 記録一覧</span>
+                  <button
+                    onClick={() => { setSelectedGrantId(null); setEditingGrantId(null); setGrantForm(emptyGrantForm()); }}
+                    className="text-xs text-white bg-emerald-500 px-3 py-1 rounded-lg hover:bg-emerald-600"
+                  >＋ 新規</button>
+                </div>
+                <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                  <table className="w-full text-xs min-w-[700px]">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                      <tr>
+                        {["対象品目区分", "判定経路", "有効期間開始", "有効期間終了", ""].map(h => (
+                          <th key={h} className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {keidoGrants.length === 0 ? (
+                        <tr><td colSpan={5} className="px-3 py-4 text-center text-gray-400">記録がありません</td></tr>
+                      ) : keidoGrants.map(rec => {
+                        const isSelected = rec.id === selectedGrantId;
+                        return (
+                          <tr key={rec.id}
+                            onClick={() => { setSelectedGrantId(rec.id); if (editingGrantId !== rec.id) { setEditingGrantId(null); setGrantForm(null); } }}
+                            className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                          >
+                            <td className="px-3 py-2 font-medium text-gray-800">{rec.restriction_group}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.judgment_route ?? "—"}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.valid_from}</td>
+                            <td className="px-3 py-2 text-gray-600">{rec.valid_end ?? "(期限なし)"}</td>
+                            <td className="px-3 py-2 flex gap-1.5 justify-end">
+                              <button onClick={e => { e.stopPropagation(); startEdit(rec); }}
+                                className="text-xs text-blue-600 border border-blue-200 px-2 py-0.5 rounded hover:bg-blue-50">編集</button>
+                              <button onClick={e => { e.stopPropagation(); deleteRec(rec.id); }}
+                                className="text-xs text-red-400 border border-red-200 px-2 py-0.5 rounded hover:bg-red-50">削除</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 入力フォーム */}
+              {gf !== null && (
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-sm font-semibold text-gray-700">
+                        {editingGrantId ? "例外給付記録 編集" : "例外給付記録 新規登録"}
+                      </h3>
+                      <div className="flex gap-2">
+                        <button onClick={() => { setGrantForm(null); setEditingGrantId(null); }}
+                          className="text-xs text-gray-500 border border-gray-200 px-3 py-1 rounded-lg">キャンセル</button>
+                        <button onClick={editingGrantId ? saveEdit : saveNew} disabled={grantSaving}
+                          className="text-xs text-white bg-blue-500 px-3 py-1 rounded-lg disabled:opacity-50">
+                          {grantSaving ? "保存中…" : "保存"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 対象品目区分</label>
+                        <select value={gf.restriction_group} onChange={e => sgf("restriction_group", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          {RESTRICTION_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">判定経路</label>
+                        <select value={gf.judgment_route ?? ""} onChange={e => sgf("judgment_route", (e.target.value || null) as typeof gf.judgment_route)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white">
+                          <option value=""></option>
+                          {JUDGMENT_ROUTES.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">医師意見書取得日</label>
+                        <input type="date" value={gf.doctor_opinion_date ?? ""} onChange={e => sgf("doctor_opinion_date", e.target.value || null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">サービス担当者会議等 確認日</label>
+                        <input type="date" value={gf.meeting_confirmed_date ?? ""} onChange={e => sgf("meeting_confirmed_date", e.target.value || null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">保険者確認・届出日</label>
+                        <input type="date" value={gf.insurer_confirmed_date ?? ""} onChange={e => sgf("insurer_confirmed_date", e.target.value || null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 有効期間 開始</label>
+                        <input type="date" value={gf.valid_from} onChange={e => sgf("valid_from", e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500">有効期間 終了 (空欄 = 期限なし)</label>
+                        <input type="date" value={gf.valid_end ?? ""} onChange={e => sgf("valid_end", e.target.value || null)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-500">備考</label>
+                      <textarea value={gf.notes ?? ""} onChange={e => sgf("notes", e.target.value || null)} rows={2}
+                        className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {gf === null && sel !== null && (
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                  <div className="bg-white border border-gray-200 rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-gray-700">例外給付記録 詳細</h3>
+                      <button onClick={() => startEdit(sel)}
+                        className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50">編集</button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      {[
+                        ["対象品目区分", sel.restriction_group],
+                        ["判定経路", sel.judgment_route ?? "—"],
+                        ["医師意見書取得日", sel.doctor_opinion_date ?? "—"],
+                        ["サービス担当者会議等 確認日", sel.meeting_confirmed_date ?? "—"],
+                        ["保険者確認・届出日", sel.insurer_confirmed_date ?? "—"],
+                        ["有効期間 開始", sel.valid_from],
+                        ["有効期間 終了", sel.valid_end ?? "(期限なし)"],
+                        ["備考", sel.notes ?? "—"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="space-y-0.5">
+                          <div className="text-[11px] text-gray-500">{label}</div>
+                          <div className="text-sm text-gray-800 font-medium">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {gf === null && sel === null && (
+                <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+                  「＋ 新規」から例外給付記録を登録してください
                 </div>
               )}
             </div>

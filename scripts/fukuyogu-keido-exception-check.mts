@@ -1,9 +1,16 @@
 /**
  * 福祉用具貸与 — 軽度者(要支援1・2/要介護1)への原則対象外品目 の請求規模を測る
- * (READ ONLY・DB書換なし・断定しない・H割当)
+ * (READ ONLY・DB書換なし・断定しない・H割当・B-6d)
  *
  *   npx tsx scripts/fukuyogu-keido-exception-check.mts
  *   MONTH=2026-06 npx tsx scripts/fukuyogu-keido-exception-check.mts
+ *   npx tsx scripts/fukuyogu-keido-exception-check.mts -- --update   基準値の更新
+ *
+ * ⚠⚠⚠ 告示の条件は未確認 (2026-09-05 時点) ⚠⚠⚠
+ *   下記の対象6区分・除外ロジックは、G が一般的な福祉用具貸与の軽度者原則対象外
+ *   ルールから整理したもので、★ 告示・通知の条文原文までは確認していない。
+ *   user が確認したら、この注記と migrations/fukuyogu_exception_grants.sql /
+ *   app/[tenant]/order-item-helpers.ts の同趣旨コメントを消すこと。
  *
  * ── 背景 ─────────────────────────────────────────────────────────────────
  *   fukuyogu-coverage-check.mts の調査で判明: order-app の請求計算 (BillingTab.tsx
@@ -11,18 +18,32 @@
  *   ★ 「軽度者は原則対象外」の品目制限を一切判定していない (grep 0件)。
  *
  *   制度上、要支援1・2/要介護1 は以下 6 品目が原則給付対象外
- *   (例外給付は医師の意見書 + 保険者の確認が要る):
+ *   (例外給付は医師の意見書 or サービス担当者会議等での確認が要る):
  *     車いす・車椅子付属品 / 特殊寝台・特殊寝台付属品 / 床ずれ防止用具 /
  *     体位変換器 / 認知症老人徘徊感知機器(徘徊感知機器) / 移動用リフト
+ *
+ *   ⚠ 自動排泄処理装置は上記6区分と別ロジック (要介護4・5のみ対象、かつ
+ *     「尿のみ吸引」型は要介護度不問という更なる例外がある)。区別する列が
+ *     equipment_master に無いため、★ この検査は自動排泄処理装置の判定を保留する
+ *     (対象に含めない)。詳細は order-item-helpers.ts の同趣旨コメント参照。
  *
  * ⚠ この検査は「対象外なのに請求している」と断定しない。例外給付が正当に
  *   認められているケースは実際に多い。出すのは「区別できていない件数と金額」。
  * ⚠ 直さない。測るだけ。実装は user 判断のあと。
+ *
+ * ── 基準値方式 (2026-09-05 導入) ────────────────────────────────────────
+ *   fukuyogu_exception_grants (migrations/fukuyogu_exception_grants.sql) に
+ *   記録があれば「区別できた」件数から除外する。user の入力が進むほど
+ *   「未記録」件数は減っていく想定。★ 0 を目指す検査にはしない (H指示) —
+ *   減っても増えなければ何も言わず、増えたら (=新しい未記録の請求が発生したら)
+ *   落ちる形にする。テーブル未適用の間は基準値比較をスキップする。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+
+const UPDATE = process.argv.includes("--update");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const env: Record<string, string> = {};
@@ -118,7 +139,31 @@ const RESTRICTED_CATEGORIES = new Set([
   "移動用リフト",
 ]);
 
-type Hit = { clientName: string; careLevel: string; category: string; productCode: string; units: number; amountApprox: number; hasReasonText: boolean };
+// カテゴリ → 例外給付の単位となる区分 (order-item-helpers.ts の RESTRICTION_GROUP_OF_CATEGORY と揃える)
+const RESTRICTION_GROUP_OF_CATEGORY: Record<string, string> = {
+  "車いす": "車いす系", "車椅子": "車いす系", "車いす付属品": "車いす系", "車椅子付属品": "車いす系",
+  "特殊寝台": "特殊寝台系", "特殊寝台付属品": "特殊寝台系",
+  "床ずれ防止用具": "床ずれ防止用具",
+  "体位変換器": "体位変換器",
+  "徘徊感知機器": "徘徊感知機器", "認知症老人徘徊感知機器": "徘徊感知機器",
+  "移動用リフト": "移動用リフト",
+};
+
+type GrantRow = { client_id: string; restriction_group: string; valid_from: string; valid_end: string | null };
+let grants: GrantRow[] = [];
+let grantsTableAvailable = true;
+try {
+  grants = await pageAll<GrantRow>("fukuyogu_exception_grants", "client_id, restriction_group, valid_from, valid_end");
+} catch (e) {
+  const code = (e as { code?: string })?.code;
+  if (code === "42P01" || code === "PGRST205") grantsTableAvailable = false;
+  else throw e;
+}
+const onDate = `${MONTH}-01`;
+const hasActiveGrant = (clientId: string, group: string) =>
+  grants.some((g) => g.client_id === clientId && g.restriction_group === group && g.valid_from <= onDate && (g.valid_end == null || g.valid_end >= onDate));
+
+type Hit = { clientName: string; careLevel: string; category: string; productCode: string; units: number; amountApprox: number; hasReasonText: boolean; covered: boolean };
 const hits: Hit[] = [];
 for (const item of activeRentals) {
   const clientId = orderById.get(item.order_id)?.client_id;
@@ -131,6 +176,8 @@ for (const item of activeRentals) {
   //   fukuyogu-coverage-check.mts で判明の通り、実データは月途中開始/終了が無いため概算で十分。
   const amountApprox = (eq?.rental_price ?? 0) * item.quantity;
   const hasReasonText = !!((eq?.selection_reason ?? "").trim() || (eq?.proposal_reason ?? "").trim());
+  const group = RESTRICTION_GROUP_OF_CATEGORY[cat];
+  const covered = grantsTableAvailable && !!group && hasActiveGrant(clientId, group);
   hits.push({
     clientName: client.name,
     careLevel: (client.care_level ?? "").normalize("NFKC"),
@@ -139,19 +186,29 @@ for (const item of activeRentals) {
     units: eq?.rental_price ? Math.round(eq.rental_price / 10) * item.quantity : 0,
     amountApprox,
     hasReasonText,
+    covered,
   });
 }
+const uncovered = hits.filter((h) => !h.covered);
 
 console.log(`\n【分母③】軽度者 × 原則対象外6品目 に該当する行: ${hits.length} 件`);
-const totalAmount = hits.reduce((s, h) => s + h.amountApprox, 0);
-const totalUnits = hits.reduce((s, h) => s + h.units, 0);
+if (grantsTableAvailable) {
+  console.log(`  うち fukuyogu_exception_grants に有効な記録あり(=区別できた): ${hits.length - uncovered.length} 件`);
+  console.log(`  ★ 記録なし(=区別できていない): ${uncovered.length} 件`);
+} else {
+  console.log(`  ⚠ fukuyogu_exception_grants は未作成 (migrations/fukuyogu_exception_grants.sql 未適用)。`);
+  console.log(`    全件を「記録なし」扱いとする。`);
+}
+const targetSet = grantsTableAvailable ? uncovered : hits;
+const totalAmount = targetSet.reduce((s, h) => s + h.amountApprox, 0);
+const totalUnits = targetSet.reduce((s, h) => s + h.units, 0);
 const byCat = new Map<string, { count: number; amount: number }>();
-for (const h of hits) {
+for (const h of targetSet) {
   const e = byCat.get(h.category) ?? { count: 0, amount: 0 };
   e.count++; e.amount += h.amountApprox;
   byCat.set(h.category, e);
 }
-console.log("品目別内訳:");
+console.log(`\n品目別内訳 (${grantsTableAvailable ? "記録なしのみ" : "全件"}):`);
 for (const [cat, v] of [...byCat.entries()].sort((a, b) => b[1].amount - a[1].amount)) {
   console.log(`  ${cat.padEnd(14)} ${String(v.count).padStart(3)} 件   概算費用合計 ¥${v.amount.toLocaleString()}`);
 }
@@ -169,17 +226,53 @@ console.log(`  → 利用者ごと・レンタルごとに例外給付の可否�
 console.log(`    grep でも schema (OpenAPI) 検索でも見つからなかった。`);
 console.log(`    ★ 結論: 例外給付か原則対象外への誤請求かを、システム上のデータからは区別できない。`);
 
-console.log(`\n══ ④ 金額規模 (概算・自己負担/給付率按分前の費用総額ベース) ══`);
-console.log(`軽度者${keidoClientIds.size}名のうち、原則対象外6品目を借りている行 ${hits.length} 件`);
+console.log(`\n══ ④ 金額規模 (概算・自己負担/給付率按分前の費用総額ベース・${grantsTableAvailable ? "記録なし分のみ" : "全件"}) ══`);
+console.log(`軽度者${keidoClientIds.size}名のうち、原則対象外6品目を借りていて記録が無い行 ${targetSet.length} 件`);
 console.log(`概算単位数合計: ${totalUnits.toLocaleString()} 単位 / 概算費用合計 (10割ベース): ¥${totalAmount.toLocaleString()}/月`);
 console.log(`→ 保険給付分(概ね7-9割)としては 月 ¥${Math.round(totalAmount * 0.9).toLocaleString()}〜¥${Math.round(totalAmount * 0.7).toLocaleString()} の範囲`);
 console.log(`\n★ 繰り返し: 「区別できていない」金額であり、「誤請求が確定した」金額ではない。`);
-console.log(`  例外給付が正当なケースがどれだけ含まれるかは、このデータからは判定不能。`);
+console.log(`  例外給付が正当なケースがどれだけ含まれるかは、記録が無い限りこのデータからは判定不能。`);
 
-if (hits.length > 0) {
-  console.log(`\n── 該当行の明細 (先頭20件) ──`);
-  for (const h of hits.slice(0, 20)) {
+if (targetSet.length > 0) {
+  console.log(`\n── 記録なしの明細 (先頭20件) ──`);
+  for (const h of targetSet.slice(0, 20)) {
     console.log(`  ${h.clientName.padEnd(10)} ${h.careLevel.padEnd(6)} ${h.category.padEnd(10)} ${h.productCode}  ¥${h.amountApprox.toLocaleString()}`);
   }
-  if (hits.length > 20) console.log(`  …他 ${hits.length - 20} 件`);
+  if (targetSet.length > 20) console.log(`  …他 ${targetSet.length - 20} 件`);
+}
+
+// ── 基準値方式 (0を目指さない。増えたら落ちる/減っても何も言わない) ──
+type Baseline = { _readme?: string[]; uncoveredCount: number; totalAmountApprox: number };
+const baselinePath = join(__dirname, "fukuyogu-keido-exception-baseline.json");
+if (!grantsTableAvailable) {
+  console.log(`\n⚠ 基準値比較はスキップ (fukuyogu_exception_grants 未作成)。`);
+} else if (UPDATE) {
+  const prevReadme = existsSync(baselinePath)
+    ? (JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline)._readme
+    : undefined;
+  const baseline: Baseline = {
+    _readme: prevReadme ?? [
+      "npm run check:keido-exception の基準値。詳細は初回作成時のcommitメッセージ・DECISIONS_PENDING B-6dを参照。",
+      "0を目指さない: 増えたらFAIL、減っても何も言わない (user の入力が進むほど減る想定)。",
+    ],
+    uncoveredCount: uncovered.length,
+    totalAmountApprox: totalAmount,
+  };
+  writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+  console.log(`\n★ 基準値を更新しました: ${baselinePath}`);
+} else if (existsSync(baselinePath)) {
+  const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline;
+  console.log(`\n══ 基準値比較 ══`);
+  console.log(`記録なし件数: 基準値 ${baseline.uncoveredCount} → 実測 ${uncovered.length}`);
+  if (uncovered.length > baseline.uncoveredCount) {
+    console.log(`❌ FAIL — 記録なし件数が基準値より増えました (+${uncovered.length - baseline.uncoveredCount})。`);
+    console.log(`   新しく軽度者×原則対象外品目の請求が発生したのに記録が無い可能性があります。`);
+    process.exitCode = 1;
+  } else if (uncovered.length < baseline.uncoveredCount) {
+    console.log(`✅ 記録なし件数が減りました (${baseline.uncoveredCount} → ${uncovered.length})。基準値の更新は任意 (-- --update)。`);
+  } else {
+    console.log(`✅ 変化なし。`);
+  }
+} else {
+  console.log(`\n⚠ 基準値ファイルが無いので、初回として保存します: node --run ... -- --update`);
 }

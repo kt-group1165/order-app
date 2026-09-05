@@ -1,0 +1,25 @@
+{
+  "_readme": [
+    "npm run check:keido-exception (仮称) の基準値。",
+    "",
+    "■ なぜ120件か",
+    "  2026-09-05 に 2026-06 実データで測定した「軽度者(要支援1・2/要介護1)が",
+    "  車いす・特殊寝台等の原則対象外6品目を借りていて、かつ",
+    "  fukuyogu_exception_grants に有効な記録が無い」件数。",
+    "  ★ 測定した時点では fukuyogu_exception_grants テーブル自体が未作成",
+    "  だったため、120件は「テーブルが無いので全件が記録なし扱い」の値と",
+    "  完全に一致する (=最初の基準値として妥当)。",
+    "",
+    "■ 0を目指さない",
+    "  このテーブルは現場が例外給付の実態を入力する場所であり、",
+    "  入力が追いつくまでは0にならない。増えたら (=新しい軽度者×対象外品目の",
+    "  請求が発生したのに記録が無い) FAIL、減っても (=入力が進んだ) 何も言わない。",
+    "",
+    "■ 更新のしかた",
+    "  migrations/fukuyogu_exception_grants.sql 適用後、",
+    "  npx tsx scripts/fukuyogu-keido-exception-check.mts -- --update",
+    "  で実測値に更新する (テーブル未適用の間は --update しても書き換わらない)。"
+  ],
+  "uncoveredCount": 120,
+  "totalAmountApprox": 716950
+}

@@ -7,7 +7,8 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPrice
 import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { HW_KANA } from "./search-utils";
-import { calcMonthUnits, hasBrokenRentalDates } from "./order-item-helpers";
+import { calcMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
+import { getExceptionGrants, hasActiveGrant, isTableMissingError } from "@/lib/fukuyoguExceptions";
 import { halfMonthUnits } from "@/lib/half-month-units";
 import { getAllOrders, getAllOrderItemsByTenant } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
@@ -728,6 +729,21 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       }
     }
 
+    // 軽度者(要支援1・2/要介護1) 原則対象外品目の例外給付記録を取得 (B-6d・2026-09-05)
+    // ⚠ migrations/fukuyogu_exception_grants.sql が未適用の間はテーブルが無いので、
+    //   その場合はこの警告そのものをスキップする (伝送生成自体は止めない)。
+    let exceptionGrants: Awaited<ReturnType<typeof getExceptionGrants>> = [];
+    let exceptionCheckAvailable = true;
+    try {
+      exceptionGrants = await getExceptionGrants(tenantId, billingGroups.map((g) => g.client.id));
+    } catch (e) {
+      if (isTableMissingError(e as { code?: string })) {
+        exceptionCheckAvailable = false;
+      } else {
+        console.error("例外給付記録の取得失敗:", e);
+      }
+    }
+
     // 明細行 → 利用者ごとの請求行を組む
     const rows: FukuyoguSeikyuRow[] = [];
     const preWarnings: string[] = [];
@@ -745,6 +761,18 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         //   実測 (2026-09-03): 4,669 行中 該当 0 行。
         if (hasBrokenRentalDates(item)) {
           preWarnings.push(`${client.name}: ${eq?.name ?? item.product_code} の貸与期間が逆転しています (${item.rental_start_date} 〜 ${item.rental_end_date}) — 満額で請求に載ります`);
+        }
+        // 軽度者 原則対象外品目 × 例外給付記録なし の警告 (B-6d)。
+        // ⚠ 断定はしない。「例外給付を取っていない」ではなく「記録が無い」だけを示す。
+        if (exceptionCheckAvailable && isKeidoRestricted(client.care_level, eq?.category)) {
+          const group = RESTRICTION_GROUP_OF_CATEGORY[eq?.category ?? ""];
+          const onDate = `${billingMonth}-01`;
+          if (!hasActiveGrant(exceptionGrants, client.id, group, onDate)) {
+            preWarnings.push(
+              `${client.name}(${client.care_level}): ${eq?.name ?? item.product_code} は軽度者の原則対象外品目ですが、例外給付の記録がありません — ` +
+              `記録が無いだけの可能性があります。実際に例外給付を受けているか確認し、利用者タブから記録してください`,
+            );
+          }
         }
         const code = fukuyoguServiceCode(eq?.category);
         if (!code) {
@@ -1021,6 +1049,16 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
     }
     const allWarnings: string[] = [];
     let fileCount = 0;
+    // 軽度者 原則対象外品目 × 例外給付記録なし の警告 (B-6d)。generateTransferData と同じロジック。
+    let exceptionGrants: Awaited<ReturnType<typeof getExceptionGrants>> = [];
+    let exceptionCheckAvailable = true;
+    try {
+      const allClientIds = [...new Set(rebillByMonth.flatMap(([, entries]) => entries.map((e) => e.client.id)))];
+      exceptionGrants = await getExceptionGrants(tenantId, allClientIds);
+    } catch (e) {
+      if (isTableMissingError(e as { code?: string })) exceptionCheckAvailable = false;
+      else console.error("例外給付記録の取得失敗:", e);
+    }
     for (const [ym, entries] of rebillByMonth) {
       const [yy, mm] = ym.split("-").map(Number);
       // 公費 (当該月有効分)
@@ -1056,6 +1094,14 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           const count = item.quantity;
           const units = unitPer * count;
           if (units <= 0) continue;
+          if (exceptionCheckAvailable && isKeidoRestricted(client.care_level, eq?.category)) {
+            const group = RESTRICTION_GROUP_OF_CATEGORY[eq?.category ?? ""];
+            if (!hasActiveGrant(exceptionGrants, client.id, group, `${ym}-01`)) {
+              allWarnings.push(
+                `[${ym}] ${client.name}(${client.care_level}): ${eq?.name ?? item.product_code} は軽度者の原則対象外品目ですが、例外給付の記録がありません`,
+              );
+            }
+          }
           const code = fukuyoguServiceCode(eq?.category);
           if (!code) {
             allWarnings.push(`[${ym}] ${client.name}: 種目「${eq?.category ?? "未設定"}」のサービスコードが不明です`);
