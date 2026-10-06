@@ -27,6 +27,9 @@ export async function getDocTasks(
       .eq("tenant_id", tenantId)
       .is("merged_into_task_id", null)
       .order("trigger_date", { ascending: true })
+      // trigger_date は重複が多い (例: 2026-04-01)。一意な tiebreaker が無いと
+      // ページ境界で同じ行が 2 回返り、統合候補が「同一 task × 2」になる
+      .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (statuses && statuses.length > 0) {
       q = q.in("status", statuses);
