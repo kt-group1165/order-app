@@ -330,19 +330,31 @@ function Area({ value, onChange, rows = 4, placeholder }: { value: string; onCha
   return <textarea className={inputCls} rows={rows} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />;
 }
 
-/** 数値欄。空 = null。全角数字・カンマも受ける */
+/**
+ * 数値欄。空 = null。全角数字・カンマも受ける。
+ * 打っている途中の文字列 ("0." 等) は手元に持つ。value から毎回描き直すと "0." が 0 になり、
+ * 小数点が消えて 0.9 が 9 になる (2026-10-15 本番で実際に起きた)。
+ */
 function Num({ value, onChange, step }: { value: number | null; onChange: (v: number | null) => void; step?: string }) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  const parse = (s: string): number | null | undefined => {
+    const raw = s.normalize("NFKC").replace(/,/g, "").trim();
+    if (raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  // 外から値が変わったとき (別の操作で書き換わった等) だけ表示を合わせる
+  const shown = parse(text) === value ? text : value === null ? "" : String(value);
   return (
     <input
       className={`${inputCls} text-right`}
       inputMode="decimal"
       step={step}
-      value={value ?? ""}
+      value={shown}
       onChange={(e) => {
-        const raw = e.target.value.normalize("NFKC").replace(/,/g, "").trim();
-        if (raw === "") return onChange(null);
-        const n = Number(raw);
-        if (Number.isFinite(n)) onChange(n);
+        setText(e.target.value);
+        const n = parse(e.target.value);
+        if (n !== undefined) onChange(n);
       }}
     />
   );
