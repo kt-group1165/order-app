@@ -138,7 +138,11 @@ for (const r of toInsert.slice(0, 5)) console.log(`    例 ${r._name} 法別${r.
 
 if (!EXECUTE) { console.log("\nDRY RUN — --execute で投入"); process.exit(0); }
 
-const payload = toInsert.map(({ _name, _tandoku, ...r }) => r);
+const payload = toInsert.map((r) => ({
+  tenant_id: r.tenant_id, client_id: r.client_id, hohei_code: r.hohei_code,
+  futan_sha_number: r.futan_sha_number, jukyu_sha_number: r.jukyu_sha_number,
+  valid_start: r.valid_start, valid_end: r.valid_end,
+}));
 const ids = [];
 for (let i = 0; i < payload.length; i += 100) {
   const r = await fetch(`${SB_URL}/rest/v1/client_public_expenses?select=id`, { method: "POST", headers: { ...H, Prefer: "return=representation" }, body: JSON.stringify(payload.slice(i, i + 100)) });
