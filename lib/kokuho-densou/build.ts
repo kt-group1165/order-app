@@ -114,8 +114,14 @@ export interface FukuyoguSeikyuRow {
   kohiFutansha?: string | null;
   /** 公費 受給者番号 (7桁) */
   kohiJukyusha?: string | null;
-  /** 公費請求額 (円)。生保は本人負担分(1割)を公費へ振替 */
+  /** 公費請求額 (円)。生保は本人負担分(1割)を公費へ振替。公費単独は費用総額の全額 */
   kohiAmount?: number | null;
+  /**
+   * 公費単独 (被保険者番号 H = 介護保険未加入の生保受給者。保険給付 0・公費 10 割)。
+   * 請求書 7111 の保険請求分には含めず、公費請求分 (法別12) にだけ載せる。明細の保険給付率は空欄。
+   * kaigo-app src/lib/kokuho-densou/build.ts と同じ扱い (ほのぼの実伝送で裏取り済み)。
+   */
+  kohiTandoku?: boolean;
 }
 
 export interface FukuyoguDensouOptions {
@@ -137,10 +143,23 @@ const genderCode = (g: string | null) =>
   g == null ? "" : g.includes("女") ? "2" : g.includes("男") ? "1" : "";
 
 export function buildFukuyoguDensou(
-  rows: FukuyoguSeikyuRow[],
+  inputRows: FukuyoguSeikyuRow[],
   opts: FukuyoguDensouOptions,
 ): DensouBuildResult {
   const warnings: string[] = [];
+  // ★ 2026-10-15 (B-2t②): 保険者番号・被保険者番号のどちらかが空の行は **伝送に載せない**。
+  //   国保連で確実に返戻になるうえ、請求書 (7111) の件数・金額まで水増しされるため。
+  //   kaigo-app build.ts:105-127 と同じ扱い (以前は warning だけで 7111 に含めていた)。
+  const rows = inputRows.filter((r) => {
+    const hasInsurer = !!(r.insurerNumber ?? "").trim();
+    const hasInsured = !!(r.insuredNumber ?? "").trim();
+    if (hasInsurer && hasInsured) return true;
+    const miss = [!hasInsurer && "保険者番号", !hasInsured && "被保険者番号"].filter(Boolean).join("・");
+    warnings.push(
+      `${r.userName}: ${miss}が未登録のため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 被保険者証を確認して登録してください`,
+    );
+    return false;
+  });
   const ym = `${opts.year}${String(opts.month).padStart(2, "0")}`;
   const office = (opts.officeNumber ?? "").trim();
   if (!/^\d{10}$/.test(office)) {
@@ -152,11 +171,17 @@ export function buildFukuyoguDensou(
   const dataParts: string[][] = [];
 
   // ── 7111 介護給付費請求書情報 (保険請求分 1 レコード) ──
-  const totalCount = rows.length;
-  const totalUnits = rows.reduce((s, r) => s + r.totalUnits, 0);
-  const totalCost = rows.reduce((s, r) => s + r.totalCost, 0);
-  const totalInsurance = rows.reduce((s, r) => s + r.insuranceAmount, 0);
-  const totalUser = rows.reduce((s, r) => s + r.userAmount, 0);
+  // 公費単独 (被保険者番号 H = 生保 10割公費) は保険請求分レコードに含めない
+  // (様式第一の記載例: 保険請求欄には記載せず、公費請求欄の生保行に合算)。kaigo-app build.ts と同じ。
+  const hokenRows = rows.filter((r) => !r.kohiTandoku);
+  const totalCount = hokenRows.length;
+  const totalUnits = hokenRows.reduce((s, r) => s + r.totalUnits, 0);
+  const totalCost = hokenRows.reduce((s, r) => s + r.totalCost, 0);
+  const totalInsurance = hokenRows.reduce((s, r) => s + r.insuranceAmount, 0);
+  // 項11 公費請求額: 保険請求分レコードにも公費併用分の公費請求額を記載する
+  //   (kaigo-app build.ts:153 と同じ。ほのぼの実伝送とバイト一致済みの側に揃える)
+  const totalKohi = hokenRows.reduce((s, r) => s + (r.kohiAmount ?? 0), 0);
+  const totalUser = hokenRows.reduce((s, r) => s + r.userAmount, 0);
   dataParts.push([
     "7111", // 1 交換情報識別番号
     ym, // 2 サービス提供年月
@@ -168,7 +193,7 @@ export function buildFukuyoguDensou(
     String(totalUnits), // 8 同 単位数
     String(totalCost), // 9 同 費用合計
     String(totalInsurance), // 10 同 保険請求額
-    "0", // 11 同 公費請求額
+    String(totalKohi), // 11 同 公費請求額
     String(totalUser), // 12 同 利用者負担
     "", // 13 特定入所者介護サービス費等 件数 (福祉用具は対象外)
     "", // 14 同 延べ日数
@@ -179,10 +204,14 @@ export function buildFukuyoguDensou(
   ]);
 
   // 公費請求分 (法別番号ごと。生活保護 12 等)。本人負担分を公費が負担。
-  const kohiTargets = rows.filter((r) => r.kohiHobetsu && (r.kohiAmount ?? 0) > 0);
+  // ★ 2026-10-15 (B-2t①): 条件は明細書 (7131 の hasKohi) と必ず一致させる。
+  //   公費請求額 0 円でも明細書には公費欄が出るので、`kohiAmount > 0` を条件にすると
+  //   **明細の件数 > 請求書の件数** になり返戻。kaigo-app は姉ム KK260704 (法別12) の実伝送で
+  //   「0 円の 1 件も件数・単位・費用に含める」を裏取り済み。公費単独は法別未登録でも 12 で合算。
+  const kohiTargets = rows.filter((r) => r.kohiHobetsu || r.kohiTandoku);
   const byHobetsu = new Map<string, FukuyoguSeikyuRow[]>();
   for (const r of kohiTargets) {
-    const h = r.kohiHobetsu as string;
+    const h = r.kohiHobetsu ?? "12";
     if (!byHobetsu.has(h)) byHobetsu.set(h, []);
     byHobetsu.get(h)!.push(r);
   }
@@ -216,8 +245,7 @@ export function buildFukuyoguDensou(
     const insurerRaw = (r.insurerNumber ?? "").trim();
     const insurer = insurerRaw ? insurerRaw.padStart(8, "0") : "";
     const insured = (r.insuredNumber ?? "").trim();
-    if (!insurerRaw) warnings.push(`${r.userName}: 証記載保険者番号が未登録です`);
-    if (!insured) warnings.push(`${r.userName}: 被保険者番号が未登録です`);
+    // 保険者・被保険者番号が空の行は冒頭で除外済み (ここには来ない)
     // 2026-08-31 監査: CARE_LEVEL_CODE のキーは半角だが、clients.care_level は
     //   ほのぼの由来で**全角のことがある** (実測 306 件: 要介護１〜５ / 要支援１・２)。
     //   そのまま引くと項15 が空欄で出力される。NFKC で寄せてから引く。
@@ -227,9 +255,16 @@ export function buildFukuyoguDensou(
     if (!r.birthDate) warnings.push(`${r.userName}: 生年月日が未登録です`);
     if (!r.careOfficeNumber) warnings.push(`${r.userName}: 担当居宅介護支援事業所 (事業所番号) が未登録です`);
 
-    const benefitRate = String(Math.round((1 - r.copayRate) * 100)); // 90 等
-    const hasKohi = !!(r.kohiHobetsu && (r.kohiAmount ?? 0) > 0);
-    if (hasKohi && !r.kohiFutansha) {
+    // 公費単独 (H 番号 10割公費): 保険給付率は空欄、公費1給付率 100 (kaigo-app build.ts:292 と同じ)
+    const benefitRate = r.kohiTandoku ? "" : String(Math.round((1 - r.copayRate) * 100)); // 90 等
+    // ★ 2026-10-15 (B-2t①): 公費欄は「対象月に有効な公費があるか」で出す。**公費請求額 0 でも出す**
+    //   (請求書 7111 の公費請求分と同じ条件。kaigo-app build.ts:300 と同じ)
+    const hasKohi = !!r.kohiTandoku || !!r.kohiHobetsu;
+    if (r.kohiTandoku && !r.kohiFutansha) {
+      warnings.push(
+        `${r.userName}: 公費単独 (被保険者番号 H) なのに公費情報 (負担者番号) が未登録です — 生活保護 (法別12) を登録してください`,
+      );
+    } else if (hasKohi && !r.kohiFutansha) {
       warnings.push(`${r.userName}: 公費 (法別${r.kohiHobetsu}) の負担者番号が未登録です`);
     }
 

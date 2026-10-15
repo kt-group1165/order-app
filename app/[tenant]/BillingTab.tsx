@@ -24,6 +24,7 @@ import {
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
+import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 
 const UserBillingTab = dynamic(() => import("./UserBillingTab"), {
@@ -796,30 +797,20 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
       //   `|| 90` のせいで "0" も 90 になっていた。
       //   既定 (90) は変えず、必ず気づけるように警告を出す。
-      const benefitRateRaw = (client.benefit_rate ?? "").trim();
-      const benefitRateParsed = parseInt(benefitRateRaw, 10);
-      const benefitRate =
-        Number.isFinite(benefitRateParsed) && benefitRateParsed > 0 ? benefitRateParsed : 90;
-      if (!benefitRateRaw) {
-        preWarnings.push(
-          `${client.name}: 給付率が未設定のため 1 割 (90) で計算しました — 2割/3割なら過大請求になります。負担割合証を確認してください`,
-        );
-      } else if (!Number.isFinite(benefitRateParsed) || benefitRateParsed <= 0) {
-        preWarnings.push(
-          `${client.name}: 給付率 "${benefitRateRaw}" を読めないため 1 割 (90) で計算しました — 値を確認してください`,
-        );
-      }
-      const copayRate = Math.max(0, 100 - benefitRate) / 100;
-      const totalCost = totalUnits * 10;
-      const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
-      const rawUserAmount = totalCost - insuranceAmount;
+      // ★ 2026-10-15: 公費単独 (被保険者番号 H) は保険 0・公費 10 割。計算は純関数に一本化
+      //   (lib/kokuho-densou/fukuyogu-amounts.ts。返戻・過誤の再請求と同じ式を使う)。
+      const kohi = kohiByClient.get(client.id) ?? null;
+      const amt = computeFukuyoguAmounts({
+        benefitRateRaw: client.benefit_rate,
+        insuredNumber: client.insured_number,
+        totalUnits,
+        kohi,
+      });
+      for (const w of amt.warnings) preWarnings.push(`${client.name}: ${w}`);
+      const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
       const careOffice = client.care_office_id
         ? careOffices.find((co) => co.id === client.care_office_id) ?? null
         : null;
-      // 公費 (生保 等): 本人負担分(1割)を公費へ振替、本人負担は 0 とする (v1 = 全額公費前提)
-      const kohi = kohiByClient.get(client.id);
-      const userAmount = kohi ? 0 : rawUserAmount;
-      const kohiAmount = kohi ? rawUserAmount : null;
       rows.push({
         userName: client.name,
         insurerNumber: client.insurer_number,
@@ -841,10 +832,11 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         totalCost,
         insuranceAmount,
         userAmount,
-        kohiHobetsu: kohi?.hobetsu ?? null,
+        kohiHobetsu: amt.kohiHobetsu,
         kohiFutansha: kohi?.futansha ?? null,
         kohiJukyusha: kohi?.jukyusha ?? null,
         kohiAmount,
+        kohiTandoku: amt.kohiTandoku,
       });
     }
 
@@ -1123,27 +1115,19 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         //   費用総額7,200円 → 保険請求 6,480円 (正は 5,760円) = 720円/月 の過大請求 → 返戻。
         //   `|| 90` のせいで "0" も 90 になっていた。
         //   既定 (90) は変えず、必ず気づけるように警告を出す。
-        const benefitRateRaw = (client.benefit_rate ?? "").trim();
-        const benefitRateParsed = parseInt(benefitRateRaw, 10);
-        const benefitRate =
-          Number.isFinite(benefitRateParsed) && benefitRateParsed > 0 ? benefitRateParsed : 90;
-        if (!benefitRateRaw) {
-          allWarnings.push(
-            `[${ym}] ${client.name}: 給付率が未設定のため 1 割 (90) で計算しました — 2割/3割なら過大請求になります。負担割合証を確認してください`,
-          );
-        } else if (!Number.isFinite(benefitRateParsed) || benefitRateParsed <= 0) {
-          allWarnings.push(
-            `[${ym}] ${client.name}: 給付率 "${benefitRateRaw}" を読めないため 1 割 (90) で計算しました — 値を確認してください`,
-          );
-        }
-        const copayRate = Math.max(0, 100 - benefitRate) / 100;
-        const totalCost = totalUnits * 10;
-        const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
-        const rawUserAmount = totalCost - insuranceAmount;
+        // ★ 2026-10-15: 公費単独 (H) を含め、通常請求と同じ純関数で計算する
+        const kohi = kohiByClient.get(client.id) ?? null;
+        const amt = computeFukuyoguAmounts({
+          benefitRateRaw: client.benefit_rate,
+          insuredNumber: client.insured_number,
+          totalUnits,
+          kohi,
+        });
+        for (const w of amt.warnings) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
+        const { copayRate, totalCost, insuranceAmount } = amt;
         const careOffice = client.care_office_id
           ? careOffices.find((co) => co.id === client.care_office_id) ?? null
           : null;
-        const kohi = kohiByClient.get(client.id);
         rows.push({
           userName: client.name,
           insurerNumber: client.insurer_number,
@@ -1164,11 +1148,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           totalUnits,
           totalCost,
           insuranceAmount,
-          userAmount: kohi ? 0 : rawUserAmount,
-          kohiHobetsu: kohi?.hobetsu ?? null,
+          userAmount: amt.userAmount,
+          kohiHobetsu: amt.kohiHobetsu,
           kohiFutansha: kohi?.futansha ?? null,
           kohiJukyusha: kohi?.jukyusha ?? null,
-          kohiAmount: kohi ? rawUserAmount : null,
+          kohiAmount: amt.kohiAmount,
+          kohiTandoku: amt.kohiTandoku,
         });
       }
       if (rows.length === 0) continue;
