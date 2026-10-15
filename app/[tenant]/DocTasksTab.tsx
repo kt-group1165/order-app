@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { FileWarning, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase, Client, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
-import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, type MergeCandidateGroup } from "@/lib/docTasks";
+import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, completeDocTask, findExistingDocForTask, type MergeCandidateGroup } from "@/lib/docTasks";
 import { todayYmd, addDaysYmd } from "@/lib/date-jst";
 
 // ─── DocTasksTab v3 ───────────────────────────────────────────────────────────
@@ -101,6 +101,7 @@ type DocTaskRow = {
   id: string;                    // virtual の場合は `cert:${insurance_record_id}:${expected_doc_type}`
   isVirtual: boolean;            // true = cert_renewal の DB 未 INSERT row
   trigger_type: string;
+  trigger_ref_id?: string;       // DB task のみ (supplier_email の発注 id 照合に使う)
   trigger_label: string | null;
   trigger_date: string;
   expected_doc_type: string;
@@ -114,6 +115,9 @@ type DocTaskRow = {
   insuranceRecordId?: string;
   certEndDate?: string;
 };
+
+// B-2n: 「作成済書類で完了」の候補判定に使う client_documents の列
+type DocLite = Pick<ClientDocument, "id" | "client_id" | "type" | "title" | "created_at" | "params">;
 
 // v3: status filter chip
 type StatusFilter = "pending" | "completed" | "received" | "all";
@@ -146,6 +150,9 @@ export default function DocTasksTab({
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [clientById, setClientById] = useState<Map<string, Client>>(new Map());
   const [careplanByClient, setCareplanByClient] = useState<Map<string, string>>(new Map()); // clientId → 最新 care_plan の created_at
+  // B-2n: 「作成済書類で完了」の候補判定用 (書類タスク経由以外で作られた書類)
+  const [clientDocs, setClientDocs] = useState<DocLite[]>([]);
+  const [linkingId, setLinkingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggerFilter, setTriggerFilter] = useState<string | null>(null);
   const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
@@ -219,17 +226,30 @@ export default function DocTasksTab({
           for (const rows of results) insRecs.push(...rows);
         }
 
-        // 5. care_plan documents (cert_renewal で「対応 care_plan が無い場合のみ」絞るため)
+        // 5. client_documents (rental_report 以外の全 type)
+        //    - care_plan: cert_renewal で「対応 care_plan が無い場合のみ」絞るため
+        //    - 全 type: 書類タスク経由以外で作られた書類を「作成済書類で完了」の候補に出すため (B-2n)
         const carePlanMap = new Map<string, string>();
+        const docs: DocLite[] = [];
         if (clientIdSet.size > 0) {
-          const { data, error } = await supabase
-            .from("client_documents")
-            .select("client_id, type, created_at")
-            .eq("tenant_id", tenantId)
-            .eq("type", "care_plan")
-            .order("created_at", { ascending: false });
-          if (error) throw error;
-          for (const d of (data ?? []) as Pick<ClientDocument, "client_id" | "type" | "created_at">[]) {
+          let dFrom = 0;
+          while (true) {
+            const { data, error } = await supabase
+              .from("client_documents")
+              .select("id, client_id, type, title, created_at, params")
+              .eq("tenant_id", tenantId)
+              .neq("type", "rental_report")
+              .order("created_at", { ascending: false })
+              .order("id", { ascending: true })
+              .range(dFrom, dFrom + PAGE - 1);
+            if (error) throw error;
+            if (!data || data.length === 0) break;
+            docs.push(...(data as DocLite[]));
+            if (data.length < PAGE) break;
+            dFrom += PAGE;
+          }
+          for (const d of docs) {
+            if (d.type !== "care_plan") continue;
             if (!carePlanMap.has(d.client_id)) carePlanMap.set(d.client_id, d.created_at);
           }
         }
@@ -239,6 +259,7 @@ export default function DocTasksTab({
         setInsuranceRecords(insRecs);
         setClientById(new Map(allClients.map((c) => [c.id, c])));
         setCareplanByClient(carePlanMap);
+        setClientDocs(docs.filter((d) => clientIdSet.has(d.client_id)));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -320,6 +341,7 @@ export default function DocTasksTab({
       id: t.id,
       isVirtual: false,
       trigger_type: t.trigger_type,
+      trigger_ref_id: t.trigger_ref_id,
       trigger_label: t.trigger_label,
       trigger_date: t.trigger_date,
       expected_doc_type: t.expected_doc_type,
@@ -464,6 +486,80 @@ export default function DocTasksTab({
       if (created) docTaskId = created.id;
     }
     onOpenDocuments(row.client_id, docTaskId, row.expected_doc_type);
+  };
+
+  // B-2n: pending の DB task ごとに「既に作成済みの書類」を探す
+  const existingDocByTaskId = useMemo(() => {
+    const m = new Map<string, DocLite>();
+    if (clientDocs.length === 0) return m;
+    const byClient = new Map<string, DocLite[]>();
+    for (const d of clientDocs) {
+      if (!byClient.has(d.client_id)) byClient.set(d.client_id, []);
+      byClient.get(d.client_id)!.push(d);
+    }
+    for (const t of tasks) {
+      if (t.status !== "pending") continue;
+      const docsOfClient = byClient.get(t.client_id);
+      if (!docsOfClient) continue;
+      const hit = findExistingDocForTask(t, docsOfClient);
+      if (hit) m.set(t.id, hit as DocLite);
+    }
+    return m;
+  }, [tasks, clientDocs]);
+
+  const handleLinkExisting = async (row: DocTaskRow) => {
+    const doc = existingDocByTaskId.get(row.id);
+    if (!doc || row.isVirtual) return;
+    const ok = confirm(
+      `この書類で「${DOC_LABEL[row.expected_doc_type] ?? row.expected_doc_type}」タスクを作成済にしますか?\n\n` +
+      `書類: ${doc.title}\n作成日: ${doc.created_at.slice(0, 10)}`,
+    );
+    if (!ok) return;
+    setLinkingId(row.id);
+    try {
+      await completeDocTask(row.id, doc.id);
+      setReload((n) => n + 1);
+    } catch (e) {
+      console.error("handleLinkExisting error:", e);
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      alert(`書類タスクの完了に失敗しました: ${msg}`);
+    } finally {
+      setLinkingId(null);
+    }
+  };
+
+  // pending 行の操作ボタン (client 表示 / flat 表示 共通)
+  const renderPendingAction = (row: DocTaskRow, compact: boolean) => {
+    const pad = compact ? "py-0.5" : "py-1";
+    const existing = row.isVirtual ? undefined : existingDocByTaskId.get(row.id);
+    if (existing) {
+      return (
+        <button
+          onClick={() => { void handleLinkExisting(row); }}
+          disabled={linkingId !== null}
+          title={`${existing.title} (${existing.created_at.slice(0, 10)})`}
+          className={`text-[11px] px-2 ${pad} rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 shrink-0`}
+        >
+          {linkingId === row.id ? "処理中…" : "作成済書類で完了"}
+        </button>
+      );
+    }
+    if (row.expected_doc_type === "supplier_email") {
+      // 発注書は書類タブからは作れない (発注メール送信時に自動で完了する)
+      return (
+        <span className="text-[10px] text-gray-500 shrink-0" title="発注メールを送信すると自動で作成済になります">
+          発注メール送信で自動完了
+        </span>
+      );
+    }
+    return (
+      <button
+        onClick={() => { void handleOpenDocs(row); }}
+        className={`text-[11px] px-2 ${pad} rounded border border-blue-300 text-blue-600 hover:bg-blue-50 shrink-0`}
+      >
+        書類を作る
+      </button>
+    );
   };
 
   const handleClickReceive = (row: DocTaskRow) => {
@@ -676,14 +772,7 @@ export default function DocTasksTab({
                                   </span>
                                 )}
                                 <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${badge.cls}`}>{badge.label}</span>
-                                {row.status === "pending" && (
-                                  <button
-                                    onClick={() => { void handleOpenDocs(row); }}
-                                    className="text-[11px] px-2 py-0.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 shrink-0"
-                                  >
-                                    書類を作る
-                                  </button>
-                                )}
+                                {row.status === "pending" && renderPendingAction(row, true)}
                                 {row.status === "completed" && (
                                   <button
                                     onClick={() => handleClickReceive(row)}
@@ -770,14 +859,7 @@ export default function DocTasksTab({
                         )}
                       </td>
                       <td className="border-b border-gray-100 px-3 py-2 text-center">
-                        {row.status === "pending" && (
-                          <button
-                            onClick={() => { void handleOpenDocs(row); }}
-                            className="text-[11px] px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50"
-                          >
-                            書類を作る
-                          </button>
-                        )}
+                        {row.status === "pending" && renderPendingAction(row, false)}
                         {row.status === "completed" && (
                           <button
                             onClick={() => handleClickReceive(row)}

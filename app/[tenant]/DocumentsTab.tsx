@@ -6,7 +6,7 @@ import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/
 import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { HW_KANA } from "./search-utils";
-import { completeDocTask } from "@/lib/docTasks";
+import { completeDocTask, docTypesSatisfying } from "@/lib/docTasks";
 import { getOrderItems, getMembers } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory } from "@/lib/equipment";
 import { getTenantById } from "@/lib/tenants";
@@ -197,18 +197,20 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     if (!pendingDocTaskId || !selectedClient) return;
     try {
       const docs = await getClientDocuments(tenantId, selectedClient.id);
-      // expected type に対応する最新 client_document を取得
-      // rental_contract task は実 type が contract (統合後) / rental_contract / important_matters (旧) のいずれか
-      const equivTypes =
-        expectedType === "rental_contract"
-          ? ["contract", "rental_contract", "important_matters"]
-          : [expectedType];
+      // expected type に対応する最新 client_document を取得 (docs は created_at 降順)
+      const equivTypes = docTypesSatisfying(expectedType);
       const latest = docs.find((d) => equivTypes.includes(d.type));
       if (latest) {
         await completeDocTask(pendingDocTaskId, latest.id);
+      } else {
+        // 以前は黙って何もしなかった (B-2n)。書類はあるはずなので人に知らせる
+        alert("書類は保存されましたが、対応する書類が見つからず書類タスクを完了にできませんでした。\n書類タスク画面の「作成済書類で完了」から紐付けてください。");
       }
     } catch (e) {
+      // 以前は console.error のみで「作ったのに完了しない」がユーザーに見えなかった (B-2n)
       console.error("closePendingDocTask error:", e);
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      alert(`書類は保存されましたが、書類タスクの完了に失敗しました: ${msg}`);
     } finally {
       setPendingDocTaskId(null);
       setPendingDocTask(null);
@@ -269,7 +271,7 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
             setChangeContractInitialParams(null);
             setShowChangeContract(true);
             break;
-          // supplier_email は OrdersTab 側のメール送信で発生。Documents からは作成不可。
+          // supplier_email は発注メール送信時に自動で完了する (OrderEmailPreviewModal)。Documents からは作成不可。
         }
       }
     }

@@ -1,4 +1,5 @@
 import { supabase, DocTask, DocTaskStatus, DocTaskTriggerType } from "./supabase";
+import { PAIRED_DOC_TYPES } from "./docTaskMatch";
 
 /** 書類タスク fetch (office × pending のみ)。office_id NULL は対象外。 */
 export async function getPendingDocTasks(
@@ -54,10 +55,6 @@ export async function getDocTasks(
  *  二者択一の関係 (どちらか作成すればもう一方は不要)。一方を completed にすると
  *  対になる pending task を auto-cancel する。
  */
-const PAIRED_DOC_TYPES: Record<string, string> = {
-  rental_contract: "change_contract",
-  change_contract: "rental_contract",
-};
 
 export async function completeDocTask(
   taskId: string,
@@ -102,6 +99,28 @@ export async function completeDocTask(
       if (cancelErr) throw cancelErr;
     }
   }
+}
+
+export { docTypesSatisfying, findExistingDocForTask, PAIRED_DOC_TYPES } from "./docTaskMatch";
+
+/** 発注メール送信で supplier_email 書類を保存した直後に呼ぶ (B-2n)。
+ *  order_placed × supplier_email の pending task を completed にし、件数を返す。
+ *  1 発注を複数卸会社に送る場合は最初に送った分で完了し、2 通目以降は 0 件になる。 */
+export async function completeSupplierEmailDocTask(
+  orderId: string,
+  documentId: string,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from("doc_tasks")
+    .select("id")
+    .eq("trigger_type", "order_placed")
+    .eq("trigger_ref_id", orderId)
+    .eq("expected_doc_type", "supplier_email")
+    .eq("status", "pending");
+  if (error) throw error;
+  const ids = (data ?? []).map((r: { id: string }) => r.id);
+  for (const id of ids) await completeDocTask(id, documentId);
+  return ids.length;
 }
 
 /** v3: completed の task を received にする。

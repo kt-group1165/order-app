@@ -5,6 +5,7 @@ import { Order, OrderItem, Equipment, Client, Supplier, Member } from "@/lib/sup
 import { todayYmd } from "@/lib/date-jst";
 import { saveClientDocument } from "@/lib/documents";
 import { recordEmailSent } from "@/lib/orders";
+import { completeSupplierEmailDocTask } from "@/lib/docTasks";
 
 // ─── Order Email Preview Modal ───────────────────────────────────────────────
 
@@ -254,15 +255,23 @@ export default function OrderEmailPreviewModal({
       setSentSet((prev) => new Set(prev).add(groupKey));
       if (tenantId && order.client_id) {
         const emailLabel = supplierObj.name ? `${supplierObj.name}への発注メール` : "発注メール";
-        await saveClientDocument({
-          tenant_id: tenantId,
-          client_id: order.client_id,
-          type: "supplier_email",
-          title: `${emailLabel}（${subject}）`,
-          params: { emailType: "new_order", orderId: order.id, supplierName: supplierObj.name, subject, body: emailBody },
-        }).catch((err) => {
-          console.warn("saveClientDocument (new_order) failed:", err);
-        });
+        // メールは送信済み。ここでの失敗は「書類に残らない / 書類タスクが完了しない」なので
+        // 握りつぶさず卸会社の枠に出す (B-2n: 以前は console.warn のみで、
+        // 発注書の書類タスクは誰がやっても永久に pending だった)。
+        try {
+          const doc = await saveClientDocument({
+            tenant_id: tenantId,
+            client_id: order.client_id,
+            type: "supplier_email",
+            title: `${emailLabel}（${subject}）`,
+            params: { emailType: "new_order", orderId: order.id, supplierName: supplierObj.name, subject, body: emailBody },
+          });
+          await completeSupplierEmailDocTask(order.id, doc.id);
+        } catch (err) {
+          console.error("発注メールの書類保存 / 書類タスク完了に失敗:", err);
+          const msg = err instanceof Error ? err.message : (err as { message?: string })?.message ?? String(err);
+          setErrors((prev) => new Map(prev).set(groupKey, `メールは送信済みですが、書類の保存または書類タスクの完了に失敗しました: ${msg}`));
+        }
       }
     } catch (e: unknown) {
       setErrors((prev) => new Map(prev).set(groupKey, e instanceof Error ? e.message : "送信に失敗しました"));
@@ -304,15 +313,19 @@ export default function OrderEmailPreviewModal({
       setSent(true);
       if (tenantId && order.client_id) {
         const typeLabel = emailType === "rental_started" ? "レンタル開始通知" : "解約・返却通知";
-        await saveClientDocument({
-          tenant_id: tenantId,
-          client_id: order.client_id,
-          type: "supplier_email",
-          title: `${typeLabel}（${scSubject}）`,
-          params: { emailType, orderId: order.id, subject: scSubject, body: scEmailBody },
-        }).catch((err) => {
-          console.warn("saveClientDocument (status_change) failed:", err);
-        });
+        try {
+          await saveClientDocument({
+            tenant_id: tenantId,
+            client_id: order.client_id,
+            type: "supplier_email",
+            title: `${typeLabel}（${scSubject}）`,
+            params: { emailType, orderId: order.id, subject: scSubject, body: scEmailBody },
+          });
+        } catch (err) {
+          console.error("通知メールの書類保存に失敗:", err);
+          const msg = err instanceof Error ? err.message : (err as { message?: string })?.message ?? String(err);
+          setError(`メールは送信済みですが、書類への保存に失敗しました: ${msg}`);
+        }
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "送信に失敗しました");
