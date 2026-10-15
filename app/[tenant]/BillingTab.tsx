@@ -25,6 +25,8 @@ import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
+import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
+import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 
 const UserBillingTab = dynamic(() => import("./UserBillingTab"), {
@@ -745,11 +747,23 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       }
     }
 
+    // ★ 2026-10-15 (B-2i): 上限価格を超える貸与は 月額全体が保険給付の対象外 (超過分だけではない)。
+    //   以前は請求画面も伝送も上限を一切見ておらず、発注入力の 2 画面でしか警告が出なかった
+    //   (実例: KMD-R12 13,000 円。2026-07 施行の公表で上限 12,850 円が初めて付き、以後毎月超過)。
+    //   判定は lib/ceilingCheck.ts (check:ceiling-rental と同じ関数)。読めなくても伝送は止めない。
+    let ceilingIndex: ReturnType<typeof indexCeilings> | null = null;
+    const preWarnings: string[] = [];
+    try {
+      ceilingIndex = indexCeilings(await getCeilingPrices(tenantId));
+    } catch (e) {
+      preWarnings.push(`上限価格マスタを読めなかったため上限超過の確認をしていません: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // 明細行 → 利用者ごとの請求行を組む
     const rows: FukuyoguSeikyuRow[] = [];
-    const preWarnings: string[] = [];
     for (const { client, items } of billingGroups) {
       const details: FukuyoguDetailLine[] = [];
+      const ceilingLines: (CeilingRentalLine & { name: string })[] = [];
       let totalUnits = 0;
       for (const item of items) {
         const eq = equipment.find((e) => e.product_code === item.product_code);
@@ -782,8 +796,24 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         }
         details.push({ serviceCode: code, unitPer, count, units });
         totalUnits += units;
+        ceilingLines.push({
+          id: item.id,
+          name: eq?.name ?? item.product_code,
+          taisCode: eq?.tais_code,
+          // 上限と比べるのは 月額 (半月按分前)。getUnits と同じく当月時点の改定価格 → マスタ価格
+          price: getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? null,
+          quantity: item.quantity,
+        });
       }
       if (details.length === 0) continue;
+      if (ceilingIndex) {
+        for (const o of findRentalOverruns(ceilingLines, `${billingMonth}-01`, ceilingIndex)) {
+          const l = ceilingLines.find((x) => x.id === o.id);
+          preWarnings.push(
+            `${client.name}: ${l?.name ?? ""} の月額 ${o.price.toLocaleString()}円 が上限価格 ${o.ceiling.toLocaleString()}円 (${o.effectiveFrom} 施行) を ${o.excess.toLocaleString()}円 超えています — 上限超過の貸与は月額全体が保険給付の対象外です (返戻になります)。価格を見直してください`,
+          );
+        }
+      }
       // 給付率 (benefit_rate は 90/80/70 の給付率で保存済み)、福祉用具は単価 10 円固定
       // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
       //   clients.benefit_rate は実測 (2026-09-03) で NULL が **5,008 名 (55%)**。
