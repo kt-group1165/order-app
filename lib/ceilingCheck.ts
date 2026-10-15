@@ -87,3 +87,100 @@ export function judgeCeiling(
     ? { kind: "over", ceiling, effectiveFrom, excess: price - ceiling }
     : { kind: "ok", ceiling, effectiveFrom };
 }
+
+// ─── 貸与中の明細を上限と突き合わせる (2026-10-15 追加・B-2i) ────────────────
+//
+// なぜ要るか:
+//   check:ceiling (ceiling-baseline-check.mts) は **用具マスタ** 全 2,159 件を見ている。
+//   2026-10-15 に実測すると超過 269 件のうち 268 件は旧コード (EQ-xxxxxx, 1,520 件) で、
+//   **order_items から 1 件も参照されていない** (= 請求に乗らない)。
+//   実際に請求に乗る超過は 1 口だけで、マスタ件数を見ているだけでは埋もれて見えない。
+//   ここでは「その月に介護保険で請求される貸与の明細」を、その月に効く上限と比べる。
+//
+// ★ 価格は呼出側が渡す。請求画面 (BillingTab の getUnits) と同じく
+//   「その月に有効な価格改定履歴 → 無ければ用具マスタの現在価格」を渡すこと。
+//   (order_items.rental_price は請求の単位数計算には使われていない)
+// ★ 金額は変えない。判定だけ。
+
+/** 判定対象の 1 明細 */
+export type CeilingRentalLine = {
+  id: string;
+  taisCode: string | null | undefined;
+  /** その月の請求に使う月額 (円) */
+  price: number | null | undefined;
+  quantity?: number | null;
+};
+
+export type CeilingOverrun = {
+  id: string;
+  ceiling: number;
+  effectiveFrom: string;
+  /** 1 個あたりの超過額 (円/月) */
+  excess: number;
+  price: number;
+  quantity: number;
+};
+
+/**
+ * その月に介護保険で請求される貸与か (キャンセル・期間外・未開始を除く)。
+ * 判定は日付文字列 "YYYY-MM-DD" の比較だけで行う (タイムゾーンに依存しない)。
+ *
+ * @param ym "YYYY-MM"
+ */
+export function isCareRentalInMonth(
+  item: {
+    status: string | null;
+    cancelled_at: string | null;
+    rental_start_date: string | null;
+    rental_end_date: string | null;
+  },
+  paymentType: string | null | undefined,
+  ym: string,
+): boolean {
+  if (paymentType !== "介護") return false;
+  if (item.cancelled_at || item.status === "cancelled") return false;
+  if (!(item.status === "rental_started" || item.status === "terminated")) return false;
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  const monthStart = `${ym}-01`;
+  const [y, m] = ym.split("-").map(Number);
+  const monthEnd = `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const start = String(item.rental_start_date ?? "").slice(0, 10);
+  if (!start || start > monthEnd) return false;
+  const end = String(item.rental_end_date ?? "").slice(0, 10);
+  if (end && end < monthStart) return false;
+  return true;
+}
+
+/** 明細のうち onDate 時点の上限を超えるものを返す (判定できないものは返さない) */
+export function findRentalOverruns(
+  lines: CeilingRentalLine[],
+  onDate: string,
+  index: Map<string, CeilingRow[]>,
+): CeilingOverrun[] {
+  const out: CeilingOverrun[] = [];
+  for (const l of lines) {
+    const j = judgeCeiling(l.taisCode, l.price, onDate, index);
+    if (j.kind !== "over") continue;
+    out.push({
+      id: l.id,
+      ceiling: j.ceiling,
+      effectiveFrom: j.effectiveFrom,
+      excess: j.excess,
+      price: Number(l.price),
+      quantity: Number(l.quantity ?? 1) || 1,
+    });
+  }
+  return out;
+}
+
+/** afterDate より後に施行される世代の施行日 (昇順・重複なし)。改定前の「超過見込み」用 */
+export function futureEffectiveDates(index: Map<string, CeilingRow[]>, afterDate: string): string[] {
+  const s = new Set<string>();
+  for (const rows of index.values()) {
+    for (const r of rows) {
+      const d = String(r.effective_from).slice(0, 10);
+      if (d > afterDate) s.add(d);
+    }
+  }
+  return Array.from(s).sort();
+}

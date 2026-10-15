@@ -1,4 +1,7 @@
 import { supabase } from "./supabase";
+import type { EquipmentPriceHistory } from "./supabase";
+import { getAllOrderItemsByTenant, getAllOrders } from "./orders";
+import { getEquipment, getPriceHistory } from "./equipment";
 
 // 福祉用具 上限価格・平均価格マスタ (厚労省公表データ)。
 // 上限価格は TAIS コードごとに 1 つ決まり、適用月 (effective_from) で世代管理する。
@@ -89,4 +92,54 @@ export async function deleteCeilingMonth(tenantId: string, effectiveFrom: string
     .eq("tenant_id", tenantId)
     .eq("effective_from", effectiveFrom);
   if (error) throw error;
+}
+
+// ── 上限取込の前に「この上限で超過になる貸与」を出すための材料 (2026-10-15・B-2i) ──
+// 請求画面 (BillingTab getUnits) と同じ価格の取り方をするので、
+// 貸与明細・発注 (payment_type)・用具マスタ・価格改定履歴をまとめて読む。READ のみ。
+export type CeilingRentalSource = {
+  items: {
+    id: string;
+    product_code: string;
+    status: string | null;
+    cancelled_at: string | null;
+    rental_start_date: string | null;
+    rental_end_date: string | null;
+    quantity: number | null;
+    paymentType: string | null;
+  }[];
+  equipment: { product_code: string; tais_code: string | null; name: string; rental_price: number | null }[];
+  history: EquipmentPriceHistory[];
+};
+
+export async function loadCeilingRentalSource(tenantId: string): Promise<CeilingRentalSource> {
+  const [items, orders, equipment] = await Promise.all([
+    getAllOrderItemsByTenant(tenantId),
+    getAllOrders(tenantId),
+    getEquipment(tenantId),
+  ]);
+  const ptByOrder = new Map(orders.map((o) => [o.id, o.payment_type ?? null]));
+  const careItems = items
+    .map((i) => ({
+      id: i.id,
+      product_code: i.product_code,
+      status: i.status ?? null,
+      cancelled_at: i.cancelled_at ?? null,
+      rental_start_date: i.rental_start_date ?? null,
+      rental_end_date: i.rental_end_date ?? null,
+      quantity: i.quantity ?? null,
+      paymentType: i.payment_type ?? ptByOrder.get(i.order_id) ?? null,
+    }))
+    .filter((i) => i.paymentType === "介護");
+  // .in() は件数が多いと遅くなるので 150 件ずつ (memory: feedback_postgrest_in_query_plan_cliff)
+  const codes = Array.from(new Set(careItems.map((i) => i.product_code)));
+  const history: EquipmentPriceHistory[] = [];
+  for (let i = 0; i < codes.length; i += 150) {
+    history.push(...(await getPriceHistory(tenantId, codes.slice(i, i + 150))));
+  }
+  return {
+    items: careItems,
+    equipment: equipment.map((e) => ({ product_code: e.product_code, tais_code: e.tais_code ?? null, name: e.name, rental_price: e.rental_price ?? null })),
+    history,
+  };
 }

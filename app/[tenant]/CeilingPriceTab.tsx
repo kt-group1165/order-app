@@ -6,9 +6,13 @@ import {
   getCeilingPrices,
   upsertCeilingPrices,
   deleteCeilingMonth,
+  loadCeilingRentalSource,
   type EquipmentPriceCeiling,
   type CeilingImportRow,
+  type CeilingRentalSource,
 } from "@/lib/ceilingPrices";
+import { indexCeilings, isCareRentalInMonth, findRentalOverruns, type CeilingRow } from "@/lib/ceilingCheck";
+import { getPriceForMonth } from "@/lib/equipment";
 
 // 適用月ラベル: "YYYY-MM-DD" → "令和8年7月"
 function monthLabel(eff: string): string {
@@ -482,6 +486,7 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
         <CeilingPriceImportModal
           tenantId={tenantId}
           existingMonths={new Set(months.map(([m]) => m))}
+          existingRows={rows}
           onClose={() => setShowImport(false)}
           onDone={() => {
             setShowImport(false);
@@ -508,18 +513,67 @@ type FileEntry = {
   ym: string; // "YYYY-MM" (編集可)
 };
 
+// ── 取込前の「超過になる貸与」見込み (2026-10-15・B-2i) ──────────────────────
+// 上限は定期的に切り下げ改定されるので、取り込んだ瞬間から既存の貸与が超過になりうる。
+// 上限を超えた価格の貸与は保険給付の対象外 (月額全体) なのに、請求・伝送は上限を見ていない。
+// そこで取込プレビューの時点で「このファイルの上限で、施行月に超過になる介護の貸与」を出す。
+// ★ 警告だけ。取込は止めない・価格は変えない。
+type CeilingImpact = { productCode: string; name: string; price: number; ceiling: number; lines: number };
+
+function computeCeilingImpact(
+  entry: FileEntry,
+  existingRows: CeilingRow[],
+  source: CeilingRentalSource,
+): CeilingImpact[] {
+  if (!entry.ym || entry.rows.length === 0) return [];
+  const eff = `${entry.ym}-01`;
+  const fileTais = new Set(entry.rows.map((r) => String(r.tais_code).trim()));
+  // 取込後の状態 = 既存 (同じ適用月・同じ TAIS は上書きされるので除く) + このファイル
+  const merged: CeilingRow[] = [
+    ...existingRows.filter((r) => !(String(r.effective_from).slice(0, 10) === eff && fileTais.has(String(r.tais_code).trim()))),
+    ...entry.rows.map((r) => ({ tais_code: r.tais_code, effective_from: eff, ceiling_price: r.ceiling_price })),
+  ];
+  const idx = indexCeilings(merged);
+  const eqByCode = new Map(source.equipment.map((e) => [e.product_code, e]));
+  const lines: { id: string; taisCode: string; price: number; quantity: number | null; productCode: string }[] = [];
+  for (const it of source.items) {
+    if (!isCareRentalInMonth(it, it.paymentType, entry.ym)) continue;
+    const e = eqByCode.get(it.product_code);
+    // このファイルの TAIS だけ見る (それ以外の超過は check:ceiling-rental が見る)
+    if (!e?.tais_code || !fileTais.has(e.tais_code.trim())) continue;
+    // 請求画面 (BillingTab getUnits) と同じ価格の取り方
+    const price = getPriceForMonth(source.history, it.product_code, entry.ym) ?? e.rental_price ?? 0;
+    lines.push({ id: it.id, taisCode: e.tais_code, price, quantity: it.quantity, productCode: it.product_code });
+  }
+  const codeById = new Map(lines.map((l) => [l.id, l.productCode]));
+  const byCode = new Map<string, CeilingImpact>();
+  for (const o of findRentalOverruns(lines, eff, idx)) {
+    if (o.effectiveFrom !== eff) continue; // このファイルの上限で超えたものだけ
+    const code = codeById.get(o.id) ?? "";
+    const cur = byCode.get(code);
+    if (cur) cur.lines += o.quantity;
+    else byCode.set(code, { productCode: code, name: eqByCode.get(code)?.name ?? code, price: o.price, ceiling: o.ceiling, lines: o.quantity });
+  }
+  return Array.from(byCode.values()).sort((a, b) => b.lines - a.lines);
+}
+
 function CeilingPriceImportModal({
   tenantId,
   existingMonths,
+  existingRows,
   onClose,
   onDone,
 }: {
   tenantId: string;
   existingMonths: Set<string>;
+  existingRows: EquipmentPriceCeiling[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [rentalSource, setRentalSource] = useState<CeilingRentalSource | null>(null);
+  const [rentalSourceError, setRentalSourceError] = useState("");
+  const rentalSourceRequested = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -578,6 +632,27 @@ function CeilingPriceImportModal({
   const removeEntry = (key: number) => setEntries((prev) => prev.filter((e) => e.key !== key));
 
   const okEntries = entries.filter((e) => e.status === "ok");
+
+  // 最初のファイルが読めたら、貸与明細を 1 回だけ読む (見込み表示専用。失敗しても取込は続行できる)
+  useEffect(() => {
+    if (rentalSourceRequested.current || okEntries.length === 0) return;
+    rentalSourceRequested.current = true;
+    loadCeilingRentalSource(tenantId)
+      .then(setRentalSource)
+      .catch((err) => {
+        console.error("貸与明細の取得に失敗 (超過見込みの表示のみ無効):", err);
+        setRentalSourceError("貸与中の明細を読めなかったため、超過見込みは確認できません");
+      });
+  }, [okEntries.length, tenantId]);
+
+  const impactByKey = useMemo(() => {
+    const m = new Map<number, CeilingImpact[]>();
+    if (!rentalSource) return m;
+    for (const e of entries) {
+      if (e.status === "ok") m.set(e.key, computeCeilingImpact(e, existingRows, rentalSource));
+    }
+    return m;
+  }, [entries, existingRows, rentalSource]);
   const parsing = entries.some((e) => e.status === "parsing");
   const totalCount = okEntries.reduce((s, e) => s + e.count, 0);
   const distinctMonths = new Set(okEntries.filter((e) => e.ym).map((e) => e.ym)).size;
@@ -709,6 +784,9 @@ function CeilingPriceImportModal({
                               {willOverwrite && <span className="text-amber-600"> ・既存を上書き</span>}
                             </p>
                           )}
+                          {e.status === "ok" && e.ym && (
+                            <CeilingImpactNote ym={e.ym} impact={impactByKey.get(e.key)} error={rentalSourceError} />
+                          )}
                         </div>
                         {e.status === "ok" && (
                           <input
@@ -763,6 +841,42 @@ function CeilingPriceImportModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// 取込プレビュー 1 ファイル分の「超過見込み」表示。警告だけで取込は止めない。
+function CeilingImpactNote({ ym, impact, error }: { ym: string; impact: CeilingImpact[] | undefined; error: string }) {
+  if (error) return <p className="text-[11px] text-gray-400">{error}</p>;
+  if (!impact) {
+    return (
+      <p className="text-[11px] text-gray-400 flex items-center gap-1">
+        <Loader2 size={11} className="animate-spin" />
+        貸与中の用具と照合中…
+      </p>
+    );
+  }
+  if (impact.length === 0) {
+    return <p className="text-[11px] text-emerald-600">この上限で超過になる介護の貸与はありません ({ym} 時点)</p>;
+  }
+  const total = impact.reduce((s, x) => s + x.lines, 0);
+  return (
+    <div
+      className="mt-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-[11px] text-amber-700"
+      title="上限を超えた価格の貸与は保険給付の対象外です (超過分だけでなく月額全体)。取込は止めません。施行月までに価格を見直してください。"
+    >
+      <p className="font-medium flex items-center gap-1">
+        <AlertCircle size={11} />
+        {ym} から上限超過になる介護の貸与: {impact.length}品目 / {total}口
+      </p>
+      <ul className="mt-0.5 space-y-0.5">
+        {impact.slice(0, 8).map((x) => (
+          <li key={x.productCode} className="truncate">
+            {x.name} — 価格 {x.price.toLocaleString()} &gt; 上限 {x.ceiling.toLocaleString()} 円 ({x.lines}口)
+          </li>
+        ))}
+        {impact.length > 8 && <li>ほか {impact.length - 8} 品目</li>}
+      </ul>
     </div>
   );
 }

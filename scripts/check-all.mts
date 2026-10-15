@@ -30,6 +30,7 @@ type Check = { name: string; script: string; why: string; slow?: boolean; kind?:
 /** ★ 落ちたら金額か返戻に効くものだけ */
 const CHECKS: Check[] = [
   { name: "ceiling-boundary", script: "check:ceiling-boundary", why: "上限価格判定 (純関数・境界値)" },
+  { name: "fukuyogu-amounts", script: "check:fukuyogu-amounts", why: "★ 保険請求額・本人負担・公費 (公費単独 H は保険0・公費10割)" },
   { name: "fukuyogu-units", script: "check:fukuyogu-units", why: "福祉用具貸与の半月按分ルール" },
   { name: "fukuyogu-rounding", script: "check:fukuyogu-rounding", why: "福祉用具の価格丸め (過去月に現在価格を使わないか)" },
   { name: "fukuyogu-densou", script: "check:fukuyogu-densou", why: "福祉用具伝送の仕様書突合 (ほのぼの実出力は未入手)",
@@ -48,6 +49,11 @@ const CHECKS: Check[] = [
   { name: "attendance-parity", script: "check:attendance-parity", why: "★ 出勤簿計算 (attendance-calc.ts) が kaigo/payroll/order の3app間で食い違わないか (実データ。期待値は常に差0)", slow: true },
   { name: "ceiling", script: "check:ceiling", why: "上限価格超過の回帰 (実データ + 基準値)", slow: true,
     kind: "baseline" }, // 基準値=現状の超過件数。0件を目指す検査ではない (改定のたび増える構造。B-2i)
+  // ★ 2026-10-15 新設 (B-2i)。check:ceiling はマスタ全件 (269件の大半は請求に乗らない旧EQ-コード) を
+  //   見るので、★ 実際に請求に乗る貸与 (前月・当月・未施行の上限世代) だけをここで見る。
+  //   伝送・請求画面は上限を見ていないので、返戻になる明細はここでしか気づけない。
+  { name: "ceiling-rental", script: "check:ceiling-rental", why: "★ 請求に乗る貸与の上限超過 (前月/当月/改定前の見込み。基準値=超過明細のid集合)", slow: true,
+    kind: "baseline", knownDiff: 1 }, // KMD-R12 1口 (2026-07 施行の初公表上限 12,850 < 13,000。user判断待ち)
 ];
 
 /** ★ この一覧が見ていないもの。緑でも安心しないための明示 */

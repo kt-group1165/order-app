@@ -14,7 +14,7 @@
  *   ハーネスの基準日 (rental_start_date ?? "1900-01-01") 由来で、
  *   基準日を変えると変わる。**数え方が違うだけで、どちらも間違いではない。**
  */
-import { indexCeilings, judgeCeiling, type CeilingRow } from "../lib/ceilingCheck";
+import { indexCeilings, judgeCeiling, isCareRentalInMonth, findRentalOverruns, futureEffectiveDates, type CeilingRow } from "../lib/ceilingCheck";
 
 let pass = 0;
 const fails: string[] = [];
@@ -69,6 +69,36 @@ eq("1900-01-01 (貸与開始日 null のときハーネスが入れる値) → u
 eq("空白の TAIS は捨てる", indexCeilings([{ tais_code: " ", effective_from: "2026-04-01", ceiling_price: 1 }]).size, 0);
 eq("入力が降順でも昇順に並べ替える",
   indexCeilings([rows[1], rows[0]]).get("T-1")!.map((r) => r.effective_from), ["2025-04-01", "2026-04-01"]);
+
+// ── isCareRentalInMonth (2026-10-15 追加) ───────────────────────────
+const it = (o: Partial<{ status: string | null; cancelled_at: string | null; rental_start_date: string | null; rental_end_date: string | null }>) => ({
+  status: "rental_started", cancelled_at: null, rental_start_date: "2026-06-10", rental_end_date: null, ...o,
+});
+eq("当月開始 → 対象", isCareRentalInMonth(it({}), "介護", "2026-06"), true);
+eq("月末日開始 → 対象", isCareRentalInMonth(it({ rental_start_date: "2026-06-30" }), "介護", "2026-06"), true);
+eq("翌月1日開始 → 対象外", isCareRentalInMonth(it({ rental_start_date: "2026-07-01" }), "介護", "2026-06"), false);
+eq("当月1日終了 → 対象", isCareRentalInMonth(it({ rental_start_date: "2026-01-01", rental_end_date: "2026-06-01", status: "terminated" }), "介護", "2026-06"), true);
+eq("前月末終了 → 対象外", isCareRentalInMonth(it({ rental_start_date: "2026-01-01", rental_end_date: "2026-05-31", status: "terminated" }), "介護", "2026-06"), false);
+eq("自費 → 対象外", isCareRentalInMonth(it({}), "自費", "2026-06"), false);
+eq("キャンセル → 対象外", isCareRentalInMonth(it({ cancelled_at: "2026-06-11" }), "介護", "2026-06"), false);
+eq("未開始ステータス → 対象外", isCareRentalInMonth(it({ status: "ordered" }), "介護", "2026-06"), false);
+eq("開始日 null → 対象外", isCareRentalInMonth(it({ rental_start_date: null }), "介護", "2026-06"), false);
+eq("2月の月末 (閏年でない)", isCareRentalInMonth(it({ rental_start_date: "2026-02-28" }), "介護", "2026-02"), true);
+
+// ── findRentalOverruns / futureEffectiveDates ──────────────────────
+eq("超過だけ返す・判定不能は返さない",
+  findRentalOverruns([
+    { id: "a", taisCode: "T-1", price: 9001, quantity: 2 },
+    { id: "b", taisCode: "T-1", price: 9000 },
+    { id: "c", taisCode: "T-X", price: 99999 },
+    { id: "d", taisCode: null, price: 99999 },
+  ], D, idx),
+  [{ id: "a", ceiling: 9000, effectiveFrom: "2026-04-01", excess: 1, price: 9001, quantity: 2 }]);
+eq("改定前日は旧世代で判定 (超過見込みは施行日で見ること)",
+  findRentalOverruns([{ id: "a", taisCode: "T-1", price: 9500 }], "2026-03-31", idx).length, 0);
+eq("futureEffectiveDates: 基準日より後だけ・昇順",
+  futureEffectiveDates(idx, "2025-04-01"), ["2026-04-01"]);
+eq("futureEffectiveDates: 施行日当日は含めない", futureEffectiveDates(idx, "2026-04-01"), []);
 
 console.log(`\n上限価格 判定器の境界値テスト: ${pass} 件 PASS / ${fails.length} 件 FAIL`);
 for (const f of fails) console.log("  ✗ " + f);
