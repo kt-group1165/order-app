@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Hammer, Plus, Loader2, AlertTriangle, Trash2, X, RefreshCw, Search } from "lucide-react";
+import { Hammer, Plus, Loader2, AlertTriangle, Trash2, X, RefreshCw, Search, FileText } from "lucide-react";
 import { Client, Member } from "@/lib/supabase";
 import { getClients } from "@/lib/clients";
 import { getMembers } from "@/lib/orders";
@@ -30,6 +30,7 @@ import {
   todayYmd,
   updateRenovationStep,
 } from "@/lib/renovations";
+import RenovationDocsModal from "./RenovationDocsModal";
 
 type SubTab = "board" | "delayed" | "summary";
 
@@ -69,6 +70,7 @@ export default function RenovationTab({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RenovationProjectWithSteps | "new" | null>(null);
+  const [docsFor, setDocsFor] = useState<RenovationProjectWithSteps | null>(null);
 
   const officeFilter = officeViewAll ? null : currentOfficeId;
 
@@ -236,6 +238,7 @@ export default function RenovationTab({
           today={today}
           onCycleStep={handleCycleStep}
           onEdit={(p) => setEditing(p)}
+          onDocs={(p) => setDocsFor(p)}
         />
       ) : subTab === "delayed" ? (
         <DelayedView rows={delayed} onEdit={(p) => setEditing(p)} />
@@ -251,6 +254,19 @@ export default function RenovationTab({
           project={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); }}
+        />
+      )}
+
+      {docsFor && (
+        <RenovationDocsModal
+          tenantId={tenantId}
+          project={docsFor}
+          onClose={() => setDocsFor(null)}
+          onSaved={(documents) => {
+            // 一覧を読み直さず、手元の案件にだけ反映する (再度開いたときに最新の入力が出るように)
+            setProjects((prev) => prev.map((x) => (x.id === docsFor.id ? { ...x, documents } : x)));
+            setDocsFor((cur) => (cur ? { ...cur, documents } : cur));
+          }}
         />
       )}
     </div>
@@ -317,11 +333,13 @@ function BoardView({
   today,
   onCycleStep,
   onEdit,
+  onDocs,
 }: {
   grouped: { month: string; rows: RenovationProjectWithSteps[] }[];
   today: string;
   onCycleStep: (p: RenovationProjectWithSteps, key: RenovationStepKey) => void;
   onEdit: (p: RenovationProjectWithSteps) => void;
+  onDocs: (p: RenovationProjectWithSteps) => void;
 }) {
   if (grouped.length === 0) {
     return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">この年度の案件はありません</div>;
@@ -343,7 +361,7 @@ function BoardView({
             <th className="text-right px-2 py-2 w-24">計上金額</th>
             <th className="text-right px-2 py-2 w-24">粗利</th>
             <th className="text-right px-2 py-2 w-16">仕入率</th>
-            <th className="px-2 py-2 w-12" />
+            <th className="px-2 py-2 w-24" />
           </tr>
         </thead>
         <tbody>
@@ -385,7 +403,14 @@ function BoardView({
                     <td className="px-2 py-1 text-right whitespace-nowrap">{yen(p.sales_total)}</td>
                     <td className="px-2 py-1 text-right whitespace-nowrap">{yen(grossProfit(p.cost_total, p.sales_total))}</td>
                     <td className="px-2 py-1 text-right whitespace-nowrap text-gray-500">{pct(costRate(p.cost_total, p.sales_total))}</td>
-                    <td className="px-2 py-1 text-right">
+                    <td className="px-2 py-1 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => onDocs(p)}
+                        className={`text-[10px] px-2 py-1 border rounded mr-1 inline-flex items-center gap-0.5 ${p.documents ? "border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100" : "border-gray-300 hover:bg-gray-50"}`}
+                        title={p.documents ? "書類 (作成済み)" : "書類を作る"}
+                      >
+                        <FileText size={11} />書類
+                      </button>
                       <button
                         onClick={() => onEdit(p)}
                         className="text-[10px] px-2 py-1 border border-gray-300 rounded hover:bg-gray-50"

@@ -89,6 +89,8 @@ export type RenovationProject = {
   sales_total: number | null;
   status: "in_progress" | "completed" | "on_hold" | "cancelled";
   import_marker: string | null;
+  /** 書類の入力データ (lib/renovationDocs.ts RenovationDocs)。null = 未作成 / 列追加前 */
+  documents?: unknown;
   created_at: string;
   updated_at: string;
 };
@@ -507,4 +509,72 @@ export async function deleteRenovationProject(id: string): Promise<void> {
   // 工程は ON DELETE CASCADE で一緒に消える
   const { error } = await supabase.from("renovation_projects").delete().eq("id", id);
   if (error) throw error;
+}
+
+/**
+ * 書類の入力データだけを保存する (案件本体・工程は触らない)。
+ * 列 (renovation_documents.sql) が未適用だと PostgREST が 400 を返すので、そのまま投げて画面に出す。
+ */
+export async function saveRenovationDocuments(projectId: string, documents: unknown): Promise<void> {
+  const { data, error } = await supabase
+    .from("renovation_projects")
+    .update({ documents })
+    .eq("id", projectId)
+    .select("id");
+  if (error) throw error;
+  // RLS で弾かれると error 無しで 0 行になる (書いたつもりで何も保存されない) ので件数も見る
+  if (!data || data.length !== 1) throw new Error(`保存できませんでした (更新 ${data?.length ?? 0} 件)。権限を確認してください`);
+}
+
+/** 同じ事業所で最後に書類を作った案件の発行元 (会社名・住所・登録番号等) を引き継ぎ用に返す */
+export async function getLatestRenovationIssuer(tenantId: string, officeId: string): Promise<unknown | null> {
+  const { data, error } = await supabase
+    .from("renovation_projects")
+    .select("documents")
+    .eq("tenant_id", tenantId)
+    .eq("office_id", officeId)
+    .not("documents", "is", null)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const docs = (data?.[0] as { documents?: { issuer?: unknown } } | undefined)?.documents;
+  return docs?.issuer ?? null;
+}
+
+/** 書類の印字に使う利用者 1 名 (氏名・生年月日・被保険者番号・住所・要介護度など) */
+export async function getRenovationClient(clientId: string): Promise<import("./supabase").Client | null> {
+  const { data, error } = await supabase.from("clients").select("*").eq("id", clientId).maybeSingle();
+  if (error) throw error;
+  return (data as import("./supabase").Client | null) ?? null;
+}
+
+/**
+ * 発行元 (書類の会社欄) の既定値を 事業所マスタ + 法人マスタ から作る。
+ * 事業所の住所・電話が未登録のことがある (2026-10-15 時点でケア・サポート千葉は空) ので、
+ * 取れなかった項目は空のまま返し、画面で入力してもらう。
+ */
+export async function getRenovationIssuerDefaults(officeId: string): Promise<{
+  company_name: string; office_name: string; postal_code: string; address: string; tel: string; fax: string;
+}> {
+  const { data: office, error } = await supabase
+    .from("offices")
+    .select("name, postal_code, address, phone, fax, company_id")
+    .eq("id", officeId)
+    .maybeSingle();
+  if (error) throw error;
+  const o = office as { name: string | null; postal_code: string | null; address: string | null; phone: string | null; fax: string | null; company_id: string | null } | null;
+  let companyName = "";
+  if (o?.company_id) {
+    const { data: co, error: coErr } = await supabase.from("companies").select("name").eq("id", o.company_id).maybeSingle();
+    if (coErr) console.warn("法人名の取得に失敗 (発行元は手入力):", coErr.message);
+    companyName = (co as { name: string | null } | null)?.name ?? "";
+  }
+  return {
+    company_name: companyName,
+    office_name: o?.name ?? "",
+    postal_code: o?.postal_code ?? "",
+    address: o?.address ?? "",
+    tel: o?.phone ?? "",
+    fax: o?.fax ?? "",
+  };
 }
