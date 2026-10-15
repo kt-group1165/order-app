@@ -19,12 +19,12 @@
     "  現状の件数をそのまま基準値にする。"
   ],
   "fingerprint": {
-    "equipmentMaster": "c33e7a2ee08add77",
+    "equipmentMaster": "29033a3f5b08a910",
     "ceilings": "4a1087a0c886d9b1"
   },
-  "asOf": "2026-09-05",
+  "asOf": "2026-10-15",
   "dataEntryErrors": {
-    "total": 2,
+    "total": 0,
     "rentedItems": 0,
     "rentedLines": 0,
     "monthlyExcessYen": 0
