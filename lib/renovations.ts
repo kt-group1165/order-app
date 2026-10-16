@@ -546,6 +546,8 @@ export async function getLatestRenovationIssuer(tenantId: string, officeId: stri
     .eq("tenant_id", tenantId)
     .eq("office_id", officeId)
     .not("documents", "is", null)
+    // サンプル案件 (import_marker = fake-…) の発行元を本物の案件に引き継がない
+    .or("import_marker.is.null,import_marker.not.like.fake-*")
     .order("updated_at", { ascending: false })
     .limit(1);
   if (error) throw error;
