@@ -365,7 +365,7 @@ export default function RenovationDocsModal({
         </div>
 
         {/* 書類 (view = "form" のときは画面では隠すが、印刷では出す = #renovation-docs-preview-pane) */}
-        <div id="renovation-docs-preview-pane" className={`flex-1 flex-col min-h-0 bg-gray-100 ${view === "form" ? "hidden" : "flex"}`}>
+        <div id="renovation-docs-preview-pane" className={`flex-1 min-w-0 flex-col min-h-0 bg-gray-100 ${view === "form" ? "hidden" : "flex"}`}>
           <div className="no-print flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 bg-white border-b border-gray-200 text-xs">
             <span className="text-gray-500">印刷する書類:</span>
             {order.map((k) => (
@@ -384,7 +384,7 @@ export default function RenovationDocsModal({
             ))}
             <ViewToggle expanded={view === "preview"} onClick={() => setView(view === "preview" ? "split" : "preview")} what="書類" />
           </div>
-          <div ref={setPreviewEl} id="renovation-docs-print" className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col items-center gap-4">
+          <div ref={setPreviewEl} id="renovation-docs-print" className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 flex flex-col items-center gap-4">
             {order.filter((k) => selected.has(k)).map((k) => (
               // 右側の幅に合わせて書類ごとに拡大縮小する (横がはみ出さない)。印刷では等倍に戻す (.rdoc-fit)
               <div key={k} className="shadow-md rdoc-fit" style={{ zoom: fitZoom(k) }}>
