@@ -48,6 +48,8 @@ const FORM_TABS: [FormTab, string][] = [
 ];
 
 const PRINT_STYLE_ID = "__renovation_docs_print__";
+/** A4 横で出す書類 (それ以外は A4 縦) */
+const LANDSCAPE_DOCS = new Set<DocKey>(["estimate", "reason1", "reason2", "photos"]);
 
 export default function RenovationDocsModal({
   tenantId,
@@ -123,6 +125,7 @@ export default function RenovationDocsModal({
         .no-print { display: none !important; }
         .rdoc-sheet { box-shadow: none !important; margin: 0 !important; break-after: page; }
         .rdoc-sheet:last-child { break-after: auto; }
+        .rdoc-fit { zoom: 1 !important; box-shadow: none !important; }
         .rdoc-landscape { page: rdoc-landscape; }
         .rdoc-portrait { page: rdoc-portrait; }
       }
@@ -132,6 +135,22 @@ export default function RenovationDocsModal({
   }, []);
 
   const totals = useMemo(() => (docs ? computeEstimate(docs.estimate) : null), [docs]);
+
+  // 右側 (書類の確認欄) の幅。書類を幅いっぱいに拡大縮小するのに使う
+  const [previewEl, setPreviewEl] = useState<HTMLDivElement | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  useEffect(() => {
+    if (!previewEl) return;
+    const ro = new ResizeObserver(([entry]) => setPreviewWidth(entry.contentRect.width));
+    ro.observe(previewEl);
+    return () => ro.disconnect();
+  }, [previewEl]);
+  /** 書類の横幅 (px)。Sheet の幅 A4 横 281mm / 縦 190mm を 96dpi で換算 */
+  const fitZoom = (k: DocKey): number => {
+    if (previewWidth <= 0) return 1;
+    const natural = LANDSCAPE_DOCS.has(k) ? 1062 : 718;
+    return Math.min(1.6, Math.max(0.3, previewWidth / natural));
+  };
 
   // 写真: Storage のパス → 署名付き URL (1 時間)。足りない分だけ取りに行く
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
@@ -342,9 +361,10 @@ export default function RenovationDocsModal({
               </label>
             ))}
           </div>
-          <div id="renovation-docs-print" className="flex-1 overflow-auto p-4 flex flex-col items-center gap-4">
+          <div ref={setPreviewEl} id="renovation-docs-print" className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col items-center gap-4">
             {order.filter((k) => selected.has(k)).map((k) => (
-              <div key={k} className="shadow-md">
+              // 右側の幅に合わせて書類ごとに拡大縮小する (横がはみ出さない)。印刷では等倍に戻す (.rdoc-fit)
+              <div key={k} className="shadow-md rdoc-fit" style={{ zoom: fitZoom(k) }}>
                 {k === "estimate" && <EstimateSheet {...sheetProps} />}
                 {k === "reason1" && <ReasonP1Sheet {...sheetProps} />}
                 {k === "reason2" && <ReasonP2Sheet {...sheetProps} />}
