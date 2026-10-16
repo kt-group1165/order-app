@@ -129,7 +129,7 @@ export default function RenovationDocsModal({
         .no-print { display: none !important; }
         .rdoc-sheet { box-shadow: none !important; margin: 0 !important; break-after: page; }
         .rdoc-sheet:last-child { break-after: auto; }
-        .rdoc-fit { zoom: 1 !important; box-shadow: none !important; }
+        .rdoc-fit { zoom: 1 !important; box-shadow: none !important; padding: 0 !important; }
         #renovation-docs-preview-pane { display: flex !important; }
         .rdoc-landscape { page: rdoc-landscape; }
         .rdoc-portrait { page: rdoc-portrait; }
@@ -153,8 +153,9 @@ export default function RenovationDocsModal({
   /** 書類の横幅 (px)。Sheet の幅 A4 横 281mm / 縦 190mm を 96dpi で換算 */
   const fitZoom = (k: DocKey): number => {
     if (previewWidth <= 0) return 1;
-    const natural = LANDSCAPE_DOCS.has(k) ? 1062 : 718;
-    return Math.min(1.6, Math.max(0.3, previewWidth / natural));
+    // 紙の余白 (印刷時の @page と同じ 横 8mm / 縦 10mm) を付けた幅で合わせ、左右に少し灰色の余白を残す
+    const natural = LANDSCAPE_DOCS.has(k) ? 1062 + 2 * 30 : 718 + 2 * 38;
+    return Math.min(1.3, Math.max(0.3, (previewWidth * 0.94) / natural));
   };
 
   // 写真: Storage のパス → 署名付き URL (1 時間)。足りない分だけ取りに行く
@@ -387,7 +388,7 @@ export default function RenovationDocsModal({
           <div ref={setPreviewEl} id="renovation-docs-print" className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 flex flex-col items-center gap-4">
             {order.filter((k) => selected.has(k)).map((k) => (
               // 右側の幅に合わせて書類ごとに拡大縮小する (横がはみ出さない)。印刷では等倍に戻す (.rdoc-fit)
-              <div key={k} className="shadow-md rdoc-fit" style={{ zoom: fitZoom(k) }}>
+              <div key={k} className="shadow-md rdoc-fit bg-white" style={{ zoom: fitZoom(k), padding: LANDSCAPE_DOCS.has(k) ? "8mm" : "10mm" }}>
                 {k === "estimate" && <EstimateSheet {...sheetProps} />}
                 {k === "reason1" && <ReasonP1Sheet {...sheetProps} />}
                 {k === "reason2" && <ReasonP2Sheet {...sheetProps} />}
