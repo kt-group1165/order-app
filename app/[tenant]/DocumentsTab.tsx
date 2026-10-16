@@ -918,7 +918,8 @@ function ChangeContractModal({
   const nextDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
   const nextYM = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`;
 
-  const [step, setStep] = useState<1 | 2>(1);
+  /** 書類だけを全画面で見る (入力欄を隠す) */
+  const [previewOnly, setPreviewOnly] = useState(false);
   const [contractDate, setContractDate] = useState((initialParams?.contractDate as string) ?? todayStr);
   const [currentMonth, setCurrentMonth] = useState((initialParams?.currentMonth as string) ?? todayYM);
   const [nextMonth, setNextMonth] = useState((initialParams?.nextMonth as string) ?? nextYM);
@@ -1045,10 +1046,17 @@ function ChangeContractModal({
         await completeCarePlanElements([...selectedElementIds], saved.id);
       }
       onSaved?.();
+    } catch (e) {
+      // 以前は catch が無く、保存に失敗しても画面に何も出なかった
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("変更契約書の保存に失敗:", msg);
+      alert(`保存に失敗しました: ${msg}`);
     } finally {
       setSaving(false);
     }
   };
+
+  const nothingSelected = rows.length === 0 && selectedElementIds.size === 0;
 
   // ── サンプル（変更契約書.xlsx）の列幅・フォント・配置を忠実に再現 ──
   // Excel列幅 → %換算（合計95.62 = 100%）
@@ -1066,31 +1074,34 @@ function ChangeContractModal({
       <div className="bg-white flex-1 overflow-hidden flex flex-col">
         {/* ヘッダー */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
-          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+          <button onClick={onClose}>
             <ChevronLeft size={20} className="text-gray-500" />
           </button>
           <h2 className="font-semibold text-gray-800 flex-1">変更契約書</h2>
-          {step === 2 && (
-            <div className="flex gap-2">
-              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
-                <Printer size={14} /> 印刷
-              </button>
-              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
-                {saving ? "保存中..." : "保存"}
-              </button>
-            </div>
-          )}
-          {step === 1 && (
-            <button disabled={rows.length === 0 && selectedElementIds.size === 0} onClick={() => setStep(2)}
-              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
-              次へ（プレビュー）
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPreviewOnly((v) => !v)}
+              className="hidden md:inline-flex items-center gap-1 px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded-xl hover:bg-gray-50"
+            >
+              {previewOnly ? "入力と並べて表示" : "書類を全画面"}
             </button>
-          )}
+            <button onClick={handlePrint} disabled={nothingSelected} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              <Printer size={14} /> 印刷
+            </button>
+            <button onClick={handleSave} disabled={saving || nothingSelected} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              {saving ? "保存中..." : "保存"}
+            </button>
+          </div>
         </div>
 
-        {/* Step 1: 設定 */}
-        {step === 1 && (
-          <div className="flex-1 overflow-auto p-5 space-y-4">
+        {/* 左で入力・右で書類を確認 (以前は「次へ（プレビュー）」で画面を切り替えていた) */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
+          <div className={`${previewOnly ? "hidden" : ""} md:w-[420px] shrink-0 border-b md:border-b-0 md:border-r border-gray-200 overflow-y-auto p-4 space-y-4 max-h-[45vh] md:max-h-none`}>
+            {nothingSelected && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                発生要因か変更する用具を選ぶと、保存・印刷できます。
+              </p>
+            )}
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -1199,11 +1210,9 @@ function ChangeContractModal({
               </table>
             </div>
           </div>
-        )}
 
-        {/* Step 2: 印刷プレビュー（変更契約書.xlsx の見本に忠実なレイアウト） */}
-        {step === 2 && (
-          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+        {/* 印刷プレビュー（変更契約書.xlsx の見本に忠実なレイアウト） */}
+          <div className="flex-1 min-w-0 overflow-auto bg-gray-100 p-4">
             {/* A4 用紙風の枠（210mm × 297mm）。padding が印刷時の @page margin と一致 */}
             <div
               style={{
@@ -1367,7 +1376,7 @@ function ChangeContractModal({
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

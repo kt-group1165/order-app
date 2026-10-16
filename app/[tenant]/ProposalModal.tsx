@@ -31,7 +31,8 @@ export default function ProposalModal({
   onSaved?: () => void;
 }) {
   const todayStr = todayYmd();
-  const [step, setStep] = useState<1 | 2>(1);
+  /** 書類だけを全画面で見る (入力欄を隠す) */
+  const [previewOnly, setPreviewOnly] = useState(false);
   const selectableItems = clientItems.filter((i) =>
     ["ordered", "delivered", "trial", "rental_started"].includes(i.status)
   );
@@ -85,41 +86,51 @@ export default function ProposalModal({
         await completeCarePlanElements([...selectedElementIds], saved.id);
       }
       onSaved?.();
+    } catch (e) {
+      // 以前は catch が無く、保存に失敗しても画面に何も出なかった
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("選定提案書の保存に失敗:", msg);
+      alert(`保存に失敗しました: ${msg}`);
     } finally { setSaving(false); }
   };
 
   const TD: React.CSSProperties = { border: "1px solid #555", padding: "2px 5px", verticalAlign: "middle" as const, fontSize: "8.5pt" };
   const TH: React.CSSProperties = { border: "1px solid #555", background: "#eee", padding: "2px 5px", textAlign: "center" as const, whiteSpace: "nowrap" as const, verticalAlign: "middle" as const, fontSize: "8.5pt", fontWeight: "bold" as const };
 
+  const nothingSelected = selectedIds.size === 0 && selectedElementIds.size === 0;
+
   return (
     <div className="fixed inset-0 bg-black/60 flex flex-col z-50 overflow-hidden">
       <div className="bg-white flex-1 overflow-hidden flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
-          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+          <button onClick={onClose}>
             <ChevronLeft size={20} className="text-gray-500" />
           </button>
           <h2 className="font-semibold text-gray-800 flex-1">選定提案書</h2>
-          {step === 1 && (
+          <div className="flex gap-2">
             <button
-              disabled={selectedIds.size === 0 && selectedElementIds.size === 0}
-              onClick={() => setStep(2)}
-              className="px-4 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40"
-            >プレビュー →</button>
-          )}
-          {step === 2 && (
-            <div className="flex gap-2">
-              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
+              onClick={() => setPreviewOnly((v) => !v)}
+              className="hidden md:inline-flex items-center gap-1 px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded-xl hover:bg-gray-50"
+            >
+              {previewOnly ? "入力と並べて表示" : "書類を全画面"}
+            </button>
+              <button onClick={handlePrint} disabled={nothingSelected} className="disabled:opacity-40 flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
                 <Printer size={14} /> 印刷
               </button>
-              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              <button onClick={handleSave} disabled={saving || nothingSelected} className="px-3 py-1.5 bg-blue-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
                 {saving ? "保存中..." : "保存"}
               </button>
-            </div>
-          )}
+          </div>
         </div>
 
-        {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
+        {/* 左で入力・右で書類を確認 (以前は「プレビュー →」で画面を切り替えていた) */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
+          <div className={`${previewOnly ? "hidden" : ""} md:w-[420px] shrink-0 border-b md:border-b-0 md:border-r border-gray-200 overflow-y-auto p-4 space-y-4 max-h-[45vh] md:max-h-none`}>
+            {nothingSelected && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                対象を選ぶと、保存・印刷できます。
+              </p>
+            )}
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -194,12 +205,11 @@ export default function ProposalModal({
               <div>
                 <label className="text-xs text-gray-500 block mb-1">作成日</label>
                 <input type="date" value={creationDate} onChange={(e) => setCreationDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-blue-400" />
               </div>
             </div>
           </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto bg-gray-100 p-4">
+          <div className="flex-1 min-w-0 overflow-auto bg-gray-100 p-4">
             <div id="proposal-print-content" className="bg-white mx-auto shadow"
               style={{
                 fontFamily: "'Meiryo','MS PGothic',sans-serif",
@@ -330,7 +340,7 @@ export default function ProposalModal({
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -30,7 +30,8 @@ export default function ContractDocumentsModal({
   onSaved?: () => void;
 }) {
   const todayStr = todayYmd();
-  const [step, setStep] = useState<1 | 2>(1);
+  /** 書類だけを全画面で見る (入力欄を隠す) */
+  const [previewOnly, setPreviewOnly] = useState(false);
   const [explanationDate, setExplanationDate] = useState(todayStr);
   const [contractDate, setContractDate] = useState(todayStr);
   const [benefitRate, setBenefitRate] = useState<"1" | "2" | "3">("1");
@@ -74,6 +75,8 @@ export default function ContractDocumentsModal({
       .split("{契約締結日}").join(contractDateJa)
       .split("{認定有効期限}").join(certEndJa);
 
+  const nothingSelected = selectedIds.size === 0 && selectedElementIds.size === 0;
+
   const handlePrint = () => {
     const el = document.getElementById("combined-docs-print");
     if (!el) return;
@@ -111,6 +114,11 @@ export default function ContractDocumentsModal({
         await completeCarePlanElements([...selectedElementIds], contractDoc.id);
       }
       onSaved?.();
+    } catch (e) {
+      // 以前は catch が無く、保存に失敗しても画面に何も出なかった
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("重要事項説明書・契約書の保存に失敗:", msg);
+      alert(`保存に失敗しました: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -124,30 +132,34 @@ export default function ContractDocumentsModal({
       <div className="bg-white flex-1 overflow-hidden flex flex-col">
         {/* ヘッダー */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
-          <button onClick={step === 2 ? () => setStep(1) : onClose}>
+          <button onClick={onClose}>
             <ChevronLeft size={20} className="text-gray-500" />
           </button>
           <h2 className="font-semibold text-gray-800 flex-1">書類作成（重要事項説明書・契約書）</h2>
-          {step === 2 && (
-            <div className="flex gap-2">
-              <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl">
-                <Printer size={14} /> 印刷
-              </button>
-              <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
-                {saving ? "保存中..." : "保存"}
-              </button>
-            </div>
-          )}
-          {step === 1 && (
-            <button disabled={selectedIds.size === 0 && selectedElementIds.size === 0} onClick={() => setStep(2)}
-              className="px-4 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
-              プレビュー →
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPreviewOnly((v) => !v)}
+              className="hidden md:inline-flex items-center gap-1 px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded-xl hover:bg-gray-50"
+            >
+              {previewOnly ? "入力と並べて表示" : "書類を全画面"}
             </button>
-          )}
+            <button onClick={handlePrint} disabled={nothingSelected} className="flex items-center gap-1 px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              <Printer size={14} /> 印刷
+            </button>
+            <button onClick={handleSave} disabled={saving || nothingSelected} className="px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-xl disabled:opacity-40">
+              {saving ? "保存中..." : "保存"}
+            </button>
+          </div>
         </div>
 
-        {step === 1 ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 [&>*]:max-w-4xl [&>*]:mx-auto">
+        {/* 左で入力・右で書類を確認 (以前は「プレビュー →」で画面を切り替えていた) */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
+          <div className={`${previewOnly ? "hidden" : ""} md:w-[420px] shrink-0 border-b md:border-b-0 md:border-r border-gray-200 overflow-y-auto p-4 space-y-4 max-h-[45vh] md:max-h-none`}>
+            {nothingSelected && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                発生要因か契約対象の用具を選ぶと、保存・印刷できます。
+              </p>
+            )}
             <div>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発生要因（該当する項目をチェック）</h3>
               {elements.length === 0 ? (
@@ -190,18 +202,18 @@ export default function ContractDocumentsModal({
               <div>
                 <label className="text-xs text-gray-500 block mb-1">説明日（重要事項）</label>
                 <input type="date" value={explanationDate} onChange={(e) => setExplanationDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-blue-400" />
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">契約締結日</label>
                 <input type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400" />
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-blue-400" />
               </div>
             </div>
             <div>
               <label className="text-xs text-gray-500 block mb-1">負担割合</label>
               <select value={benefitRate} onChange={(e) => setBenefitRate(e.target.value as "1" | "2" | "3")}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-400">
+                className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-blue-400">
                 <option value="1">１割</option>
                 <option value="2">２割</option>
                 <option value="3">３割</option>
@@ -229,8 +241,7 @@ export default function ContractDocumentsModal({
               </div>
             </div>
           </div>
-        ) : (
-          <div className="flex-1 overflow-auto bg-gray-100 p-4">
+          <div className="flex-1 min-w-0 overflow-auto bg-gray-100 p-4">
             <div id="combined-docs-print">
 
               {/* ─── 重要事項説明書 ─── */}
@@ -477,7 +488,7 @@ export default function ContractDocumentsModal({
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
