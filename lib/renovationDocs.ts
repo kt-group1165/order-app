@@ -186,6 +186,8 @@ export type RenovationDocs = {
     completed_date: string | null;
     /** 改修予定費用から変わった理由 (袖ケ浦市の様式のみ) */
     change_reason: string;
+    /** 以前の住宅改修の履歴 (種類・時期・費用等。市原市の事前協議願) */
+    previous_history: string;
     apply_date: string | null;
     /** 宛先 (「市原市長」「千葉市中央区長」等)。空なら住所から自動 */
     addressee: string;
@@ -260,7 +262,7 @@ export function defaultDocs(init: { clientAddress?: string | null; issuer?: Part
       cm_consent_name: "",
       cm_consent_date: null,
     },
-    application: { phase: "pre", payment: "juryo", started_date: null, completed_date: null, change_reason: "", apply_date: null, addressee: "", proxy: true },
+    application: { phase: "pre", payment: "juryo", started_date: null, completed_date: null, change_reason: "", previous_history: "", apply_date: null, addressee: "", proxy: true },
     receipt: { amount: null, date: null, note: "住宅改修工事代金として" },
   };
 }

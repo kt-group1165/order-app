@@ -506,6 +506,18 @@ export async function updateRenovationStep(
 }
 
 export async function deleteRenovationProject(id: string): Promise<void> {
+  // 写真 (Storage) を先に消す。Storage の policy は「案件が存在して見えること」が条件なので、
+  // 案件を先に消すと写真に触れなくなり、消せないまま残る。
+  const { data: files, error: listErr } = await supabase.storage
+    .from("renovation-photos")
+    .list(id, { limit: 1000 });
+  if (listErr) throw new Error(`写真の一覧取得に失敗したため削除を中止しました: ${listErr.message}`);
+  if (files && files.length > 0) {
+    const { error: rmErr } = await supabase.storage
+      .from("renovation-photos")
+      .remove(files.map((f) => `${id}/${f.name}`));
+    if (rmErr) throw new Error(`写真の削除に失敗したため案件の削除を中止しました: ${rmErr.message}`);
+  }
   // 工程は ON DELETE CASCADE で一緒に消える
   const { error } = await supabase.from("renovation_projects").delete().eq("id", id);
   if (error) throw error;
@@ -577,4 +589,33 @@ export async function getRenovationIssuerDefaults(officeId: string): Promise<{
     tel: o?.phone ?? "",
     fax: o?.fax ?? "",
   };
+}
+
+/**
+ * 同じ利用者の過去の住宅改修 (この案件を除く)。市原市の事前協議願の「以前の履歴」の下書きに使う。
+ * 時期は工事の実績日 > 予定日。中止した案件は除く。
+ */
+export async function getClientRenovationHistory(
+  tenantId: string,
+  clientId: string,
+  excludeProjectId: string,
+): Promise<{ date: string | null; work: string; total: number | null }[]> {
+  const { data, error } = await supabase
+    .from("renovation_projects")
+    .select("id, work_content, sales_total, status, renovation_project_steps(step_key, planned_date, actual_date)")
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId)
+    .neq("id", excludeProjectId)
+    .neq("status", "cancelled");
+  if (error) throw error;
+  type Row = {
+    work_content: string | null; sales_total: number | null;
+    renovation_project_steps: { step_key: string; planned_date: string | null; actual_date: string | null }[] | null;
+  };
+  return ((data ?? []) as Row[])
+    .map((p) => {
+      const c = (p.renovation_project_steps ?? []).find((s) => s.step_key === "construction");
+      return { date: c?.actual_date ?? c?.planned_date ?? null, work: p.work_content ?? "", total: p.sales_total };
+    })
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 }

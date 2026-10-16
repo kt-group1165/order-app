@@ -751,7 +751,7 @@ function ProjectModal({
 
   const handleDelete = async () => {
     if (!project) return;
-    if (!window.confirm(`「${project.client_name}」の案件を削除します。工程の記録もまとめて消えます。よろしいですか？`)) return;
+    if (!window.confirm(`「${project.client_name}」の案件を削除します。工程の記録・書類・写真もまとめて消えます。よろしいですか？`)) return;
     setDeleting(true);
     setError(null);
     try {

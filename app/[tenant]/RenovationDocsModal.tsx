@@ -5,15 +5,15 @@
 // 利用者マスタ (clients) から毎回読む (書類側に写さない = マスタを直せば書類も直る)。
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Loader2, Plus, Printer, Save, Trash2, X, AlertTriangle, ImagePlus } from "lucide-react";
+import { Loader2, Plus, Printer, Save, Trash2, X, AlertTriangle, ImagePlus, Maximize2, Minimize2 } from "lucide-react";
 import type { Client } from "@/lib/supabase";
 import {
-  getLatestRenovationIssuer, getRenovationClient, getRenovationIssuerDefaults, saveRenovationDocuments, todayYmd,
+  getClientRenovationHistory, getLatestRenovationIssuer, getRenovationClient, getRenovationIssuerDefaults, saveRenovationDocuments, todayYmd,
   type RenovationProjectWithSteps,
 } from "@/lib/renovations";
 import {
   REASON_ACTIVITIES, REASON_PURPOSES, REASON_TOOLS, REASON_WORK_ITEMS, RENOVATION_KINDS,
-  computeEstimate, defaultAddressee, emptyGroup, emptyLine, estimateCopay, normalizeDocs, yenNum,
+  computeEstimate, defaultAddressee, emptyGroup, emptyLine, estimateCopay, normalizeDocs, warekiLabel, yenNum,
   type EstimateGroup, type EstimateLine, type Issuer, type RenovationDocs, type RenovationKindNo, type ReasonActivityKey,
 } from "@/lib/renovationDocs";
 import { removeRenovationPhoto, resizeToJpeg, signRenovationPhotos, uploadRenovationPhoto } from "@/lib/renovationPhotos";
@@ -22,8 +22,9 @@ import {
 } from "./RenovationDocSheets";
 import { ApplicationSheet, cityFormFor, CITY_FORMS } from "./RenovationApplicationSheet";
 import { MobaraIninjoSheet, MobaraJuryoTodokeSheet } from "./RenovationMobaraSheets";
+import { IchiharaJizenKyogiSheet } from "./RenovationIchiharaSheets";
 
-type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "mobara_todoke" | "mobara_ininjo" | "photos" | "receipt_tmp" | "receipt" | "cover";
+type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "mobara_todoke" | "mobara_ininjo" | "ichihara_kyogi" | "photos" | "receipt_tmp" | "receipt" | "cover";
 const DOC_LABELS: Record<DocKey, string> = {
   estimate: "見積書",
   reason1: "理由書 P1",
@@ -32,6 +33,7 @@ const DOC_LABELS: Record<DocKey, string> = {
   application: "支給申請書",
   mobara_todoke: "受領委任届（茂原市）",
   mobara_ininjo: "委任状（茂原市）",
+  ichihara_kyogi: "事前協議願（市原市）",
   photos: "写真添付用紙",
   receipt_tmp: "仮領収書",
   receipt: "領収書",
@@ -69,6 +71,8 @@ export default function RenovationDocsModal({
   const [selected, setSelected] = useState<Set<DocKey>>(new Set<DocKey>(["estimate", "reason1", "reason2", "application"]));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** 画面の分け方: 並べる / 入力だけ全画面 / 書類だけ全画面 */
+  const [view, setView] = useState<"split" | "form" | "preview">("split");
 
   // 読み込み: 利用者 / 既存の書類 / 発行元 (同じ事業所の直前の案件 → 事業所・法人マスタ)
   useEffect(() => {
@@ -126,6 +130,7 @@ export default function RenovationDocsModal({
         .rdoc-sheet { box-shadow: none !important; margin: 0 !important; break-after: page; }
         .rdoc-sheet:last-child { break-after: auto; }
         .rdoc-fit { zoom: 1 !important; box-shadow: none !important; }
+        #renovation-docs-preview-pane { display: flex !important; }
         .rdoc-landscape { page: rdoc-landscape; }
         .rdoc-portrait { page: rdoc-portrait; }
       }
@@ -275,6 +280,22 @@ export default function RenovationDocsModal({
     }
   };
 
+  /** 市原市の事前協議願「以前の履歴」: 同じ利用者の過去の住宅改修案件から下書きを作る */
+  const fillHistory = async () => {
+    if (!project.client_id) return;
+    try {
+      const rows = await getClientRenovationHistory(tenantId, project.client_id, project.id);
+      const text = rows.length === 0
+        ? "なし"
+        : rows.map((r) => [r.date ? warekiLabel(r.date) : "時期不明", r.work || "住宅改修", r.total !== null ? `${yenNum(r.total)}円` : ""].filter(Boolean).join("　")).join("\n");
+      update((d) => { d.application.previous_history = text; });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("過去の住宅改修の取得に失敗:", msg);
+      alert(`過去の住宅改修の取得に失敗しました: ${msg}`);
+    }
+  };
+
   const handleClose = () => {
     if (dirty && !confirm("保存していない変更があります。閉じてよいですか？")) return;
     onClose();
@@ -284,8 +305,8 @@ export default function RenovationDocsModal({
   const addressee = docs.application.addressee || defaultAddressee(address);
   const sheetProps: DocSheetProps = { docs, project, client, totals, receiptAmount, addressee, photoUrls };
   // 茂原市の受領委任届・委任状は茂原市の利用者のときだけ選べる
-  const order: DocKey[] = (["estimate", "reason1", "reason2", "consent", "application", "mobara_todoke", "mobara_ininjo", "photos", "receipt_tmp", "receipt", "cover"] as DocKey[])
-    .filter((k) => !k.startsWith("mobara_") || city.city === "茂原市");
+  const order: DocKey[] = (["estimate", "reason1", "reason2", "consent", "application", "mobara_todoke", "mobara_ininjo", "ichihara_kyogi", "photos", "receipt_tmp", "receipt", "cover"] as DocKey[])
+    .filter((k) => (!k.startsWith("mobara_") || city.city === "茂原市") && (!k.startsWith("ichihara_") || city.city === "市原市"));
 
   return (
     <Shell
@@ -312,9 +333,9 @@ export default function RenovationDocsModal({
       }
     >
       <div className="flex-1 flex min-h-0">
-        {/* 入力 */}
-        <div className="no-print w-[520px] shrink-0 border-r border-gray-200 flex flex-col min-h-0 bg-white">
-          <div className="flex gap-1 px-2 pt-2 border-b border-gray-200">
+        {/* 入力 (view = "preview" のときは隠す / "form" のときは全幅) */}
+        <div className={`no-print flex flex-col min-h-0 bg-white ${view === "preview" ? "hidden" : view === "form" ? "flex-1" : "w-[520px] shrink-0 border-r border-gray-200"}`}>
+          <div className="flex items-end gap-1 px-2 pt-2 border-b border-gray-200">
             {FORM_TABS.map(([id, label]) => (
               <button
                 key={id}
@@ -324,15 +345,16 @@ export default function RenovationDocsModal({
                 {label}
               </button>
             ))}
+            <ViewToggle expanded={view === "form"} onClick={() => setView(view === "form" ? "split" : "form")} what="入力" />
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+          <div className={`flex-1 overflow-y-auto p-3 space-y-3 text-xs ${view === "form" ? "w-full max-w-4xl mx-auto" : ""}`}>
             {!client && (
               <Warn>この案件は利用者マスタと紐付いていません。氏名・住所以外 (被保険者番号・生年月日等) は空欄で出ます。案件の編集で利用者を選んでください。</Warn>
             )}
             {tab === "estimate" && <EstimateForm docs={docs} update={update} totals={totals} />}
             {tab === "reason" && <ReasonForm docs={docs} update={update} />}
             {tab === "application" && (
-              <ApplicationForm docs={docs} update={update} address={address} cityName={city.city} hasForm={!!city.form} />
+              <ApplicationForm docs={docs} update={update} address={address} cityName={city.city} hasForm={!!city.form} onFillHistory={project.client_id ? fillHistory : null} />
             )}
             {tab === "receipt" && <ReceiptForm docs={docs} update={update} copay={copay} copayRate={project.copay_rate} grandTotal={totals.grandTotal} />}
             {tab === "issuer" && <IssuerForm docs={docs} update={update} />}
@@ -342,9 +364,9 @@ export default function RenovationDocsModal({
           </div>
         </div>
 
-        {/* 書類 */}
-        <div className="flex-1 flex flex-col min-h-0 bg-gray-100">
-          <div className="no-print flex flex-wrap gap-x-3 gap-y-1 px-3 py-2 bg-white border-b border-gray-200 text-xs">
+        {/* 書類 (view = "form" のときは画面では隠すが、印刷では出す = #renovation-docs-preview-pane) */}
+        <div id="renovation-docs-preview-pane" className={`flex-1 flex-col min-h-0 bg-gray-100 ${view === "form" ? "hidden" : "flex"}`}>
+          <div className="no-print flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 bg-white border-b border-gray-200 text-xs">
             <span className="text-gray-500">印刷する書類:</span>
             {order.map((k) => (
               <label key={k} className="inline-flex items-center gap-1 cursor-pointer">
@@ -360,6 +382,7 @@ export default function RenovationDocsModal({
                 {DOC_LABELS[k]}
               </label>
             ))}
+            <ViewToggle expanded={view === "preview"} onClick={() => setView(view === "preview" ? "split" : "preview")} what="書類" />
           </div>
           <div ref={setPreviewEl} id="renovation-docs-print" className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col items-center gap-4">
             {order.filter((k) => selected.has(k)).map((k) => (
@@ -372,6 +395,7 @@ export default function RenovationDocsModal({
                 {k === "application" && <ApplicationSheet {...sheetProps} />}
                 {k === "mobara_todoke" && <MobaraJuryoTodokeSheet {...sheetProps} />}
                 {k === "mobara_ininjo" && <MobaraIninjoSheet {...sheetProps} />}
+                {k === "ichihara_kyogi" && <IchiharaJizenKyogiSheet {...sheetProps} />}
                 {k === "receipt_tmp" && <ReceiptSheet {...sheetProps} provisional />}
                 {k === "receipt" && <ReceiptSheet {...sheetProps} />}
                 {k === "cover" && <CoverLetterSheet {...sheetProps} />}
@@ -711,7 +735,9 @@ function ReasonForm({ docs, update }: { docs: RenovationDocs; update: Upd }) {
 
 // ─── 所有者・申請 ────────────────────────────────────────────────────────────
 
-function ApplicationForm({ docs, update, address, cityName, hasForm }: { docs: RenovationDocs; update: Upd; address: string; cityName: string | null; hasForm: boolean }) {
+function ApplicationForm({ docs, update, address, cityName, hasForm, onFillHistory }: {
+  docs: RenovationDocs; update: Upd; address: string; cityName: string | null; hasForm: boolean; onFillHistory: (() => void) | null;
+}) {
   const o = docs.owner;
   const a = docs.application;
   const form = cityName ? CITY_FORMS[cityName] : undefined;
@@ -754,7 +780,7 @@ function ApplicationForm({ docs, update, address, cityName, hasForm }: { docs: R
           <Warn>{form.juryoNote ?? `${cityName}の様式には受領委任払い用がありません。償還払いの様式で出します。`}</Warn>
         )}
         {form?.juryo.postOnly && a.payment === "juryo" && a.phase === "pre" && (
-          <Warn>{cityName}の受領委任払い用の申請書は事後専用です。事前は事業者が「事前協議願（第6号様式）」を出します（この画面では未対応）。</Warn>
+          <Warn>{cityName}の受領委任払い用の申請書は事後専用です。着工前は「事前協議願（第6号様式）」を出します。右上の「印刷する書類」で選んでください。</Warn>
         )}
         {form && a.phase === "pre" && form.blankOnPre.length > 0 && (
           <p className="text-[10px] text-gray-400">事前申請では、{cityName}の指示どおり事後に書く欄（着工日・完成日など）を空欄で出します。</p>
@@ -776,6 +802,16 @@ function ApplicationForm({ docs, update, address, cityName, hasForm }: { docs: R
         )}
         {form?.proxy && <Check label="提出代行者・代理申請事業所として発行元を印字する" checked={a.proxy} onChange={(v) => update((d) => { d.application.proxy = v; })} />}
         <p className="text-[10px] text-gray-400">口座・個人番号の欄は空欄の枠だけ出します（手書き）。</p>
+        {cityName === "市原市" && (
+          <Field label="以前の住宅改修の履歴（事前協議願の「以前の履歴」）" hint="種類・時期・費用等。無ければ「なし」">
+            <Area rows={3} value={a.previous_history} onChange={(v) => update((d) => { d.application.previous_history = v; })} />
+            {onFillHistory && (
+              <button type="button" onClick={onFillHistory} className="mt-1 text-emerald-600 hover:underline">
+                この利用者の過去の住宅改修案件から埋める (今の入力は上書き)
+              </button>
+            )}
+          </Field>
+        )}
       </div>
     </>
   );
@@ -922,5 +958,19 @@ function PhotosForm({ docs, update, photoUrls, busy, onUpload, onRemove }: {
         </div>
       ))}
     </>
+  );
+}
+
+/** 入力欄・書類欄を全画面に広げる / 元に戻すボタン */
+function ViewToggle({ expanded, onClick, what }: { expanded: boolean; onClick: () => void; what: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className="ml-auto mb-1 shrink-0 text-[11px] px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1"
+      title={expanded ? "入力と書類を並べて表示に戻す" : `${what}を全画面で表示`}
+    >
+      {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+      {expanded ? "並べて表示" : `${what}を全画面`}
+    </button>
   );
 }
