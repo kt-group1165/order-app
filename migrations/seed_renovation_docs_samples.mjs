@@ -144,7 +144,7 @@ const tools = (on) => Object.fromEntries(on.map(([k, b, a]) => [k, { before: b, 
 const SAMPLES = [
   {
     client: {
-      name: "サンプル 住改一郎", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲｲﾁﾛｳ", birth_date: "1942-05-12", gender: "男",
+      user_number: "SMP-RENO-01", name: "サンプル 住改一郎", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲｲﾁﾛｳ", birth_date: "1942-05-12", gender: "男",
       postal_code: "299-0111", address: "千葉県市原市姉崎1000-1", phone: "0436-00-0001",
       insurer_number: "122192", insured_number: "9999990001", care_level: "要介護2", benefit_rate: "90",
       certification_start_date: "2026-04-01", certification_end_date: "2027-03-31",
@@ -177,7 +177,7 @@ const SAMPLES = [
   },
   {
     client: {
-      name: "サンプル 住改花子", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲﾊﾅｺ", birth_date: "1938-11-03", gender: "女",
+      user_number: "SMP-RENO-02", name: "サンプル 住改花子", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲﾊﾅｺ", birth_date: "1938-11-03", gender: "女",
       postal_code: "292-0000", address: "千葉県木更津市中央1-1-1", phone: "0438-00-0002",
       insurer_number: "122069", insured_number: "9999990002", care_level: "要支援2", benefit_rate: "90",
       certification_start_date: "2026-01-01", certification_end_date: "2027-12-31",
@@ -211,7 +211,7 @@ const SAMPLES = [
   },
   {
     client: {
-      name: "サンプル 住改次郎", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲｼﾞﾛｳ", birth_date: "1945-02-20", gender: "男",
+      user_number: "SMP-RENO-03", name: "サンプル 住改次郎", furigana: "ｻﾝﾌﾟﾙ ｼﾞｭｳｶｲｼﾞﾛｳ", birth_date: "1945-02-20", gender: "男",
       postal_code: "297-0000", address: "千葉県茂原市茂原100", phone: "0475-00-0004",
       insurer_number: "122101", insured_number: "9999990003", care_level: "要介護3", benefit_rate: "80",
       certification_start_date: "2026-06-01", certification_end_date: "2028-05-31",
