@@ -346,9 +346,10 @@ function BoardView({
   }
 
   return (
-    <div className="flex-1 overflow-auto p-3">
+    // 上の余白は付けない: sticky の見出しが余白ぶん下に止まり、その上に行が透けて見えていた
+    <div className="flex-1 overflow-auto px-3 pb-3">
       <table className="w-full min-w-[1180px] text-xs bg-white">
-        <thead className="bg-gray-50 text-[11px] text-gray-600 sticky top-0 z-10">
+        <thead className="bg-gray-50 text-[11px] text-gray-600 sticky top-0 z-10 shadow-[0_1px_0_#e5e7eb] [&_th]:bg-gray-50">
           <tr>
             <th className="text-left px-2 py-2 w-16">状態</th>
             <th className="text-left px-2 py-2 w-32">利用者</th>
