@@ -25,7 +25,8 @@
     "check:keido-exception": "tsx scripts/fukuyogu-keido-exception-check.mts",
     "check:order-items-integrity": "tsx scripts/order-items-integrity-check.mts",
     "check:all": "tsx scripts/check-all.mts",
-    "check:renovation-docs": "tsx scripts/renovation-estimate-verify.mts"
+    "check:renovation-docs": "tsx scripts/renovation-estimate-verify.mts",
+    "check:doc-checklist": "tsx scripts/doc-checklist-verify.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",

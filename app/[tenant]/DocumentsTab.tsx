@@ -1,8 +1,11 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { ChevronLeft, Loader2, Printer, FileText } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, EquipmentPriceHistory, Client, Supplier, Member, ClientDocument, DocTask } from "@/lib/supabase";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
+import { buildChecklist, countActionNeeded, type ChecklistKey } from "@/lib/docChecklist";
+import { activeRentalCount, getDocIndex, type ClientRental, type DocIndex } from "@/lib/docChecklistData";
+import DocChecklistPanel from "./DocChecklistPanel";
 import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { HW_KANA } from "./search-utils";
@@ -22,6 +25,9 @@ import OrderEmailPreviewModal from "./OrderEmailPreviewModal";
 // ─── Documents Tab ───────────────────────────────────────────────────────────
 
 // v2: pending doc_task バナー用 — expected_doc_type を日本語ラベルに変換
+/** チェックリストの行に入る client_documents.type (それ以外は「その他」に出す) */
+const CHECKLIST_DOC_TYPES = new Set(["contract", "rental_contract", "important_matters", "proposal", "care_plan", "change_contract", "rental_report"]);
+
 const EXPECTED_DOC_TYPE_LABELS: Record<string, string> = {
   rental_report: "貸与報告書",
   care_plan: "個別援助計画書",
@@ -43,6 +49,12 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
   const [loading, setLoading] = useState(true);
   const [kanaFilter, setKanaFilter] = useState<string | null>(null);
+  /** 左の一覧: "todo" = 貸与中か要対応の人だけ / "all" = 全員 */
+  const [listMode, setListMode] = useState<"todo" | "all">("todo");
+  const [search, setSearch] = useState("");
+  /** 全利用者の貸与明細・書類・書類タスク (一覧の印と絞り込みに使う)。null = 読み込み中 */
+  const [docIndex, setDocIndex] = useState<DocIndex | null>(null);
+  const [docIndexError, setDocIndexError] = useState<string | null>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
   const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
@@ -58,7 +70,6 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
   const [showContracts, setShowContracts] = useState(false);
   const [showChangeContract, setShowChangeContract] = useState(false);
   const [changeContractInitialParams, setChangeContractInitialParams] = useState<Record<string, unknown> | null>(null);
-  const [docTypeFilter, setDocTypeFilter] = useState<string | null>(null);
   const [emailPreview, setEmailPreview] = useState<{ order: Order; items: OrderItem[]; suppliers: Supplier[]; members: Member[]; sentAt?: string } | null>(null);
   // 元発注が削除された supplier_email 書類用：保存済み内容を表示
   const [savedEmailView, setSavedEmailView] = useState<{
@@ -122,6 +133,31 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
       setLoading(false);
     });
   }, [tenantId, currentOfficeId, officeViewAll]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDocIndex(tenantId)
+      .then((idx) => { if (!cancelled) setDocIndex(idx); })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("書類の一覧用データの読み込みに失敗:", msg);
+        if (!cancelled) setDocIndexError(msg);
+      });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+
+  // 選択中の利用者の書類が変わったら、一覧の印にも反映する
+  useEffect(() => {
+    if (!selectedClient) return;
+    const id = selectedClient.id;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- documents (別 state) の変化を一覧用の索引に写すだけ
+    setDocIndex((prev) => {
+      if (!prev) return prev;
+      const docsByClient = new Map(prev.docsByClient);
+      docsByClient.set(id, documents);
+      return { ...prev, docsByClient };
+    });
+  }, [documents, selectedClient]);
 
   const loadReceivedCarePlans = useCallback(async (clientId: string) => {
     if (!currentOfficeId) {
@@ -292,13 +328,45 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     .replace(/[\uff66-\uff9f]/g, (c) => HW_KANA[c] ?? c)                                        // \u534a\u89d2\u30ab\u30ca\u2192\u5168\u89d2\u30ab\u30ca
     .replace(/[\u3041-\u3096]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));  // \u3072\u3089\u304c\u306a\u2192\u30ab\u30bf\u30ab\u30ca
   const allKana = Object.values(KANA_MAP).flat();
+  const today = todayYmd();
+  /** 利用者ごとの「要対応の件数」と「貸与中の品目数」(一覧の印・絞り込み用) */
+  const clientStats = useMemo(() => {
+    const m = new Map<string, { action: number; active: number; tasks: number }>();
+    if (!docIndex) return m;
+    for (const c of clients) {
+      const rentals = docIndex.rentalsByClient.get(c.id);
+      const tasks = docIndex.tasksByClient.get(c.id)?.length ?? 0;
+      const action = rentals
+        ? countActionNeeded(buildChecklist({ rentals, certificationStart: c.certification_start_date, docs: docIndex.docsByClient.get(c.id) ?? [], today }))
+        : 0;
+      m.set(c.id, { action, active: activeRentalCount(rentals, today), tasks });
+    }
+    return m;
+  }, [clients, docIndex, today]);
+  const searchKey = toKana(search.trim()).replace(/\s/g, "");
+  const actionTotal = Array.from(clientStats.values()).filter((v) => v.action + v.tasks > 0).length;
   const filteredClients = (kanaFilter
     ? clients.filter(c => {
         const first = toKana((c.furigana ?? c.name).charAt(0));
         return kanaFilter === "他" ? !allKana.includes(first) : (KANA_MAP[kanaFilter] ?? []).includes(first);
       })
     : clients
-  ).slice().sort((a, b) => {
+  ).filter((c) => {
+    if (searchKey) {
+      const hay = [c.name, c.furigana ?? "", c.user_number ?? ""].map((v) => toKana(v).replace(/\s/g, "")).join(" ");
+      if (!hay.includes(searchKey)) return false;
+    }
+    // 検索中は一覧の絞り込み (貸与中・要対応) をかけない (探している人が出ないと困るため)
+    if (listMode === "todo" && !searchKey && docIndex) {
+      const st = clientStats.get(c.id);
+      if (!st || (st.active === 0 && st.action === 0 && st.tasks === 0)) return false;
+    }
+    return true;
+  }).slice().sort((a, b) => {
+    // 要対応の人を先頭に
+    const aa = (clientStats.get(a.id)?.action ?? 0) + (clientStats.get(a.id)?.tasks ?? 0) > 0 ? 0 : 1;
+    const ab = (clientStats.get(b.id)?.action ?? 0) + (clientStats.get(b.id)?.tasks ?? 0) > 0 ? 0 : 1;
+    if (aa !== ab) return aa - ab;
     // 事業所・施設は末尾、個人利用者は先頭
     const fa = a.is_facility ? 1 : 0;
     const fb = b.is_facility ? 1 : 0;
@@ -306,12 +374,109 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
   });
 
-  const DOC_TYPE_COLORS: Record<string, string> = {
-    rental_report: "text-blue-600 bg-blue-50",
-    care_plan: "text-emerald-600 bg-emerald-50",
-    proposal: "text-purple-600 bg-purple-50",
-    contract: "text-orange-600 bg-orange-50",
+  /** 作成済みの書類を開く (再生成・内容の再表示)。旧「保存済み書類」の再生成ボタンの処理をそのまま移した */
+  const openDoc = async (doc: ClientDocument) => {
+    try {
+                if (doc.type === "rental_report") {
+                  setRegenDoc(doc); setShowReport(false);
+                } else if (doc.type === "care_plan") {
+                  setCarePlanInitialParams(doc.params); setShowCarePlan(true);
+                } else if (doc.type === "proposal") {
+                  setProposalInitialParams(doc.params); setShowProposal(true);
+                } else if (doc.type === "contract" || doc.type === "rental_contract" || doc.type === "important_matters") {
+                  setShowContracts(true);
+                } else if (doc.type === "change_contract") {
+                  setChangeContractInitialParams(doc.params);
+                  setShowChangeContract(true);
+                } else if (doc.type === "supplier_email") {
+                  const orderId = doc.params?.orderId as string | undefined;
+                  // フォールバック表示用に保存済み情報を取り出す
+                  const showSavedFromParams = (reason: string) => {
+                    const subject = (doc.params?.subject as string) ?? "";
+                    const body = (doc.params?.body as string) ?? "";
+                    const supplierName = doc.params?.supplierName as string | undefined;
+                    if (!subject && !body) {
+                      alert(`${reason}\nまた、保存済みのメール内容も書類に残っていないため表示できません。`);
+                      return;
+                    }
+                    setSavedEmailView({
+                      subject,
+                      body,
+                      supplierName,
+                      sentAt: doc.created_at,
+                      title: doc.title,
+                    });
+                  };
+                  if (!orderId) {
+                    showSavedFromParams("この発注メール書類には発注ID(orderId)が記録されていません（古い書類）。");
+                    return;
+                  }
+                  const [orderRes, suppliers, members] = await Promise.all([
+                    supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
+                    getSuppliers(),
+                    getMembers(tenantId),
+                  ]);
+                  if (orderRes.error) {
+                    console.error("発注取得エラー:", orderRes.error);
+                    alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
+                    return;
+                  }
+                  let foundOrder: Order | null = (orderRes.data as Order) ?? null;
+                  // 統合済の場合: merged_from_order_ids に元 orderId を含む統合先 order を探す
+                  if (!foundOrder) {
+                    const { data: mergedRows } = await supabase
+                      .from("orders")
+                      .select("*")
+                      .contains("merged_from_order_ids", [{ id: orderId }]);
+                    if (mergedRows && mergedRows.length > 0) {
+                      foundOrder = mergedRows[0] as Order;
+                    }
+                  }
+                  if (!foundOrder) {
+                    showSavedFromParams("元の発注が見つかりません（削除された可能性があります）。");
+                    return;
+                  }
+                  const items = await getOrderItems(foundOrder.id);
+                  setEmailPreview({ order: foundOrder, items, suppliers, members, sentAt: doc.created_at });
+                }
+    } catch (e) {
+      console.error("再生成エラー:", e);
+      alert(`再生成に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
+
+  /** 書類を新しく作る (チェックリストの「作成」) */
+  const openCreate = (key: ChecklistKey | string) => {
+    switch (key) {
+      case "rental_report": setRegenDoc(null); setShowReport(true); break;
+      case "care_plan": setCarePlanInitialParams(null); setShowCarePlan(true); break;
+      case "proposal": setProposalInitialParams(null); setShowProposal(true); break;
+      case "contract": case "rental_contract": setShowContracts(true); break;
+      case "change_contract": setChangeContractInitialParams(null); setShowChangeContract(true); break;
+    }
+  };
+
+  /** 以前は確認も失敗の確認も無く消していた (押し間違いで書類が消え、失敗しても画面上は消えて見えた) */
+  const handleDeleteDoc = async (doc: ClientDocument) => {
+    if (!confirm(`「${doc.title}」を削除します。元に戻せません。よろしいですか？`)) return;
+    try {
+      await deleteClientDocument(doc.id);
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("書類の削除に失敗:", msg);
+      alert(`削除に失敗しました: ${msg}`);
+    }
+  };
+
+  // 選択中の利用者のチェックリスト (介護保険の貸与明細・認定の開始日・作成済み書類から)
+  const selectedRentals: ClientRental[] = clientItems
+    .filter((i) => orderPaymentMap[i.order_id] !== "自費")
+    .map((i) => ({ rental_start_date: i.rental_start_date ?? null, rental_end_date: i.rental_end_date ?? null, status: i.status }));
+  const checklistRows = selectedClient
+    ? buildChecklist({ rentals: selectedRentals, certificationStart: selectedClient.certification_start_date, docs: documents, today: todayYmd() })
+    : [];
+
 
   return (
     <div className="flex flex-col h-full bg-white text-sm">
@@ -336,15 +501,45 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                   className={`w-8 py-1 rounded text-sm font-medium transition-colors ${kanaFilter === k ? "bg-blue-500 text-white" : "hover:bg-gray-200 text-gray-600"}`}>{k}</button>
               ))}
             </div>
-            <div className="w-44 overflow-y-auto">
-              {filteredClients.map(c => (
-                <button key={c.id}
-                  onClick={() => { setSelectedClient(c); loadClientData(c); }}
-                  className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-100 transition-colors ${
-                    selectedClient?.id === c.id ? "bg-blue-100 text-blue-800 font-semibold" : "hover:bg-gray-50 text-gray-700"
-                  }`}
-                >{c.name}</button>
-              ))}
+            <div className="w-56 flex flex-col min-h-0">
+              <div className="p-2 space-y-1.5 border-b border-gray-200 bg-white">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="名前・フリガナ・番号で検索"
+                  className="w-full text-xs border border-gray-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <div className="flex text-[11px] rounded border border-gray-300 overflow-hidden">
+                  {([["todo", "貸与中・要対応"], ["all", "全員"]] as const).map(([m, label]) => (
+                    <button key={m} onClick={() => setListMode(m)}
+                      className={`flex-1 py-1 ${listMode === m ? "bg-blue-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>{label}</button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-400">
+                  {docIndex ? <>{filteredClients.length} 名{actionTotal > 0 && <span className="text-red-600">　要対応 {actionTotal} 名</span>}</>
+                    : docIndexError ? <span className="text-red-600">一覧用データの読み込みに失敗: {docIndexError}</span>
+                    : "書類の状況を読み込み中…"}
+                </p>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {filteredClients.map(c => {
+                  const st = clientStats.get(c.id);
+                  const need = (st?.action ?? 0) + (st?.tasks ?? 0);
+                  return (
+                    <button key={c.id}
+                      onClick={() => { setSelectedClient(c); loadClientData(c); }}
+                      className={`w-full text-left px-3 py-2 text-sm border-b border-gray-100 transition-colors flex items-center gap-1.5 ${
+                        selectedClient?.id === c.id ? "bg-blue-100 text-blue-800 font-semibold" : "hover:bg-gray-50 text-gray-700"
+                      }`}
+                    >
+                      <span className="flex-1 truncate">{c.name}</span>
+                      {need > 0 && <span className="shrink-0 text-[10px] px-1.5 rounded-full bg-red-500 text-white font-semibold" title="未作成・要更新の書類">{need}</span>}
+                      {st && st.active > 0 && <span className="shrink-0 text-[10px] text-gray-400" title="貸与中の品目数">貸{st.active}</span>}
+                    </button>
+                  );
+                })}
+                {filteredClients.length === 0 && <p className="text-xs text-gray-400 text-center py-6">該当する利用者がいません</p>}
+              </div>
             </div>
           </div>
 
@@ -356,6 +551,36 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
               <div className="flex h-full items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
             ) : (
               <div className="p-4 space-y-4">
+                {/* 利用者の要点 (書類を作る前に確かめること) */}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                  <span className="text-base font-semibold text-gray-800">{selectedClient.name}</span>
+                  <span className="text-xs text-gray-600">{selectedClient.care_level || "要介護度 未登録"}</span>
+                  <span className="text-xs text-gray-600">
+                    認定 {selectedClient.certification_start_date ?? "?"} 〜 {selectedClient.certification_end_date ?? "?"}
+                    {selectedClient.certification_end_date && selectedClient.certification_end_date < today && <span className="ml-1 text-red-600 font-semibold">期限切れ</span>}
+                  </span>
+                  <span className="text-xs text-gray-600">ケアマネ {[selectedClient.care_manager_org, selectedClient.care_manager].filter(Boolean).join(" ") || "未登録"}</span>
+                  <span className="text-xs text-gray-600">貸与中 {activeRentalCount(selectedRentals, today)} 品目</span>
+                </div>
+
+                {/* 運用で発生した書類タスク (一括 backfill ぶんは出さない) */}
+                {(docIndex?.tasksByClient.get(selectedClient.id) ?? []).length > 0 && !pendingDocTaskId && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 space-y-1">
+                    <p className="text-xs font-semibold text-red-700">書類タスク</p>
+                    {(docIndex?.tasksByClient.get(selectedClient.id) ?? []).map((t) => (
+                      <div key={t.id} className="flex items-center gap-2 text-xs text-red-800">
+                        <span className="flex-1">{EXPECTED_DOC_TYPE_LABELS[t.expected_doc_type] ?? t.expected_doc_type}　<span className="text-red-500">{t.trigger_label ?? ""}{t.due_date ? `　期限 ${t.due_date}` : ""}</span></span>
+                        {t.expected_doc_type !== "supplier_email" && (
+                          <button
+                            onClick={() => { setPendingDocTaskId(t.id); setPendingExpectedDocType(t.expected_doc_type); openCreate(t.expected_doc_type); }}
+                            className="shrink-0 px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700"
+                          >作成する</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* v2: 書類タスク連携中バナー (pending doc_task がある時のみ) */}
                 {pendingDocTaskId && pendingExpectedDocType && (
                   <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-blue-800">
@@ -393,158 +618,14 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                     </div>
                   </div>
                 )}
-                {/* 書類作成ボタン */}
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">書類を作成</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => { setShowReport(true); }}
-                      className="flex items-center gap-2 px-3 py-2.5 bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium rounded-xl hover:bg-blue-100 transition-colors">
-                      <FileText size={15} /> 貸与報告書
-                    </button>
-                    <button onClick={() => { setCarePlanInitialParams(null); setShowCarePlan(true); }}
-                      className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-medium rounded-xl hover:bg-emerald-100 transition-colors">
-                      <FileText size={15} /> 個別援助計画書
-                    </button>
-                    <button onClick={() => { setProposalInitialParams(null); setShowProposal(true); }}
-                      className="flex items-center gap-2 px-3 py-2.5 bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium rounded-xl hover:bg-purple-100 transition-colors">
-                      <FileText size={15} /> 選定提案書
-                    </button>
-                    <button onClick={() => setShowContracts(true)}
-                      className="flex items-center gap-2 px-3 py-2.5 bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium rounded-xl hover:bg-orange-100 transition-colors">
-                      <FileText size={15} /> 重要事項・契約書
-                    </button>
-                    <button onClick={() => { setChangeContractInitialParams(null); setShowChangeContract(true); }}
-                      className="flex items-center gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium rounded-xl hover:bg-amber-100 transition-colors">
-                      <FileText size={15} /> 変更契約書
-                    </button>
-                  </div>
-                </div>
-
-                {/* 書類履歴 */}
-                <div>
-                  <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-wide shrink-0">保存済み書類 ({documents.length})</p>
-                    <div className="flex gap-1 flex-wrap">
-                      {([
-                        [null, "全"],
-                        ["care_plan", "個別援助計画書"],
-                        ["proposal", "選定提案書"],
-                        ["rental_report", "貸与報告書"],
-                        ["contract", "重要事項・契約書"],
-                      ] as [string | null, string][]).map(([type, label]) => (
-                        <button key={label} onClick={() => setDocTypeFilter(type)}
-                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                            docTypeFilter === type
-                              ? "bg-gray-700 text-white border-gray-700"
-                              : "text-gray-500 border-gray-300 hover:border-gray-500"
-                          }`}>{label}</button>
-                      ))}
-                    </div>
-                  </div>
-                  {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-6">保存済みの書類はありません</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {documents.filter(d => docTypeFilter === null || d.type === docTypeFilter).map(doc => {
-                        // 再生成（または内容再表示）対応タイプ
-                        const canRegenerate =
-                          doc.type === "rental_report" ||
-                          doc.type === "care_plan" ||
-                          doc.type === "proposal" ||
-                          doc.type === "supplier_email" ||
-                          doc.type === "contract" ||
-                          doc.type === "rental_contract" ||
-                          doc.type === "important_matters" ||
-                          doc.type === "change_contract";
-                        return (
-                        <div key={doc.id} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2 border border-gray-100 shadow-sm">
-                          <FileText size={16} className={DOC_TYPE_COLORS[doc.type]?.split(" ")[0] ?? "text-gray-500"} />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
-                            <p className="text-xs text-gray-400">{new Date(doc.created_at).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}</p>
-                          </div>
-                          {canRegenerate && (
-                            <button
-                              onClick={async () => {
-                                try {
-                                  if (doc.type === "rental_report") {
-                                    setRegenDoc(doc); setShowReport(false);
-                                  } else if (doc.type === "care_plan") {
-                                    setCarePlanInitialParams(doc.params); setShowCarePlan(true);
-                                  } else if (doc.type === "proposal") {
-                                    setProposalInitialParams(doc.params); setShowProposal(true);
-                                  } else if (doc.type === "contract" || doc.type === "rental_contract" || doc.type === "important_matters") {
-                                    setShowContracts(true);
-                                  } else if (doc.type === "change_contract") {
-                                    setChangeContractInitialParams(doc.params);
-                                    setShowChangeContract(true);
-                                  } else if (doc.type === "supplier_email") {
-                                    const orderId = doc.params?.orderId as string | undefined;
-                                    // フォールバック表示用に保存済み情報を取り出す
-                                    const showSavedFromParams = (reason: string) => {
-                                      const subject = (doc.params?.subject as string) ?? "";
-                                      const body = (doc.params?.body as string) ?? "";
-                                      const supplierName = doc.params?.supplierName as string | undefined;
-                                      if (!subject && !body) {
-                                        alert(`${reason}\nまた、保存済みのメール内容も書類に残っていないため表示できません。`);
-                                        return;
-                                      }
-                                      setSavedEmailView({
-                                        subject,
-                                        body,
-                                        supplierName,
-                                        sentAt: doc.created_at,
-                                        title: doc.title,
-                                      });
-                                    };
-                                    if (!orderId) {
-                                      showSavedFromParams("この発注メール書類には発注ID(orderId)が記録されていません（古い書類）。");
-                                      return;
-                                    }
-                                    const [orderRes, suppliers, members] = await Promise.all([
-                                      supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
-                                      getSuppliers(),
-                                      getMembers(tenantId),
-                                    ]);
-                                    if (orderRes.error) {
-                                      console.error("発注取得エラー:", orderRes.error);
-                                      alert(`発注の取得に失敗しました: ${orderRes.error.message}`);
-                                      return;
-                                    }
-                                    let foundOrder: Order | null = (orderRes.data as Order) ?? null;
-                                    // 統合済の場合: merged_from_order_ids に元 orderId を含む統合先 order を探す
-                                    if (!foundOrder) {
-                                      const { data: mergedRows } = await supabase
-                                        .from("orders")
-                                        .select("*")
-                                        .contains("merged_from_order_ids", [{ id: orderId }]);
-                                      if (mergedRows && mergedRows.length > 0) {
-                                        foundOrder = mergedRows[0] as Order;
-                                      }
-                                    }
-                                    if (!foundOrder) {
-                                      showSavedFromParams("元の発注が見つかりません（削除された可能性があります）。");
-                                      return;
-                                    }
-                                    const items = await getOrderItems(foundOrder.id);
-                                    setEmailPreview({ order: foundOrder, items, suppliers, members, sentAt: doc.created_at });
-                                  }
-                                } catch (e) {
-                                  console.error("再生成エラー:", e);
-                                  alert(`再生成に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
-                                }
-                              }}
-                              className="shrink-0 text-xs text-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg hover:bg-blue-50">再生成</button>
-                          )}
-                          <button
-                            onClick={async () => { await deleteClientDocument(doc.id); setDocuments(prev => prev.filter(d => d.id !== doc.id)); }}
-                            className="shrink-0 text-xs text-red-400 border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-50">削除</button>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                {/* 書類チェックリスト (作成ボタンと保存済み書類を書類の種類ごとの 1 行にまとめた) */}
+                <DocChecklistPanel
+                  rows={checklistRows}
+                  otherDocs={documents.filter((d) => !CHECKLIST_DOC_TYPES.has(d.type))}
+                  onCreate={openCreate}
+                  onOpen={openDoc}
+                  onDelete={handleDeleteDoc}
+                />
 
                 {/* 受信ケアプラン (居宅介護支援 → 自事業所) — 帳票種別ごとにグループ化 */}
                 {(() => {
