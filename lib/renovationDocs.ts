@@ -63,6 +63,16 @@ export type Issuer = {
   invoice_number: string;
   /** 担当者 */
   staff_name: string;
+  /** 代表者氏名 (受領委任届・委任状の受任者欄) */
+  representative: string;
+  /** 受領委任払いの振込先 (受任者 = 自社の口座)。茂原市の受領委任届に印字する */
+  bank_name: string;
+  bank_branch: string;
+  /** 普通 / 当座 / その他 */
+  bank_type: string;
+  bank_number: string;
+  bank_holder_kana: string;
+  bank_holder: string;
 };
 
 export const REASON_TOOLS = [
@@ -197,7 +207,10 @@ function emptyActivity(): ReasonActivity {
 }
 
 export function emptyIssuer(): Issuer {
-  return { company_name: "", office_name: "", postal_code: "", address: "", tel: "", fax: "", invoice_number: "", staff_name: "" };
+  return {
+    company_name: "", office_name: "", postal_code: "", address: "", tel: "", fax: "", invoice_number: "", staff_name: "",
+    representative: "", bank_name: "", bank_branch: "", bank_type: "普通", bank_number: "", bank_holder_kana: "", bank_holder: "",
+  };
 }
 
 export function defaultDocs(init: { clientAddress?: string | null; issuer?: Partial<Issuer> } = {}): RenovationDocs {

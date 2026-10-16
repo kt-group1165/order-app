@@ -20,14 +20,17 @@ import {
   ConsentSheet, CoverLetterSheet, EstimateSheet, ReasonP1Sheet, ReasonP2Sheet, ReceiptSheet, type DocSheetProps,
 } from "./RenovationDocSheets";
 import { ApplicationSheet, cityFormFor, CITY_FORMS } from "./RenovationApplicationSheet";
+import { MobaraIninjoSheet, MobaraJuryoTodokeSheet } from "./RenovationMobaraSheets";
 
-type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "receipt_tmp" | "receipt" | "cover";
+type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "mobara_todoke" | "mobara_ininjo" | "receipt_tmp" | "receipt" | "cover";
 const DOC_LABELS: Record<DocKey, string> = {
   estimate: "見積書",
   reason1: "理由書 P1",
   reason2: "理由書 P2",
   consent: "住宅所有者承諾書",
   application: "支給申請書",
+  mobara_todoke: "受領委任届（茂原市）",
+  mobara_ininjo: "委任状（茂原市）",
   receipt_tmp: "仮領収書",
   receipt: "領収書",
   cover: "領収書送付状",
@@ -182,7 +185,9 @@ export default function RenovationDocsModal({
   const receiptAmount = docs.receipt.amount ?? copay;
   const addressee = docs.application.addressee || defaultAddressee(address);
   const sheetProps: DocSheetProps = { docs, project, client, totals, receiptAmount, addressee };
-  const order: DocKey[] = ["estimate", "reason1", "reason2", "consent", "application", "receipt_tmp", "receipt", "cover"];
+  // 茂原市の受領委任届・委任状は茂原市の利用者のときだけ選べる
+  const order: DocKey[] = (["estimate", "reason1", "reason2", "consent", "application", "mobara_todoke", "mobara_ininjo", "receipt_tmp", "receipt", "cover"] as DocKey[])
+    .filter((k) => !k.startsWith("mobara_") || city.city === "茂原市");
 
   return (
     <Shell
@@ -263,6 +268,8 @@ export default function RenovationDocsModal({
                 {k === "reason2" && <ReasonP2Sheet {...sheetProps} />}
                 {k === "consent" && <ConsentSheet {...sheetProps} />}
                 {k === "application" && <ApplicationSheet {...sheetProps} />}
+                {k === "mobara_todoke" && <MobaraJuryoTodokeSheet {...sheetProps} />}
+                {k === "mobara_ininjo" && <MobaraIninjoSheet {...sheetProps} />}
                 {k === "receipt_tmp" && <ReceiptSheet {...sheetProps} provisional />}
                 {k === "receipt" && <ReceiptSheet {...sheetProps} />}
                 {k === "cover" && <CoverLetterSheet {...sheetProps} />}
@@ -709,7 +716,26 @@ function IssuerForm({ docs, update }: { docs: RenovationDocs; update: Upd }) {
         <Field label="TEL"><Text value={i.tel} onChange={set("tel")} /></Field>
         <Field label="FAX"><Text value={i.fax} onChange={set("fax")} /></Field>
         <Field label="登録番号 (インボイス)"><Text value={i.invoice_number} placeholder="T1234567890123" onChange={set("invoice_number")} /></Field>
+        <Field label="代表者氏名 (受領委任の受任者欄)"><Text value={i.representative} onChange={set("representative")} /></Field>
         <Field label="担当者"><Text value={i.staff_name} onChange={set("staff_name")} /></Field>
+      </div>
+      <div className="border border-gray-200 rounded p-2 space-y-1.5">
+        <div className="font-semibold text-gray-600">受領委任払いの振込先 (自社の口座)</div>
+        <p className="text-[10px] text-gray-400">茂原市の受領委任届の「口座振替依頼書」に出ます。空欄なら枠だけ出します (手書き)。</p>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="金融機関名"><Text value={i.bank_name} placeholder="○○銀行" onChange={set("bank_name")} /></Field>
+          <Field label="支店名"><Text value={i.bank_branch} placeholder="○○支店" onChange={set("bank_branch")} /></Field>
+          <Field label="口座種別">
+            <select className={inputCls} value={i.bank_type} onChange={(e) => set("bank_type")(e.target.value)}>
+              <option value="普通">普通預金</option>
+              <option value="当座">当座預金</option>
+              <option value="その他">その他</option>
+            </select>
+          </Field>
+          <Field label="口座番号 (7 桁)"><Text value={i.bank_number} onChange={set("bank_number")} /></Field>
+          <Field label="口座名義人 (フリガナ)"><Text value={i.bank_holder_kana} onChange={set("bank_holder_kana")} /></Field>
+          <Field label="口座名義人"><Text value={i.bank_holder} onChange={set("bank_holder")} /></Field>
+        </div>
       </div>
     </>
   );

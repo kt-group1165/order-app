@@ -82,7 +82,7 @@ const NOTE_COMMON_OWNER = "・改修を行った住宅の所有者が当該被�
 
 export const CITY_FORMS: Record<string, CityForm> = {
   // 茂原市 別記第34号様式（第27条）— 事前・事後兼用。※印 (着工日・完成日・改修費用) は工事完了後に書く。
-  //   受領委任払いは申請書では区別せず、別紙「福祉用具購入費・住宅改修費受領委任届（第２号様式）」と委任状を付ける (未対応)。
+  //   受領委任払いは申請書では区別せず、別紙「福祉用具購入費・住宅改修費受領委任届（第２号様式）」と委任状を付ける (RenovationMobaraSheets.tsx)。
   //   出どころ: https://www.city.mobara.chiba.jp/cmsfiles/contents/0000005/5898/jyuutakukaisyuu.pdf (2026-10-16 取得)
   茂原市: {
     formNo: { shoukan: "別記第34号様式（第27条）", juryo: "別記第34号様式（第27条）" },
@@ -95,7 +95,7 @@ export const CITY_FORMS: Record<string, CityForm> = {
     copayAndCare: true,
     personStatus: ["入院中", "入所中", "転入前", "転居前", "認定前"],
     plannedAndEstimate: true,
-    juryoNote: "茂原市は受領委任払いでも申請書は同じです。別に「福祉用具購入費・住宅改修費受領委任届（第２号様式）」と委任状を付けてください（この画面では未対応）。",
+    juryoNote: "茂原市は受領委任払いでも申請書は同じです。別に「受領委任届（第２号様式）」と「委任状」を付けます。右上の「印刷する書類」で選んでください。代表者名と振込口座は「発行元」タブで入れます。",
     bank: true,
     blankOnPre: ["started", "completed", "cost"],
     notes: {
