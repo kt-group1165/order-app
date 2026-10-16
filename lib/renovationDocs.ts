@@ -40,7 +40,14 @@ export type EstimateLine = {
   basis: string;
 };
 
-/** 見積書の 1 ブロック = 1 改修箇所 (末尾に小計が付く) */
+/** 写真添付用紙の写真 1 枚 (Storage の renovation-photos バケット内のパス) */
+export type PhotoRef = {
+  path: string;
+  /** 撮影日 (写真添付用紙の日付欄) */
+  taken_date: string | null;
+};
+
+/** 見積書の 1 ブロック = 1 改修箇所 (末尾に小計が付く)。写真添付用紙も改修箇所ごとに 1 枚 */
 export type EstimateGroup = {
   kind: RenovationKindNo;
   /** 写真等番号 (①②…) */
@@ -50,6 +57,8 @@ export type EstimateGroup = {
   /** 改修部分 (動線・出入口…) */
   part: string;
   lines: EstimateLine[];
+  /** 写真添付用紙の 工事前 / 工事後 */
+  photos: { before: PhotoRef | null; after: PhotoRef | null };
 };
 
 export type Issuer = {
@@ -199,7 +208,7 @@ export function emptyLine(): EstimateLine {
 }
 
 export function emptyGroup(kind: RenovationKindNo = 1, photoNo = ""): EstimateGroup {
-  return { kind, photo_no: photoNo, place: "", part: "", lines: [emptyLine()] };
+  return { kind, photo_no: photoNo, place: "", part: "", lines: [emptyLine()], photos: { before: null, after: null } };
 }
 
 function emptyActivity(): ReasonActivity {
@@ -268,7 +277,12 @@ export function normalizeDocs(raw: unknown, init: Parameters<typeof defaultDocs>
       ...base.estimate,
       ...(r.estimate ?? {}),
       groups: Array.isArray(r.estimate?.groups) && r.estimate.groups.length > 0
-        ? r.estimate.groups.map((g) => ({ ...emptyGroup(), ...g, lines: Array.isArray(g.lines) ? g.lines.map((l) => ({ ...emptyLine(), ...l })) : [emptyLine()] }))
+        ? r.estimate.groups.map((g) => ({
+          ...emptyGroup(),
+          ...g,
+          lines: Array.isArray(g.lines) ? g.lines.map((l) => ({ ...emptyLine(), ...l })) : [emptyLine()],
+          photos: { before: g.photos?.before ?? null, after: g.photos?.after ?? null },
+        }))
         : base.estimate.groups,
     },
     owner: { ...base.owner, ...(r.owner ?? {}) },
@@ -412,6 +426,15 @@ export function defaultAddressee(address: string | null | undefined): string {
   if (!c) return "";
   if (c.city === "千葉市") return c.ward ? `千葉市${c.ward}長` : "千葉市　　区長";
   return `${c.city}長`;
+}
+
+/** 写真添付用紙の「対象工事種別」(旧 Excel の表記: 手すりの取り付け工事（１）) */
+export function photoWorkLabel(kind: RenovationKindNo): string {
+  const label: Record<RenovationKindNo, string> = {
+    1: "手すりの取り付け工事", 2: "段差の解消工事", 3: "床材の変更工事",
+    4: "引き戸等への扉の取替え工事", 5: "便器の取替え工事", 6: "付帯工事",
+  };
+  return `${label[kind]}　（${kind}）`;
 }
 
 /** 円表示 (¥ なし・3 桁区切り) */

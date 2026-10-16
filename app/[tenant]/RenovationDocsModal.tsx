@@ -5,7 +5,7 @@
 // 利用者マスタ (clients) から毎回読む (書類側に写さない = マスタを直せば書類も直る)。
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Loader2, Plus, Printer, Save, Trash2, X, AlertTriangle } from "lucide-react";
+import { Loader2, Plus, Printer, Save, Trash2, X, AlertTriangle, ImagePlus } from "lucide-react";
 import type { Client } from "@/lib/supabase";
 import {
   getLatestRenovationIssuer, getRenovationClient, getRenovationIssuerDefaults, saveRenovationDocuments, todayYmd,
@@ -16,13 +16,14 @@ import {
   computeEstimate, defaultAddressee, emptyGroup, emptyLine, estimateCopay, normalizeDocs, yenNum,
   type EstimateGroup, type EstimateLine, type Issuer, type RenovationDocs, type RenovationKindNo, type ReasonActivityKey,
 } from "@/lib/renovationDocs";
+import { removeRenovationPhoto, resizeToJpeg, signRenovationPhotos, uploadRenovationPhoto } from "@/lib/renovationPhotos";
 import {
-  ConsentSheet, CoverLetterSheet, EstimateSheet, ReasonP1Sheet, ReasonP2Sheet, ReceiptSheet, type DocSheetProps,
+  ConsentSheet, CoverLetterSheet, EstimateSheet, PhotoSheet, ReasonP1Sheet, ReasonP2Sheet, ReceiptSheet, type DocSheetProps,
 } from "./RenovationDocSheets";
 import { ApplicationSheet, cityFormFor, CITY_FORMS } from "./RenovationApplicationSheet";
 import { MobaraIninjoSheet, MobaraJuryoTodokeSheet } from "./RenovationMobaraSheets";
 
-type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "mobara_todoke" | "mobara_ininjo" | "receipt_tmp" | "receipt" | "cover";
+type DocKey = "estimate" | "reason1" | "reason2" | "consent" | "application" | "mobara_todoke" | "mobara_ininjo" | "photos" | "receipt_tmp" | "receipt" | "cover";
 const DOC_LABELS: Record<DocKey, string> = {
   estimate: "見積書",
   reason1: "理由書 P1",
@@ -31,14 +32,16 @@ const DOC_LABELS: Record<DocKey, string> = {
   application: "支給申請書",
   mobara_todoke: "受領委任届（茂原市）",
   mobara_ininjo: "委任状（茂原市）",
+  photos: "写真添付用紙",
   receipt_tmp: "仮領収書",
   receipt: "領収書",
   cover: "領収書送付状",
 };
-type FormTab = "estimate" | "reason" | "application" | "receipt" | "issuer";
+type FormTab = "estimate" | "reason" | "photos" | "application" | "receipt" | "issuer";
 const FORM_TABS: [FormTab, string][] = [
   ["estimate", "見積"],
   ["reason", "理由書"],
+  ["photos", "写真"],
   ["application", "所有者・申請"],
   ["receipt", "領収書"],
   ["issuer", "発行元"],
@@ -129,6 +132,24 @@ export default function RenovationDocsModal({
   }, []);
 
   const totals = useMemo(() => (docs ? computeEstimate(docs.estimate) : null), [docs]);
+
+  // 写真: Storage のパス → 署名付き URL (1 時間)。足りない分だけ取りに行く
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [photoBusy, setPhotoBusy] = useState<string | null>(null);
+  const photoKey = docs
+    ? docs.estimate.groups.flatMap((g) => [g.photos.before?.path, g.photos.after?.path]).filter(Boolean).join("|")
+    : "";
+  useEffect(() => {
+    const missing = photoKey ? photoKey.split("|").filter((p) => !photoUrls[p]) : [];
+    if (missing.length === 0) return;
+    let cancelled = false;
+    signRenovationPhotos(missing)
+      .then((urls) => { if (!cancelled) setPhotoUrls((prev) => ({ ...prev, ...urls })); })
+      .catch((e) => console.error("写真の URL 取得に失敗:", e instanceof Error ? e.message : e));
+    return () => { cancelled = true; };
+    // photoUrls は「取得済みか」の判定にだけ使う (入れると取得のたびに再実行される)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoKey]);
   const copay = totals ? estimateCopay(totals.grandTotal, project.copay_rate) : 0;
   const address = client?.address ?? project.client_address ?? "";
   const city = cityFormFor(address);
@@ -177,6 +198,64 @@ export default function RenovationDocsModal({
     }
   };
 
+  /** 写真の追加・削除は Storage と書類データの両方を変えるので、その場で書類データも保存する */
+  const persist = async (next: RenovationDocs) => {
+    await saveRenovationDocuments(project.id, next);
+    setDocs(next);
+    setDirty(false);
+    onSaved(next);
+  };
+
+  const handlePhotoUpload = async (gi: number, side: "before" | "after", file: File) => {
+    setPhotoBusy(`${gi}-${side}`);
+    let path: string | null = null;
+    try {
+      const blob = await resizeToJpeg(file);
+      path = await uploadRenovationPhoto(project.id, blob);
+      const next = structuredClone(docs);
+      const old = next.estimate.groups[gi].photos[side];
+      next.estimate.groups[gi].photos[side] = {
+        path,
+        // 撮影日の既定: 工事前 = 理由書の現地確認日 (旧 Excel と同じ) / 工事後 = 完成日
+        taken_date: old?.taken_date ?? (side === "before" ? next.reason.site_visit_date : next.application.completed_date),
+      };
+      await persist(next);
+      if (old) {
+        await removeRenovationPhoto(old.path).catch((e) => console.warn("差し替え前の写真の削除に失敗 (残っても表示には影響しない):", e));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("写真の追加に失敗:", msg);
+      // 書類データの保存に失敗したら、置いた写真は参照されないので消しておく
+      if (path) await removeRenovationPhoto(path).catch((err) => console.warn("置いた写真の取り消しに失敗:", err));
+      alert(
+        /bucket|row-level security/i.test(msg)
+          ? `${msg}\n\n写真の置き場 (supabase/migrations/renovation_photos_storage.sql) が DB に未適用の可能性があります。`
+          : msg,
+      );
+    } finally {
+      setPhotoBusy(null);
+    }
+  };
+
+  const handlePhotoRemove = async (gi: number, side: "before" | "after") => {
+    const old = docs.estimate.groups[gi].photos[side];
+    if (!old || !confirm("この写真を削除しますか？")) return;
+    setPhotoBusy(`${gi}-${side}`);
+    try {
+      const next = structuredClone(docs);
+      next.estimate.groups[gi].photos[side] = null;
+      await persist(next);
+      await removeRenovationPhoto(old.path);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("写真の削除に失敗:", msg);
+      alert(msg);
+    } finally {
+      setPhotoBusy(null);
+    }
+  };
+
   const handleClose = () => {
     if (dirty && !confirm("保存していない変更があります。閉じてよいですか？")) return;
     onClose();
@@ -184,9 +263,9 @@ export default function RenovationDocsModal({
 
   const receiptAmount = docs.receipt.amount ?? copay;
   const addressee = docs.application.addressee || defaultAddressee(address);
-  const sheetProps: DocSheetProps = { docs, project, client, totals, receiptAmount, addressee };
+  const sheetProps: DocSheetProps = { docs, project, client, totals, receiptAmount, addressee, photoUrls };
   // 茂原市の受領委任届・委任状は茂原市の利用者のときだけ選べる
-  const order: DocKey[] = (["estimate", "reason1", "reason2", "consent", "application", "mobara_todoke", "mobara_ininjo", "receipt_tmp", "receipt", "cover"] as DocKey[])
+  const order: DocKey[] = (["estimate", "reason1", "reason2", "consent", "application", "mobara_todoke", "mobara_ininjo", "photos", "receipt_tmp", "receipt", "cover"] as DocKey[])
     .filter((k) => !k.startsWith("mobara_") || city.city === "茂原市");
 
   return (
@@ -238,6 +317,9 @@ export default function RenovationDocsModal({
             )}
             {tab === "receipt" && <ReceiptForm docs={docs} update={update} copay={copay} copayRate={project.copay_rate} grandTotal={totals.grandTotal} />}
             {tab === "issuer" && <IssuerForm docs={docs} update={update} />}
+            {tab === "photos" && (
+              <PhotosForm docs={docs} update={update} photoUrls={photoUrls} busy={photoBusy} onUpload={handlePhotoUpload} onRemove={handlePhotoRemove} />
+            )}
           </div>
         </div>
 
@@ -273,6 +355,11 @@ export default function RenovationDocsModal({
                 {k === "receipt_tmp" && <ReceiptSheet {...sheetProps} provisional />}
                 {k === "receipt" && <ReceiptSheet {...sheetProps} />}
                 {k === "cover" && <CoverLetterSheet {...sheetProps} />}
+                {k === "photos" && (
+                  <div className="flex flex-col gap-4">
+                    {docs.estimate.groups.map((g, gi) => <PhotoSheet key={gi} {...sheetProps} group={g} />)}
+                  </div>
+                )}
               </div>
             ))}
             {selected.size === 0 && <div className="no-print text-gray-400 text-sm py-16">上で書類を選んでください</div>}
@@ -737,6 +824,83 @@ function IssuerForm({ docs, update }: { docs: RenovationDocs; update: Upd }) {
           <Field label="口座名義人"><Text value={i.bank_holder} onChange={set("bank_holder")} /></Field>
         </div>
       </div>
+    </>
+  );
+}
+
+// ─── 写真 ────────────────────────────────────────────────────────────────────
+
+function PhotosForm({ docs, update, photoUrls, busy, onUpload, onRemove }: {
+  docs: RenovationDocs;
+  update: Upd;
+  photoUrls: Record<string, string>;
+  busy: string | null;
+  onUpload: (gi: number, side: "before" | "after", file: File) => void;
+  onRemove: (gi: number, side: "before" | "after") => void;
+}) {
+  return (
+    <>
+      <p className="text-[10px] text-gray-400">
+        写真添付用紙は「見積」の改修箇所ごとに 1 枚です (工事前・工事後)。写真は追加・削除した時点で保存されます。
+        撮影日を直したときは「保存」を押してください。
+      </p>
+      {docs.estimate.groups.map((g, gi) => (
+        <div key={gi} className="border border-gray-200 rounded p-2 space-y-1.5">
+          <div className="font-semibold text-gray-600">
+            改修箇所 {gi + 1}{g.photo_no ? `（${g.photo_no}）` : ""}　{[g.place, g.part].filter(Boolean).join(" ") || "（場所未入力）"}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {(["before", "after"] as const).map((side) => {
+              const photo = g.photos[side];
+              const url = photo ? photoUrls[photo.path] : undefined;
+              const isBusy = busy === `${gi}-${side}`;
+              return (
+                <div key={side} className="space-y-1">
+                  <div className="text-[11px] text-gray-500">{side === "before" ? "工事前" : "工事後"}</div>
+                  <div className="h-28 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center overflow-hidden">
+                    {isBusy ? (
+                      <Loader2 size={18} className="animate-spin text-emerald-400" />
+                    ) : photo && url ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- 署名付き URL のサムネイル
+                      <img src={url} alt="" className="max-h-full max-w-full object-contain" />
+                    ) : photo ? (
+                      <span className="text-[10px] text-gray-400">読み込み中…</span>
+                    ) : (
+                      <span className="text-[10px] text-gray-400">未登録</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <label className={`inline-flex items-center gap-0.5 text-emerald-600 hover:underline cursor-pointer ${busy ? "pointer-events-none opacity-40" : ""}`}>
+                      <ImagePlus size={12} />{photo ? "差し替え" : "写真を選ぶ"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={!!busy}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) onUpload(gi, side, file);
+                        }}
+                      />
+                    </label>
+                    {photo && (
+                      <button onClick={() => onRemove(gi, side)} disabled={!!busy} className="ml-auto text-gray-400 hover:text-red-500 disabled:opacity-30" title="写真を削除">
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                  {photo && (
+                    <Field label="撮影日">
+                      <DateIn value={photo.taken_date} onChange={(v) => update((d) => { const p = d.estimate.groups[gi].photos[side]; if (p) p.taken_date = v; })} />
+                    </Field>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </>
   );
 }

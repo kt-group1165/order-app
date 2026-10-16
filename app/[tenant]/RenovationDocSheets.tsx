@@ -11,8 +11,8 @@ import type { Client } from "@/lib/supabase";
 import type { RenovationProject } from "@/lib/renovations";
 import {
   REASON_ACTIVITIES, REASON_PURPOSES, REASON_TOOLS, REASON_WORK_ITEMS, RENOVATION_KINDS,
-  ageAt, splitTaxIncluded, toWareki, warekiLabel, yenNum,
-  type EstimateTotals, type RenovationDocs,
+  ageAt, photoWorkLabel, splitTaxIncluded, toWareki, warekiLabel, yenNum,
+  type EstimateGroup, type EstimateTotals, type PhotoRef, type RenovationDocs,
 } from "@/lib/renovationDocs";
 
 export type DocSheetProps = {
@@ -24,6 +24,8 @@ export type DocSheetProps = {
   receiptAmount: number;
   /** 支給申請書・承諾書の宛先 (入力が無ければ住所から自動) */
   addressee: string;
+  /** 写真の表示用 URL (Storage のパス → 署名付き URL) */
+  photoUrls?: Record<string, string>;
 };
 
 // ─── 共通 ────────────────────────────────────────────────────────────────────
@@ -541,6 +543,51 @@ export function CoverLetterSheet({ docs, project, client, receiptAmount }: DocSh
         <div style={{ textAlign: "center", marginTop: "8mm" }}>記</div>
         <div style={{ paddingLeft: "20mm" }}>・領収書　1 通</div>
         <div style={{ textAlign: "right" }}>以上</div>
+      </div>
+    </Sheet>
+  );
+}
+
+// ─── 写真添付用紙 (A4 横・改修箇所ごとに 1 枚) ──────────────────────────────
+
+function PhotoBox({ label, photo, url }: { label: string; photo: PhotoRef | null; url: string | undefined }) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div style={{ display: "flex", border: B }}>
+        <div style={{ ...th, width: "40%", border: "none", borderRight: B, fontSize: "11pt" }}>{label}</div>
+        <div style={{ ...cell, border: "none", flex: 1, textAlign: "center" }}>
+          {photo?.taken_date ? warekiLabel(photo.taken_date) : "令和　　年　　月　　日"}
+        </div>
+      </div>
+      <div style={{ border: B, borderTop: "none", height: "128mm", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {photo && url ? (
+          // eslint-disable-next-line @next/next/no-img-element -- 署名付き URL の印刷用画像。next/image の最適化を通すと期限切れ URL がキャッシュされる
+          <img src={url} alt={label} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+        ) : photo ? (
+          <span style={{ color: "#999", fontSize: "9pt" }}>写真を読み込み中…</span>
+        ) : (
+          <span style={{ color: "#bbb", fontSize: "9pt" }}>（写真未登録）</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PhotoSheet({ docs, project, client, group, photoUrls }: DocSheetProps & { group: EstimateGroup }) {
+  const place = [group.place, group.part].filter(Boolean).join("　");
+  return (
+    <Sheet landscape>
+      <div style={{ fontSize: "14pt", letterSpacing: "0.3em", marginBottom: "3mm" }}>写真添付用紙</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5mm 10mm", marginBottom: "4mm", fontSize: "10pt" }}>
+        <div>被保険者名　：　<span style={{ fontSize: "11pt" }}>{client?.name ?? project.client_name}</span>　様</div>
+        <div>被保険者番号　：　{client?.insured_number ?? ""}</div>
+        <div>施工業者名　：　{docs.issuer.company_name}</div>
+        <div>対象工事種別　：　{photoWorkLabel(group.kind)}</div>
+        <div>工事箇所　 　：　{place}{group.photo_no ? `（写真 ${group.photo_no}）` : ""}</div>
+      </div>
+      <div style={{ display: "flex", gap: "4mm" }}>
+        <PhotoBox label="工事前" photo={group.photos.before} url={group.photos.before ? photoUrls?.[group.photos.before.path] : undefined} />
+        <PhotoBox label="工事後" photo={group.photos.after} url={group.photos.after ? photoUrls?.[group.photos.after.path] : undefined} />
       </div>
     </Sheet>
   );

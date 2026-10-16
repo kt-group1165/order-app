@@ -27,7 +27,7 @@ const eq = (label: string, got: unknown, want: unknown) => {
 };
 
 const handrail = (photo: string, place: string): EstimateGroup => ({
-  kind: 1, photo_no: photo, place, part: "動線",
+  kind: 1, photo_no: photo, place, part: "動線", photos: { before: null, after: null },
   lines: [
     { name: "アッシュ丸棒", spec: "マツ六 BD-112", qty: 0.9, unit: "ｍ", unit_price: 4400, basis: "" },
     { name: "エンドブラケット", spec: "マツ六 BD-08", qty: 2, unit: "個", unit_price: 2100, basis: "" },
