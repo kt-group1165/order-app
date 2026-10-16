@@ -8,6 +8,7 @@
 //   袖ケ浦市 住宅改修支給申請書 (償還払用 / 受領委任払用) — 住宅改修費の支給申請について
 //   君津市   償還払い用 第10号様式 / 受領委任払い用 第8号様式 — 介護保険に関する各種申請書等一覧
 //   千葉市   様式第23号 (R6.4 改正。事前申請専用) — 介護保険 様式ダウンロード (サービス)
+//   茂原市   別記第34号様式（第27条） — 福祉用具購入費及び住宅改修費の支給申請に関するお知らせ (2026-10-16 取得)
 //
 // 千葉市以外の 4 市は 1 枚を事前・事後で使い回す。事前に出すときは、市が「事後に記入」と指定している欄を空けて出す。
 // ⚠ 木更津市は手引き (H30) が「改修費用・申請日は事後に記入」、記入例は事前でも改修費用を記入済みと食い違う。
@@ -67,11 +68,47 @@ type CityForm = {
   /** 提出代行者欄 (千葉市) / 代理申請事業所欄 (袖ケ浦市) */
   proxy?: "chiba" | "sodegaura";
   footer?: string;
+  /** 宛先を「（宛先）○○市長」と様なしで書く (茂原市) */
+  addresseeAtesaki?: boolean;
+  /** 茂原市だけの欄: 負担割合・要介護度 / 本人の状況 / 着工予定日と見積もり額 */
+  copayAndCare?: boolean;
+  personStatus?: string[];
+  plannedAndEstimate?: boolean;
+  /** 受領委任払いを選んだときの画面の注意 (申請書とは別に届を出す市など) */
+  juryoNote?: string;
 };
 
 const NOTE_COMMON_OWNER = "・改修を行った住宅の所有者が当該被保険者でない場合は、所有者の承諾書も併せて添付してください。";
 
 export const CITY_FORMS: Record<string, CityForm> = {
+  // 茂原市 別記第34号様式（第27条）— 事前・事後兼用。※印 (着工日・完成日・改修費用) は工事完了後に書く。
+  //   受領委任払いは申請書では区別せず、別紙「福祉用具購入費・住宅改修費受領委任届（第２号様式）」と委任状を付ける (未対応)。
+  //   出どころ: https://www.city.mobara.chiba.jp/cmsfiles/contents/0000005/5898/jyuutakukaisyuu.pdf (2026-10-16 取得)
+  茂原市: {
+    formNo: { shoukan: "別記第34号様式（第27条）", juryo: "別記第34号様式（第27条）" },
+    title: "介護保険居宅介護(介護予防)住宅改修費支給申請書",
+    addressee: "茂原市長",
+    addresseeAtesaki: true,
+    lead: "上記のとおり関係書類を添えて居宅介護(介護予防)住宅改修費の支給を申請します。",
+    gender: { shoukan: true, juryo: true },
+    myNumber: true,
+    copayAndCare: true,
+    personStatus: ["入院中", "入所中", "転入前", "転居前", "認定前"],
+    plannedAndEstimate: true,
+    juryoNote: "茂原市は受領委任払いでも申請書は同じです。別に「福祉用具購入費・住宅改修費受領委任届（第２号様式）」と委任状を付けてください（この画面では未対応）。",
+    bank: true,
+    blankOnPre: ["started", "completed", "cost"],
+    notes: {
+      shoukan: [
+        "・工事着工前に、この申請書に介護支援専門員等が作成した住宅改修が必要な理由書(付表1及び2)、工事費見積もり書、住宅改修後の完成予定の状態がわかるもの(日付入りの写真及び図面)を添付して申請し、保険給付の対象となるかどうかの確認を受けてください。確認の結果は、書面で通知します。",
+        "・工事完了後に、住宅改修に要した費用に係る領収証、工事費内訳書、住宅改修の完成後の状態を確認できる書類（日付入りの写真）を提出してください。",
+        "・改修を行う住宅の所有者が当該被保険者でない場合は、所有者の承諾書も併せて添付してください。",
+        "・※印の箇所は工事完了後に記載してください。",
+      ],
+      juryo: [],
+    },
+    juryo: { available: false, delegation: "", delegateLabel: "" },
+  },
   市原市: {
     formNo: { shoukan: "", juryo: "" },
     title: "介護保険居宅介護（介護予防）住宅改修費支給申請書",
@@ -272,6 +309,8 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
   const showGender = juryo ? form.gender.juryo : form.gender.shoukan;
   const gender = client?.gender?.startsWith("男") ? "男" : client?.gender?.startsWith("女") ? "女" : null;
   const startLabel = form.preOnly ? "着工予定日" : "着工日";
+  // 茂原市は「工事完了後に記載」の欄に (※) が付く
+  const mark = form.plannedAndEstimate ? "(※)" : "";
   const startValue = form.preOnly
     ? (docs.estimate.start_date ? warekiLabel(docs.estimate.start_date) : blankDate)
     : blank("started") ? blankDate : (app.started_date ? warekiLabel(app.started_date) : blankDate);
@@ -350,6 +389,14 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
               </>
             ) : <td style={cell} colSpan={2} />}
           </tr>
+          {form.copayAndCare && (
+            <tr>
+              <td style={th}>負担割合</td>
+              <td style={cell}>{/^[123]割$/.test(project.copay_rate ?? "") ? project.copay_rate!.slice(0, 1) : "　"}　割</td>
+              <td style={th}>要介護度</td>
+              <td style={cell}>{client?.care_level ?? ""}</td>
+            </tr>
+          )}
           {form.careLevel && (
             <tr>
               <td style={th}>認定有効期間</td>
@@ -366,10 +413,17 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
           </tr>
           <tr>
             <td style={th}>住宅の所有者</td>
-            <td style={cell} colSpan={3}>
+            <td style={cell} colSpan={form.personStatus ? 1 : 3}>
               {o.is_self ? (client?.name ?? project.client_name) : o.name}
               <span style={{ float: "right" }}>本人との関係（{o.is_self ? "本人" : o.relation}）</span>
             </td>
+            {form.personStatus && (
+              <>
+                <td style={th}>本人の状況</td>
+                {/* 該当するものに○ (手書き)。入院・入所等の状況はシステムで持っていないので印字しない */}
+                <td style={{ ...cell, fontSize: "8.5pt" }}>{form.personStatus.join(" ・ ")}</td>
+              </>
+            )}
           </tr>
           {form.siteAddress && (
             <tr>
@@ -396,13 +450,27 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
                       <td style={{ ...cell, borderRight: "none" }}>{iss.tel}</td>
                     </tr>
                   )}
+                  {form.plannedAndEstimate && (
+                    <>
+                      <tr>
+                        <td style={{ ...th, borderLeft: "none", width: "18mm" }}>着工予定日</td>
+                        <td style={{ ...cell, borderRight: "none" }}>
+                          {docs.estimate.start_date ? warekiLabel(docs.estimate.start_date) : blankDate}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={{ ...th, borderLeft: "none", width: "18mm" }}>見積もり額</td>
+                        <td style={{ ...cell, borderRight: "none", textAlign: "right" }}>{yenNum(totals.grandTotal)}　円</td>
+                      </tr>
+                    </>
+                  )}
                   <tr>
-                    <td style={{ ...th, borderLeft: "none", width: "18mm", ...(form.preOnly ? { borderBottom: "none" } : {}) }}>{startLabel}</td>
+                    <td style={{ ...th, borderLeft: "none", width: "18mm", ...(form.preOnly ? { borderBottom: "none" } : {}) }}>{startLabel}{mark}</td>
                     <td style={{ ...cell, borderRight: "none", ...(form.preOnly ? { borderBottom: "none" } : {}) }}>{startValue}</td>
                   </tr>
                   {!form.preOnly && (
                     <tr>
-                      <td style={{ ...th, borderBottom: "none", borderLeft: "none", width: "18mm" }}>完成日</td>
+                      <td style={{ ...th, borderBottom: "none", borderLeft: "none", width: "18mm" }}>完成日{mark}</td>
                       <td style={{ ...cell, borderBottom: "none", borderRight: "none" }}>
                         {blank("completed") || !app.completed_date ? blankDate : warekiLabel(app.completed_date)}
                       </td>
@@ -423,7 +491,7 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
             </tr>
           ) : (
             <tr>
-              <td style={th}>改修費用</td>
+              <td style={th}>改修費用{mark}</td>
               <td style={{ ...cell, fontSize: "11pt" }} colSpan={3}>{cost}　円</td>
             </tr>
           )}
@@ -448,7 +516,9 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
 
       <div style={{ border: B, borderTop: "none", padding: "2mm 3mm", lineHeight: 1.8 }}>
         <div style={{ fontSize: "11pt" }}>
-          {form.addressee ? `${form.addressee}　様` : <>（あて先）<span style={{ marginLeft: "6mm" }}>{addressee}</span></>}
+          {form.addressee
+            ? form.addresseeAtesaki ? `（宛先）${form.addressee}` : `${form.addressee}　様`
+            : <>（あて先）<span style={{ marginLeft: "6mm" }}>{addressee}</span></>}
         </div>
         <div style={{ paddingLeft: "4mm" }}>
           {form.lead}{juryo ? form.juryo.delegation : ""}

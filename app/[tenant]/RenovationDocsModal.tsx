@@ -637,7 +637,7 @@ function ApplicationForm({ docs, update, address, cityName, hasForm }: { docs: R
           <label className="inline-flex items-center gap-1"><input type="radio" checked={a.payment === "shoukan"} onChange={() => update((d) => { d.application.payment = "shoukan"; })} />償還払い</label>
         </div>
         {form && a.payment === "juryo" && !form.juryo.available && (
-          <Warn>{cityName}の様式には受領委任払い用がありません。償還払いの様式で出します。</Warn>
+          <Warn>{form.juryoNote ?? `${cityName}の様式には受領委任払い用がありません。償還払いの様式で出します。`}</Warn>
         )}
         {form?.juryo.postOnly && a.payment === "juryo" && a.phase === "pre" && (
           <Warn>{cityName}の受領委任払い用の申請書は事後専用です。事前は事業者が「事前協議願（第6号様式）」を出します（この画面では未対応）。</Warn>
