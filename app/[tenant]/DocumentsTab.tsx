@@ -20,6 +20,7 @@ import CarePlanModal from "./CarePlanModal";
 import ProposalModal from "./ProposalModal";
 import ContractDocumentsModal from "./ContractDocumentsModal";
 import RentalReportModal from "./RentalReportModal";
+import BulkRentalReportModal from "./BulkRentalReportModal";
 import OrderEmailPreviewModal from "./OrderEmailPreviewModal";
 
 // ─── Documents Tab ───────────────────────────────────────────────────────────
@@ -72,6 +73,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [clientLoading, setClientLoading] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  /** 貸与報告書を毎月まとめて作る画面 */
+  const [showBulkReport, setShowBulkReport] = useState(false);
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
   const [carePlanInitialParams, setCarePlanInitialParams] = useState<Record<string, unknown> | null>(null);
@@ -507,6 +510,10 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                       className={`flex-1 py-1 ${listMode === m ? "bg-blue-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>{label}</button>
                   ))}
                 </div>
+                <button onClick={() => setShowBulkReport(true)} disabled={loading}
+                  className="w-full text-[11px] py-1 rounded border border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50">
+                  貸与報告書をまとめて作る
+                </button>
                 <p className="text-[10px] text-gray-400">
                   {docIndex ? <>{filteredClients.length} 名{actionTotal > 0 && <span className="text-red-600">　要対応 {actionTotal} 名</span>}</>
                     : docIndexError ? <span className="text-red-600">一覧用データの読み込みに失敗: {docIndexError}</span>
@@ -762,6 +769,24 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
       )}
 
       {/* モーダル */}
+      {showBulkReport && (
+        <BulkRentalReportModal
+          tenantId={tenantId} clients={clients} equipment={equipment} companyInfo={companyInfo}
+          onClose={() => setShowBulkReport(false)}
+          onSaved={(docs) => {
+            // 一覧の印 (貸与報告書の作成状況) と、開いている利用者の書類一覧に反映する
+            setDocIndex((prev) => {
+              if (!prev) return prev;
+              const docsByClient = new Map(prev.docsByClient);
+              for (const d of docs) docsByClient.set(d.client_id, [d, ...(docsByClient.get(d.client_id) ?? [])]);
+              return { ...prev, docsByClient };
+            });
+            if (selectedClient && docs.some((d) => d.client_id === selectedClient.id)) {
+              refreshDocs().catch((e) => console.error("書類一覧の再読込に失敗:", e instanceof Error ? e.message : e));
+            }
+          }}
+        />
+      )}
       {(showReport || regenDoc) && selectedClient && (
         <RentalReportModal
           client={selectedClient} items={clientItems} orderPaymentMap={orderPaymentMap}
