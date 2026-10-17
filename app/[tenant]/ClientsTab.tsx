@@ -7,6 +7,7 @@ import { getClientDocuments, deleteClientDocument } from "@/lib/documents";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { monthEndYmd, todayYmd } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
+import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { type CareOfficeChoice } from "./SendRentalReportModal";
 import { HW_KANA, matchClient } from "./search-utils";
 import { KANA_ROWS } from "./kana-rows";
@@ -2944,30 +2945,15 @@ function ClientDetail({
     return () => { cancelled = true; };
   }, [client.id, tenantId]);
 
-  // 会社情報ロード
+
+  // 帳票の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
   useEffect(() => {
-    getTenantById(tenantId).then((t) => {
-      if (t) {
-        setCompanyInfo({
-          businessNumber:      t.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
-          companyName:         t.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
-          companyAddress:      t.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
-          tel:                 t.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
-          fax:                 t.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
-          staffName:           t.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
-          serviceArea:         t.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
-          businessDays:        t.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
-          businessHours:       t.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
-          staffManagerFull:    t.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
-          staffManagerPart:    t.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
-          staffSpecialistFull: t.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
-          staffSpecialistPart: t.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
-          staffAdminFull:      t.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
-          staffAdminPart:      t.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
-        });
-      }
-    });
-  }, [tenantId]);
+    let cancelled = false;
+    getOfficeCompanyInfo(tenantId, currentOfficeId)
+      .then((r) => { if (!cancelled) setCompanyInfo(r.info); })
+      .catch((e) => console.error("会社情報の取得に失敗:", e instanceof Error ? e.message : e));
+    return () => { cancelled = true; };
+  }, [tenantId, currentOfficeId]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);

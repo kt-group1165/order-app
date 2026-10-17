@@ -8,11 +8,11 @@ import { activeRentalCount, getDocIndex, type ClientRental, type DocIndex } from
 import DocChecklistPanel from "./DocChecklistPanel";
 import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
+import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { HW_KANA } from "./search-utils";
 import { completeDocTask, docTypesSatisfying } from "@/lib/docTasks";
 import { getOrderItems, getMembers } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory } from "@/lib/equipment";
-import { getTenantById } from "@/lib/tenants";
 import { getCarePlanElementsByClient, completeCarePlanElements, describeCarePlanElement, filterElementsForDocType } from "@/lib/carePlanElements";
 import { CarePlanElement } from "@/lib/supabase";
 import { type SharedDocumentRow } from "@/lib/notifications";
@@ -47,6 +47,16 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+
+  // 帳票の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
+  const [companyInfoMissing, setCompanyInfoMissing] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getOfficeCompanyInfo(tenantId, officeViewAll ? null : currentOfficeId)
+      .then((r) => { if (!cancelled) { setCompanyInfo(r.info); setCompanyInfoMissing(r.missing); } })
+      .catch((e) => console.error("会社情報の取得に失敗:", e instanceof Error ? e.message : e));
+    return () => { cancelled = true; };
+  }, [tenantId, officeViewAll, currentOfficeId]);
   const [loading, setLoading] = useState(true);
   const [kanaFilter, setKanaFilter] = useState<string | null>(null);
   /** 左の一覧: "todo" = 貸与中か要対応の人だけ / "all" = 全員 */
@@ -109,27 +119,9 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     Promise.all([
       fetchAllClients(),
       getEquipment(tenantId),
-      getTenantById(tenantId),
-    ]).then(([cls, equip, tenant]) => {
+    ]).then(([cls, equip]) => {
       setClients(cls);
       setEquipment(equip);
-      if (tenant) setCompanyInfo({
-        businessNumber: tenant.business_number ?? COMPANY_INFO_DEFAULTS.businessNumber,
-        companyName: tenant.company_name ?? COMPANY_INFO_DEFAULTS.companyName,
-        companyAddress: tenant.company_address ?? COMPANY_INFO_DEFAULTS.companyAddress,
-        tel: tenant.company_tel ?? COMPANY_INFO_DEFAULTS.tel,
-        fax: tenant.company_fax ?? COMPANY_INFO_DEFAULTS.fax,
-        staffName: tenant.staff_name ?? COMPANY_INFO_DEFAULTS.staffName,
-        serviceArea: tenant.service_area ?? COMPANY_INFO_DEFAULTS.serviceArea,
-        businessDays: tenant.business_days ?? COMPANY_INFO_DEFAULTS.businessDays,
-        businessHours: tenant.business_hours ?? COMPANY_INFO_DEFAULTS.businessHours,
-        staffManagerFull: tenant.staff_manager_full ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
-        staffManagerPart: tenant.staff_manager_part ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
-        staffSpecialistFull: tenant.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
-        staffSpecialistPart: tenant.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
-        staffAdminFull: tenant.staff_admin_full ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
-        staffAdminPart: tenant.staff_admin_part ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
-      });
       setLoading(false);
     });
   }, [tenantId, currentOfficeId, officeViewAll]);
@@ -551,6 +543,11 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
               <div className="flex h-full items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
             ) : (
               <div className="p-4 space-y-4">
+                {companyInfoMissing.length > 0 && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    書類の会社欄に未設定の項目があります（{companyInfoMissing.join("・")}）。設定 → 会社情報 で、この事業所の値を入れてください。
+                  </div>
+                )}
                 {/* 利用者の要点 (書類を作る前に確かめること) */}
                 <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-1">
                   <span className="text-base font-semibold text-gray-800">{selectedClient.name}</span>

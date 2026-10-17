@@ -3,6 +3,8 @@
 export type CompanyInfo = {
   businessNumber: string;
   companyName: string;
+  /** 法人名 (重要事項説明書・契約書の「事業者名」)。無ければ companyName を使う */
+  legalName?: string;
   companyAddress: string;
   tel: string;
   fax: string;

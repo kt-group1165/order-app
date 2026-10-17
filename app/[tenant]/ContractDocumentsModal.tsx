@@ -252,7 +252,7 @@ export default function ContractDocumentsModal({
 
                 <h2 style={{ fontSize: "9pt", fontWeight: "bold", margin: "0 0 3px", borderBottom: "1px solid #333", paddingBottom: "1px" }}>１．事業所の概要</h2>
                 <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "4px", fontSize: "8pt" }}><tbody>
-                  <tr><th style={{ ...TH, width: "120px" }}>事　業　者　名</th><td style={TD}>{companyInfo.companyName}</td></tr>
+                  <tr><th style={{ ...TH, width: "120px" }}>事　業　者　名</th><td style={TD}>{companyInfo.legalName || companyInfo.companyName}</td></tr>
                   <tr><th style={TH}>福 祉 用 具 貸 与 事 業 所 名</th><td style={TD}>{companyInfo.companyName}</td></tr>
                   <tr><th style={TH}>事　業　所　所　在　地</th><td style={TD}>{companyInfo.companyAddress}　TEL: {companyInfo.tel}　FAX: {companyInfo.fax}</td></tr>
                   <tr><th style={TH}>介護保険指定番号</th><td style={TD}>{companyInfo.businessNumber}</td></tr>

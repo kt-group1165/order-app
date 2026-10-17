@@ -8,6 +8,7 @@ import { COMPANY_INFO_DEFAULTS } from "./company-info";
 import { PageHeader, CareOfficeFormRow } from "./shared-form-ui";
 import { getEquipment, getSuppliers, createSupplier, updateSupplier } from "@/lib/equipment";
 import { getTenantById, updateTenantInfo } from "@/lib/tenants";
+import { COMPANY_INFO_KEYS, emptyCompanyInfoRow, getOfficeCompanyInfo, saveOfficeCompanyOverrides, type CompanyInfoRow } from "@/lib/officeCompanyInfo";
 import { getCarePlanTemplates, upsertCarePlanTemplate, deleteCarePlanTemplate } from "@/lib/carePlanTemplates";
 import { getDocTemplate, saveDocTemplate, type DocTemplateSections } from "@/lib/docTemplates";
 import { CONTRACT_TEMPLATE_SECTIONS, RENTAL_CONTRACT_DOC_TYPE } from "@/lib/contractTemplateSections";
@@ -58,6 +59,14 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     staff_admin_part:      COMPANY_INFO_DEFAULTS.staffAdminPart,
   });
   const [savingCompany, setSavingCompany] = useState(false);
+  /** 会社情報をどこに保存するか: 事業所 id / "group" = グループ共通 (事業所を選ばないときの既定) */
+  const [companyScope, setCompanyScope] = useState<string>(officeViewAll || !currentOfficeId ? "group" : currentOfficeId);
+  /** 事業所を選んだとき: マスタ (+ グループ共通) の値。空欄の項目はこれが使われる */
+  const [companyBase, setCompanyBase] = useState<CompanyInfoRow | null>(null);
+  const companyScopeRef = useRef(companyScope);
+  useEffect(() => { companyScopeRef.current = companyScope; }, [companyScope]);
+  const [companyMissing, setCompanyMissing] = useState<string[]>([]);
+  const [companyColumnMissing, setCompanyColumnMissing] = useState(false);
   const [savedCompany, setSavedCompany] = useState(false);
 
   const [settingsOffices, setSettingsOffices] = useState<Office[]>([]);
@@ -75,7 +84,8 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       list.forEach((s) => { map[s.id] = s.email ?? ""; nmap[s.id] = s.name; });
       setEmailMap(map);
       setNameMap(nmap);
-      if (tenant) {
+      // 事業所を選んで開いたときは、事業所の値 (下の useEffect) をグループ共通の値で上書きしない
+      if (tenant && companyScopeRef.current === "group") {
         setCompany({
           business_number:       tenant.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
           company_name:          tenant.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
@@ -140,11 +150,53 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     }
   };
 
+  // 事業所を選んだら、その事業所の会社情報 (事業所の設定 > マスタ > グループ共通) を読み込む
+  useEffect(() => {
+    if (companyScope === "group") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- グループ共通に戻したら事業所用の表示を消す
+      setCompanyBase(null);
+      setCompanyMissing([]);
+      // グループ共通の値を読み直す (事業所の値が入力欄に残らないように)
+      let cancelledG = false;
+      getTenantById(tenantId).then((t) => {
+        if (cancelledG || !t) return;
+        const row = emptyCompanyInfoRow();
+        for (const k of COMPANY_INFO_KEYS) row[k] = ((t as Record<string, unknown>)[k] as string | null) ?? "";
+        setCompany(row);
+      }).catch((e) => console.error("グループ共通の会社情報の取得に失敗:", e instanceof Error ? e.message : e));
+      return () => { cancelledG = true; };
+    }
+    let cancelled = false;
+    getOfficeCompanyInfo(tenantId, companyScope)
+      .then((r) => {
+        if (cancelled) return;
+        setCompany(r.row);
+        setCompanyBase(r.base);
+        setCompanyMissing(r.missing);
+        setCompanyColumnMissing(r.columnMissing);
+      })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("事業所の会社情報の取得に失敗:", msg);
+        alert(`事業所の会社情報の取得に失敗しました: ${msg}`);
+      });
+    return () => { cancelled = true; };
+  }, [tenantId, companyScope]);
+
   const handleSaveCompany = async () => {
     setSavingCompany(true);
     setSavedCompany(false);
     try {
-      await updateTenantInfo(tenantId, company);
+      if (companyScope !== "group") {
+        if (!companyBase) throw new Error("事業所の会社情報を読み込めていません");
+        await saveOfficeCompanyOverrides(companyScope, company, companyBase);
+        const r = await getOfficeCompanyInfo(tenantId, companyScope);
+        setCompany(r.row);
+        setCompanyBase(r.base);
+        setCompanyMissing(r.missing);
+      } else {
+        await updateTenantInfo(tenantId, company);
+      }
       setSavedCompany(true);
       setTimeout(() => setSavedCompany(false), 2500);
     } catch (err) {
@@ -276,13 +328,35 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
         <PageHeader title="会社情報" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-white rounded-xl p-4 space-y-3">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">どの事業所の会社情報か</label>
+              <select value={companyScope} onChange={(e) => setCompanyScope(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400">
+                {settingsOffices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                <option value="group">グループ共通（事業所を選んでいないときの既定）</option>
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                重要事項説明書・契約書・計画書などの会社欄に出ます。事業所名・指定番号は事業所マスタ、法人名は法人マスタの値を使い、
+                ここで入力した項目だけ上書きします（空欄の項目は灰色で表示しているマスタの値になります）。
+              </p>
+            </div>
+            {companyColumnMissing && companyScope !== "group" && (
+              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                事業所ごとの保存先 (offices.doc_company_info) が DB にまだありません。SQL の適用後に保存できます。
+              </p>
+            )}
+            {companyMissing.length > 0 && companyScope !== "group" && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                書類に必要なのに空の項目: {companyMissing.join("・")}
+              </p>
+            )}
             {companyFields.map(({ key, label, placeholder }) => (
               <div key={key}>
                 <label className="text-xs text-gray-500 block mb-1">{label}</label>
                 <input
                   value={company[key]}
                   onChange={(e) => setCompany({ ...company, [key]: e.target.value })}
-                  placeholder={placeholder}
+                  placeholder={companyBase?.[key] || placeholder}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
                 />
               </div>
@@ -294,7 +368,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
                 <input
                   value={company[key]}
                   onChange={(e) => setCompany({ ...company, [key]: e.target.value })}
-                  placeholder={placeholder}
+                  placeholder={companyBase?.[key] || placeholder}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400"
                 />
               </div>

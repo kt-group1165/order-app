@@ -5,9 +5,9 @@ import { calcNextDueMonth } from "@/lib/monitoring-cycle";
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Send, Eye, Download } from "lucide-react";
 import { supabase, Client, Equipment, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientInsuranceRecord, OrderItem } from "@/lib/supabase";
 import { getEquipment } from "@/lib/equipment";
-import { getTenantById } from "@/lib/tenants";
 import { todayYmd } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
+import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import SendRentalReportModal from "./SendRentalReportModal";
 
 export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean }) {
@@ -22,6 +22,15 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
   const [monitoringRecords, setMonitoringRecords] = useState<MonitoringRecord[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+
+  // 帳票の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
+  useEffect(() => {
+    let cancelled = false;
+    getOfficeCompanyInfo(tenantId, officeViewAll ? null : currentOfficeId)
+      .then((r) => { if (!cancelled) setCompanyInfo(r.info); })
+      .catch((e) => console.error("会社情報の取得に失敗:", e instanceof Error ? e.message : e));
+    return () => { cancelled = true; };
+  }, [tenantId, officeViewAll, currentOfficeId]);
   const [loading, setLoading] = useState(true);
   const [formClient, setFormClient] = useState<Client | null>(null);
   const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
@@ -52,11 +61,10 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
         }
         return all;
       };
-      const [cls, monRes, eqData, tenantData, rentalHistRes] = await Promise.all([
+      const [cls, monRes, eqData, rentalHistRes] = await Promise.all([
         fetchAllClients(),
         supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
         getEquipment(tenantId),
-        getTenantById(tenantId),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
           .or(`end_date.is.null,end_date.gte.${todayYmd()}`),
       ]);
@@ -80,25 +88,6 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
       setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
       setEquipment(eqData);
       setRentalHistory((rentalHistRes.data ?? []) as ClientRentalHistory[]);
-      if (tenantData) {
-        setCompanyInfo({
-          businessNumber:      tenantData.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
-          companyName:         tenantData.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
-          companyAddress:      tenantData.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
-          tel:                 tenantData.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
-          fax:                 tenantData.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
-          staffName:           tenantData.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
-          serviceArea:         tenantData.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
-          businessDays:        tenantData.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
-          businessHours:       tenantData.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
-          staffManagerFull:    tenantData.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
-          staffManagerPart:    tenantData.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
-          staffSpecialistFull: tenantData.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
-          staffSpecialistPart: tenantData.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
-          staffAdminFull:      tenantData.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
-          staffAdminPart:      tenantData.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
-        });
-      }
       // order_items を tenant_id で直接取得（URLの長さ制限を回避）
       // order_items は office_id 列を持たないので、上で office filter 済の allOrders 経由で絞る
       const items: OrderItem[] = [];
