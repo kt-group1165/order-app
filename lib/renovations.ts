@@ -621,3 +621,15 @@ export async function getClientRenovationHistory(
     })
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 }
+
+/**
+ * 見積から進行表の金額 (仕切り合計 = 原価 / 計上金額 = 売上) を書き込む。
+ * cost が null のときは仕切りは触らない (仕入単価を入れていない見積で原価を 0 にしないため)。
+ */
+export async function updateRenovationAmounts(projectId: string, cost: number | null, sales: number): Promise<void> {
+  const patch: { sales_total: number; cost_total?: number } = { sales_total: sales };
+  if (cost !== null) patch.cost_total = cost;
+  const { data, error } = await supabase.from("renovation_projects").update(patch).eq("id", projectId).select("id");
+  if (error) throw error;
+  if (!data || data.length !== 1) throw new Error(`更新できませんでした (更新 ${data?.length ?? 0} 件)`);
+}

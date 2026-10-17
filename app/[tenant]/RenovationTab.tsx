@@ -267,6 +267,11 @@ export default function RenovationTab({
             setProjects((prev) => prev.map((x) => (x.id === docsFor.id ? { ...x, documents } : x)));
             setDocsFor((cur) => (cur ? { ...cur, documents } : cur));
           }}
+          onAmountsApplied={(a) => {
+            const patch = { sales_total: a.sales_total, ...(a.cost_total !== null ? { cost_total: a.cost_total } : {}) };
+            setProjects((prev) => prev.map((x) => (x.id === docsFor.id ? { ...x, ...patch } : x)));
+            setDocsFor((cur) => (cur ? { ...cur, ...patch } : cur));
+          }}
         />
       )}
     </div>

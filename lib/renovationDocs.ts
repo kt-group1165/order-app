@@ -38,6 +38,8 @@ export type EstimateLine = {
   unit_price: number | null;
   /** 算出根拠 */
   basis: string;
+  /** 仕入単価 (施工会社の見積の単価)。見積書には出さない。null = 仕入なし (自社で決めた単価) */
+  cost_price?: number | null;
 };
 
 /** 写真添付用紙の写真 1 枚 (Storage の renovation-photos バケット内のパス) */
@@ -143,6 +145,10 @@ export type RenovationDocs = {
     /** 諸経費率 (工事費用計に掛ける。0.1 = 10%) */
     overhead_rate: number;
     tax_rate: number;
+    /** 利益の乗せ方: unit = 仕入単価に掛け率をかけて単価にする / overhead = 単価は仕入のまま、利益は諸経費に乗せる */
+    markup_mode: "unit" | "overhead";
+    /** unit のときの上乗せ率 (0.25 = 仕入の 1.25 倍)。単価は 10 円単位に切り上げ */
+    markup_rate: number;
     groups: EstimateGroup[];
   };
   owner: {
@@ -236,6 +242,8 @@ export function defaultDocs(init: { clientAddress?: string | null; issuer?: Part
       validity: "次回御見積まで",
       start_date: null,
       overhead_rate: 0.1,
+      markup_mode: "unit",
+      markup_rate: 0,
       tax_rate: 0.1,
       groups: [emptyGroup(1, "①")],
     },
@@ -322,6 +330,10 @@ export type EstimateTotals = {
   tax: number;
   /** 総合計 (税込) */
   grandTotal: number;
+  /** 仕入計 (税抜。仕入単価がある行の floor(数量 × 仕入単価) の合計) */
+  costSubtotal: number;
+  /** 仕入計の税込換算 */
+  costTotal: number;
 };
 
 /**
@@ -340,7 +352,11 @@ export function computeEstimate(est: Pick<RenovationDocs["estimate"], "groups" |
   const overhead = Math.floor(round6(workTotal * est.overhead_rate));
   const subtotal = workTotal + overhead;
   const tax = Math.floor(round6(subtotal * est.tax_rate));
-  return { lineAmounts, groupSubtotals, workTotal, overhead, subtotal, tax, grandTotal: subtotal + tax };
+  // 仕入: 仕入単価がある行だけ。税込換算 = floor(仕入計 × (1 + 税率)) (進行表の「仕切り合計」に合わせる)
+  const costSubtotal = est.groups.reduce((sum, g) => sum + g.lines.reduce((s2, l) =>
+    s2 + (l.qty === null || l.cost_price === null || l.cost_price === undefined ? 0 : Math.floor(round6(l.qty * l.cost_price))), 0), 0);
+  const costTotal = Math.floor(round6(costSubtotal * (1 + est.tax_rate)));
+  return { lineAmounts, groupSubtotals, workTotal, overhead, subtotal, tax, grandTotal: subtotal + tax, costSubtotal, costTotal };
 }
 
 /** 0.9 × 4400 = 3960.0000000000005 のような浮動小数の誤差で floor が 1 ずれるのを防ぐ */
@@ -442,4 +458,65 @@ export function photoWorkLabel(kind: RenovationKindNo): string {
 /** 円表示 (¥ なし・3 桁区切り) */
 export function yenNum(v: number | null | undefined): string {
   return v === null || v === undefined ? "" : Math.round(v).toLocaleString("ja-JP");
+}
+
+// ─── 施工会社の見積の取込・利益の乗せ方 ────────────────────────────────────
+
+/** 仕入単価 → 見積の単価。unit は掛け率をかけて 10 円単位に切り上げ、overhead は仕入のまま */
+export function salePriceFromCost(cost: number, mode: "unit" | "overhead", rate: number): number {
+  if (mode === "overhead") return cost;
+  return Math.ceil(round6((cost * (1 + rate)) / 10)) * 10;
+}
+
+/** 取込の列の割り当て (0 始まりの列番号。-1 = 使わない) */
+export type EstimateColumnMap = { name: number; spec: number; qty: number; unit: number; price: number };
+
+/** 見出し行から列を推定する (施工会社ごとに書式が違うため、画面で直せる前提の初期値) */
+export function detectEstimateColumns(header: string[]): EstimateColumnMap {
+  const find = (re: RegExp) => header.findIndex((h) => re.test((h ?? "").replace(/\s/g, "")));
+  return {
+    name: find(/名称|品名|項目|工事名|内容/),
+    spec: find(/規格|型番|品番|仕様|寸法|メーカー/),
+    qty: find(/数量|数/),
+    unit: find(/単位/),
+    price: find(/単価/),
+  };
+}
+
+/** "1,234" / "１２３４円" / "0.9" → 数値。数字でなければ null */
+export function parseNum(v: string | null | undefined): number | null {
+  const t = (v ?? "").normalize("NFKC").replace(/[,¥円\s]/g, "");
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 施工会社の見積の行 (見出し行より下) → 見積の明細。名称と単価がある行だけを取る
+ * (小計・合計・空行・見出しの繰り返しは単価が無いか名称が「計」なので落ちる)。
+ */
+export function rowsToEstimateLines(
+  rows: string[][],
+  map: EstimateColumnMap,
+  markup: { mode: "unit" | "overhead"; rate: number },
+): EstimateLine[] {
+  const cell = (r: string[], i: number) => (i >= 0 ? (r[i] ?? "").trim() : "");
+  const out: EstimateLine[] = [];
+  for (const r of rows) {
+    const name = cell(r, map.name);
+    const price = parseNum(cell(r, map.price));
+    if (!name || price === null || price === 0) continue;
+    if (/^(小計|合計|総合計|計|消費税|値引)/.test(name.replace(/\s/g, ""))) continue;
+    const qty = parseNum(cell(r, map.qty)) ?? 1;
+    out.push({
+      name,
+      spec: cell(r, map.spec),
+      qty,
+      unit: cell(r, map.unit) || "式",
+      cost_price: price,
+      unit_price: salePriceFromCost(price, markup.mode, markup.rate),
+      basis: "",
+    });
+  }
+  return out;
 }

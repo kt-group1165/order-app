@@ -20,7 +20,9 @@ function emptyMeetingAttendees(): MeetingAttendee[] {
 }
 
 export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOfficeName, officeViewAll }: { tenantId: string; currentOfficeId: string | null; currentOfficeName: string | null; officeViewAll: boolean }) {
-  const [view, setView] = useState<"list" | "edit" | "preview">("list");
+  const [view, setView] = useState<"list" | "edit">("list");
+  /** 書類だけを全画面で見る (入力欄を隠す) */
+  const [previewOnly, setPreviewOnly] = useState(false);
   const [notes, setNotes] = useState<ServiceMeetingNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -116,15 +118,11 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
     setAttendees((prev) => prev.map((a, i) => (i === idx ? { ...a, [field]: value } : a)));
   };
 
-  const goPreview = () => {
+  const handleSave = async () => {
     if (!clientName.trim()) {
       alert("利用者名を入力してください");
       return;
     }
-    setView("preview");
-  };
-
-  const handleSave = async () => {
     setSaving(true);
     try {
       await saveMeetingNote({
@@ -190,7 +188,7 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
   // 和暦表示 ("YYYY-MM-DD" → "令和N年N月N日")
   const jaDate = (s: string) => (s ? toJapaneseEra(new Date(s + "T00:00:00")) : "");
 
-  const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400";
+  const inputCls = "w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-emerald-400";
 
   // ── 一覧 ──
   if (view === "list") {
@@ -269,9 +267,18 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
     );
   }
 
-  // ── 編集フォーム ──
-  if (view === "edit") {
-    return (
+  // ── 編集 (左で入力・右で第4表。以前は「プレビュー →」で別画面に切り替えていた) ──
+  const cellBase: React.CSSProperties = { border: "1px solid #333", padding: "4px 6px", fontSize: "11px", verticalAlign: "top" };
+  const attendeeHeadCell: React.CSSProperties = { ...cellBase, background: "#f3f4f6", fontWeight: 600, textAlign: "center", verticalAlign: "middle", whiteSpace: "nowrap", width: "20%" };
+  const attendeeNameHeadCell: React.CSSProperties = { ...attendeeHeadCell, width: "13.3%" };
+  // A4 横 (縦方向 約190mm ≈ 715px) に収まる行高配分
+  const bodyRows: { label: string; text: string; minHeight: number }[] = [
+    { label: "検討した項目", text: discussedItems, minHeight: 80 },
+    { label: "検討内容", text: discussionContent, minHeight: 120 },
+    { label: "結論", text: conclusion, minHeight: 80 },
+    { label: "残された課題（次回の開催時期）", text: remainingIssues, minHeight: 90 },
+  ];
+  return (
       <div className="flex flex-col h-full bg-gray-50">
         <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -280,13 +287,24 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
             </button>
             <h2 className="font-semibold text-gray-800">担当者会議録 {editingId ? "編集" : "新規作成"}</h2>
           </div>
-          <button onClick={goPreview}
-            className="text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg">
-            プレビュー →
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPreviewOnly((v) => !v)}
+              className="hidden md:inline-flex text-xs text-gray-600 border border-gray-300 hover:bg-gray-50 px-3 py-1.5 rounded-lg">
+              {previewOnly ? "入力と並べて表示" : "書類を全画面"}
+            </button>
+            <button onClick={handlePrint}
+              className="flex items-center gap-1 text-xs text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg">
+              <Printer size={14} /> 印刷
+            </button>
+            <button onClick={handleSave} disabled={saving}
+              className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg disabled:opacity-50">
+              {saving && <Loader2 size={14} className="animate-spin" />} 保存
+            </button>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="max-w-4xl mx-auto bg-white rounded-2xl border border-gray-200 p-5 space-y-4">
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
+        <div className={`${previewOnly ? "hidden" : ""} md:w-[440px] shrink-0 overflow-y-auto p-3 border-b md:border-b-0 md:border-r border-gray-200 bg-white max-h-[45vh] md:max-h-none`}>
+          <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-gray-500">利用者名 <span className="text-red-500">*</span></label>
@@ -352,43 +370,8 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
             </div>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  // ── プレビュー (第4表帳票) ──
-  const cellBase: React.CSSProperties = { border: "1px solid #333", padding: "4px 6px", fontSize: "11px", verticalAlign: "top" };
-  const attendeeHeadCell: React.CSSProperties = { ...cellBase, background: "#f3f4f6", fontWeight: 600, textAlign: "center", verticalAlign: "middle", whiteSpace: "nowrap", width: "20%" };
-  const attendeeNameHeadCell: React.CSSProperties = { ...attendeeHeadCell, width: "13.3%" };
-  // A4 横 (縦方向 約190mm ≈ 715px) に収まる行高配分
-  const bodyRows: { label: string; text: string; minHeight: number }[] = [
-    { label: "検討した項目", text: discussedItems, minHeight: 80 },
-    { label: "検討内容", text: discussionContent, minHeight: 120 },
-    { label: "結論", text: conclusion, minHeight: 80 },
-    { label: "残された課題（次回の開催時期）", text: remainingIssues, minHeight: 90 },
-  ];
-  return (
-    <div className="flex flex-col h-full bg-gray-50">
-      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button onClick={() => setView("edit")} className="p-1.5 hover:bg-gray-100 rounded-lg" title="編集に戻る">
-            <ArrowLeft size={16} className="text-gray-500" />
-          </button>
-          <h2 className="font-semibold text-gray-800">プレビュー — サービス担当者会議の要点</h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={handleSave} disabled={saving}
-            className="flex items-center gap-1 text-xs text-white bg-emerald-500 hover:bg-emerald-600 px-3 py-1.5 rounded-lg disabled:opacity-50">
-            {saving && <Loader2 size={14} className="animate-spin" />} 保存
-          </button>
-          <button onClick={handlePrint}
-            className="flex items-center gap-1 text-xs text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg">
-            <Printer size={14} /> 印刷
-          </button>
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-6xl mx-auto bg-white rounded-xl border border-gray-200 shadow-sm p-8 overflow-x-auto">
+        <div className="flex-1 min-w-0 overflow-auto p-4">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 overflow-x-auto">
           <div id="meeting-note-print-content" style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", color: "#111", minWidth: "960px" }}>
             {/* 1行目: 第4表 / タイトル / 作成年月日 */}
             <div style={{ display: "flex", alignItems: "flex-start", marginBottom: "14px" }}>
@@ -447,8 +430,9 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
               </tbody>
             </table>
           </div>
+          </div>
+        </div>
         </div>
       </div>
-    </div>
-  );
+    );
 }

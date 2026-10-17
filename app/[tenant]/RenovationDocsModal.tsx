@@ -8,12 +8,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader2, Plus, Printer, Save, Trash2, X, AlertTriangle, ImagePlus, Maximize2, Minimize2 } from "lucide-react";
 import type { Client } from "@/lib/supabase";
 import {
-  getClientRenovationHistory, getLatestRenovationIssuer, getRenovationClient, getRenovationIssuerDefaults, saveRenovationDocuments, todayYmd,
+  getClientRenovationHistory, getLatestRenovationIssuer, getRenovationClient, updateRenovationAmounts, getRenovationIssuerDefaults, saveRenovationDocuments, todayYmd,
   type RenovationProjectWithSteps,
 } from "@/lib/renovations";
 import {
   REASON_ACTIVITIES, REASON_PURPOSES, REASON_TOOLS, REASON_WORK_ITEMS, RENOVATION_KINDS,
-  computeEstimate, defaultAddressee, emptyGroup, emptyLine, estimateCopay, normalizeDocs, warekiLabel, yenNum,
+  computeEstimate, defaultAddressee, detectEstimateColumns, emptyGroup, emptyLine, estimateCopay, normalizeDocs, rowsToEstimateLines,
+  salePriceFromCost, warekiLabel, yenNum, type EstimateColumnMap,
   type EstimateGroup, type EstimateLine, type Issuer, type RenovationDocs, type RenovationKindNo, type ReasonActivityKey,
 } from "@/lib/renovationDocs";
 import { removeRenovationPhoto, resizeToJpeg, signRenovationPhotos, uploadRenovationPhoto } from "@/lib/renovationPhotos";
@@ -58,11 +59,14 @@ export default function RenovationDocsModal({
   project,
   onClose,
   onSaved,
+  onAmountsApplied,
 }: {
   tenantId: string;
   project: RenovationProjectWithSteps;
   onClose: () => void;
   onSaved: (documents: RenovationDocs) => void;
+  /** 見積の金額を進行表 (仕切り合計・計上金額) に反映したとき */
+  onAmountsApplied?: (amounts: { cost_total: number | null; sales_total: number }) => void;
 }) {
   const [client, setClient] = useState<Client | null>(null);
   const [docs, setDocs] = useState<RenovationDocs | null>(null);
@@ -73,6 +77,7 @@ export default function RenovationDocsModal({
   const [saving, setSaving] = useState(false);
   /** 画面の分け方: 並べる / 入力だけ全画面 / 書類だけ全画面 */
   const [view, setView] = useState<"split" | "form" | "preview">("split");
+  const [applyingAmounts, setApplyingAmounts] = useState(false);
 
   // 読み込み: 利用者 / 既存の書類 / 発行元 (同じ事業所の直前の案件 → 事業所・法人マスタ)
   useEffect(() => {
@@ -297,6 +302,24 @@ export default function RenovationDocsModal({
     }
   };
 
+  /** 見積の総合計を計上金額に、仕入計 (税込換算) を仕切り合計に書き込む */
+  const handleApplyAmounts = async () => {
+    const cost = totals.costSubtotal > 0 ? totals.costTotal : null;
+    const msg = `進行表の金額を更新します。\n計上金額: ¥${yenNum(totals.grandTotal)}${cost !== null ? `\n仕切り合計: ¥${yenNum(cost)} (仕入計の税込換算)` : "\n仕切り合計: 変更しません (仕入単価が入っていません)"}`;
+    if (!confirm(msg)) return;
+    setApplyingAmounts(true);
+    try {
+      await updateRenovationAmounts(project.id, cost, totals.grandTotal);
+      onAmountsApplied?.({ cost_total: cost, sales_total: totals.grandTotal });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("進行表の金額の更新に失敗:", m);
+      alert(`更新に失敗しました: ${m}`);
+    } finally {
+      setApplyingAmounts(false);
+    }
+  };
+
   const handleClose = () => {
     if (dirty && !confirm("保存していない変更があります。閉じてよいですか？")) return;
     onClose();
@@ -352,7 +375,11 @@ export default function RenovationDocsModal({
             {!client && (
               <Warn>この案件は利用者マスタと紐付いていません。氏名・住所以外 (被保険者番号・生年月日等) は空欄で出ます。案件の編集で利用者を選んでください。</Warn>
             )}
-            {tab === "estimate" && <EstimateForm docs={docs} update={update} totals={totals} />}
+            {tab === "estimate" && (
+              <EstimateForm docs={docs} update={update} totals={totals} contractor={project.contractor}
+                onApplyAmounts={handleApplyAmounts} applying={applyingAmounts}
+                current={{ cost: project.cost_total, sales: project.sales_total }} />
+            )}
             {tab === "reason" && <ReasonForm docs={docs} update={update} />}
             {tab === "application" && (
               <ApplicationForm docs={docs} update={update} address={address} cityName={city.city} hasForm={!!city.form} onFillHistory={project.client_id ? fillHistory : null} />
@@ -512,7 +539,11 @@ function Check({ checked, onChange, label }: { checked: boolean; onChange: (v: b
 
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮"];
 
-function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: Upd; totals: ReturnType<typeof computeEstimate> }) {
+function EstimateForm({ docs, update, totals, contractor, onApplyAmounts, applying, current }: {
+  docs: RenovationDocs; update: Upd; totals: ReturnType<typeof computeEstimate>;
+  contractor: string | null; onApplyAmounts: () => void; applying: boolean;
+  current: { cost: number | null; sales: number | null };
+}) {
   const e = docs.estimate;
   const setLine = (gi: number, li: number, patch: Partial<EstimateLine>) =>
     update((d) => { Object.assign(d.estimate.groups[gi].lines[li], patch); });
@@ -531,6 +562,37 @@ function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: 
           <Num value={Math.round(e.overhead_rate * 1000) / 10} onChange={(v) => update((d) => { d.estimate.overhead_rate = (v ?? 0) / 100; })} />
         </Field>
       </div>
+
+      {/* 利益の乗せ方 (施工会社の見積 = 仕入単価 に対して) */}
+      <div className="border border-gray-200 rounded p-2 space-y-1.5">
+        <div className="font-semibold text-gray-600">利益の乗せ方</div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <label className="inline-flex items-center gap-1"><input type="radio" checked={e.markup_mode === "unit"} onChange={() => update((d) => { d.estimate.markup_mode = "unit"; })} />単価に上乗せ</label>
+          <label className="inline-flex items-center gap-1"><input type="radio" checked={e.markup_mode === "overhead"} onChange={() => update((d) => { d.estimate.markup_mode = "overhead"; })} />単価は仕入のまま・諸経費に乗せる</label>
+        </div>
+        {e.markup_mode === "unit" ? (
+          <div className="flex items-end gap-2">
+            <Field label="上乗せ率 (%)" hint="仕入単価 × (1 + 上乗せ率) を 10 円単位に切り上げ">
+              <Num value={Math.round(e.markup_rate * 1000) / 10} onChange={(v) => update((d) => { d.estimate.markup_rate = (v ?? 0) / 100; })} />
+            </Field>
+          </div>
+        ) : (
+          <p className="text-[10px] text-gray-400">単価は仕入単価のまま。利益は上の「諸経費率」で乗せます。</p>
+        )}
+        <button
+          type="button"
+          onClick={() => update((d) => {
+            for (const g of d.estimate.groups) for (const l of g.lines) {
+              if (l.cost_price !== null && l.cost_price !== undefined) l.unit_price = salePriceFromCost(l.cost_price, d.estimate.markup_mode, d.estimate.markup_rate);
+            }
+          })}
+          className="text-emerald-600 hover:underline"
+        >
+          仕入単価から単価を計算し直す (仕入単価がある行のみ・手で直した単価は上書き)
+        </button>
+      </div>
+
+      <EstimateImport docs={docs} update={update} contractor={contractor} />
 
       {e.groups.map((g, gi) => (
         <div key={gi} className="border border-gray-200 rounded p-2 space-y-1.5 bg-gray-50/60">
@@ -562,6 +624,7 @@ function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: 
                 <th className="text-left font-normal">商品名・規格</th>
                 <th className="text-right font-normal w-12">数量</th>
                 <th className="font-normal w-10">単位</th>
+                <th className="text-right font-normal w-16" title="施工会社の見積の単価 (見積書には出ません)">仕入</th>
                 <th className="text-right font-normal w-16">単価</th>
                 <th className="text-right font-normal w-16">金額</th>
                 <th className="w-5" />
@@ -574,6 +637,7 @@ function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: 
                   <td className="pr-1"><Text value={l.spec} onChange={(v) => setLine(gi, li, { spec: v })} /></td>
                   <td className="pr-1"><Num value={l.qty} onChange={(v) => setLine(gi, li, { qty: v })} /></td>
                   <td className="pr-1"><Text value={l.unit} onChange={(v) => setLine(gi, li, { unit: v })} /></td>
+                  <td className="pr-1"><Num value={l.cost_price ?? null} onChange={(v) => setLine(gi, li, { cost_price: v })} /></td>
                   <td className="pr-1"><Num value={l.unit_price} onChange={(v) => setLine(gi, li, { unit_price: v })} /></td>
                   <td className="text-right text-gray-600 pr-1">{yenNum(totals.lineAmounts[gi][li])}</td>
                   <td>
@@ -611,6 +675,9 @@ function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: 
             ["合計", totals.subtotal],
             ["消費税", totals.tax],
             ["総合計 (税込)", totals.grandTotal],
+            ...(totals.costSubtotal > 0
+              ? [["仕入計 (税込換算)", totals.costTotal], ["粗利 (総合計 − 仕入)", totals.grandTotal - totals.costTotal]] as [string, number][]
+              : []),
           ].map(([k, v]) => (
             <tr key={k as string}>
               <td className="py-0.5 text-gray-500">{k}</td>
@@ -619,6 +686,15 @@ function EstimateForm({ docs, update, totals }: { docs: RenovationDocs; update: 
           ))}
         </tbody>
       </table>
+      <div className="flex items-center gap-2 pt-1">
+        <span className="text-[10px] text-gray-400 flex-1">
+          進行表の今の値: 計上 {current.sales === null ? "未入力" : `¥${yenNum(current.sales)}`} / 仕切り {current.cost === null ? "未入力" : `¥${yenNum(current.cost)}`}
+        </span>
+        <button type="button" onClick={onApplyAmounts} disabled={applying || totals.grandTotal === 0}
+          className="text-xs px-2.5 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40">
+          {applying ? "反映中…" : "進行表の金額に反映"}
+        </button>
+      </div>
     </>
   );
 }
@@ -973,5 +1049,169 @@ function ViewToggle({ expanded, onClick, what }: { expanded: boolean; onClick: (
       {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
       {expanded ? "並べて表示" : `${what}を全画面`}
     </button>
+  );
+}
+
+// ─── 施工会社の見積の取込 ────────────────────────────────────────────────────
+
+type ParsedSheet = { name: string; rows: string[][]; truncated: boolean };
+
+/** 施工会社ごとの列の割り当てを覚える (端末ごと。書式は施工会社ごとにほぼ同じため) */
+const MAP_KEY = (contractor: string | null) => `renovation-estimate-map:${contractor || "(施工会社なし)"}`;
+function loadSavedMap(contractor: string | null): { header: number; map: EstimateColumnMap } | null {
+  try {
+    const raw = localStorage.getItem(MAP_KEY(contractor));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    // 端末の保存領域が使えない (プライベートモード等) ときは毎回推定する
+    return null;
+  }
+}
+function saveMap(contractor: string | null, v: { header: number; map: EstimateColumnMap }) {
+  try { localStorage.setItem(MAP_KEY(contractor), JSON.stringify(v)); } catch (e) { console.warn("列の割り当てを端末に保存できませんでした:", e); }
+}
+
+function EstimateImport({ docs, update, contractor }: { docs: RenovationDocs; update: Upd; contractor: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sheets, setSheets] = useState<ParsedSheet[] | null>(null);
+  const [sheetIdx, setSheetIdx] = useState(0);
+  const [header, setHeader] = useState(0);
+  const [map, setMap] = useState<EstimateColumnMap>({ name: -1, spec: -1, qty: -1, unit: -1, price: -1 });
+  const [kind, setKind] = useState<RenovationKindNo>(1);
+  const [place, setPlace] = useState("");
+
+  const sheet = sheets?.[sheetIdx];
+  const headerRow = sheet?.rows[header] ?? [];
+  const colCount = Math.max(0, ...(sheet?.rows.slice(0, 60).map((r) => r.length) ?? [0]));
+  const lines = sheet ? rowsToEstimateLines(sheet.rows.slice(header + 1), map, { mode: docs.estimate.markup_mode, rate: docs.estimate.markup_rate }) : [];
+
+  /** 見出し行を推定: 「単価」を含む最初の行 */
+  const guessHeader = (rows: string[][]) => Math.max(0, rows.findIndex((r) => r.some((c) => /単価/.test(c))));
+
+  const handleFile = async (file: File) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/estimate-parse", { method: "POST", body: fd });
+      const json = await res.json().catch(() => ({ error: `読み込みに失敗しました (${res.status})` }));
+      if (!res.ok || json.error) throw new Error(json.error ?? `読み込みに失敗しました (${res.status})`);
+      const list = json.sheets as ParsedSheet[];
+      setSheets(list);
+      setSheetIdx(0);
+      const saved = loadSavedMap(contractor);
+      const h = saved && list[0].rows[saved.header] ? saved.header : guessHeader(list[0].rows);
+      setHeader(h);
+      setMap(saved?.map ?? detectEstimateColumns(list[0].rows[h] ?? []));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("見積 Excel の読み込みに失敗:", msg);
+      alert(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImport = () => {
+    if (lines.length === 0) return;
+    saveMap(contractor, { header, map });
+    update((d) => {
+      // 中身が空の改修箇所 1 つだけなら、それを置き換える (新規の見積で最初に取り込むとき)
+      const onlyEmpty = d.estimate.groups.length === 1 && d.estimate.groups[0].lines.every((l) => !l.name && l.unit_price === null);
+      const g = { ...emptyGroup(kind, ""), place, lines };
+      if (onlyEmpty) {
+        g.photo_no = d.estimate.groups[0].photo_no || "①";
+        d.estimate.groups = [g];
+      } else {
+        g.photo_no = ["①","②","③","④","⑤","⑥","⑦","⑧","⑨","⑩"][d.estimate.groups.length] ?? "";
+        d.estimate.groups.push(g);
+      }
+    });
+    setOpen(false);
+    setSheets(null);
+  };
+
+  const colOptions = (
+    <>
+      <option value={-1}>（使わない）</option>
+      {Array.from({ length: colCount }, (_, i) => (
+        <option key={i} value={i}>{String.fromCharCode(65 + i)}列{headerRow[i] ? ` (${headerRow[i].slice(0, 10)})` : ""}</option>
+      ))}
+    </>
+  );
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="w-full border border-dashed border-emerald-300 rounded p-2 text-emerald-700 hover:bg-emerald-50">
+        施工会社の見積 (Excel) を取り込む
+      </button>
+    );
+  }
+  return (
+    <div className="border border-emerald-300 rounded p-2 space-y-2 bg-emerald-50/40">
+      <div className="flex items-center">
+        <span className="font-semibold text-gray-700">施工会社の見積を取り込む</span>
+        <button type="button" onClick={() => { setOpen(false); setSheets(null); }} className="ml-auto text-gray-400 hover:text-gray-600"><X size={14} /></button>
+      </div>
+      <p className="text-[10px] text-gray-500">
+        施工会社の単価を「仕入」に入れ、上の「利益の乗せ方」で単価を計算します。列の割り当ては施工会社（{contractor || "未入力"}）ごとにこの端末で覚えます。
+      </p>
+      <label className={`inline-flex items-center gap-1 text-emerald-700 hover:underline cursor-pointer ${busy ? "opacity-40 pointer-events-none" : ""}`}>
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}Excel (.xlsx) を選ぶ
+        <input type="file" accept=".xlsx" className="hidden" onChange={(ev) => { const file = ev.target.files?.[0]; ev.target.value = ""; if (file) handleFile(file); }} />
+      </label>
+      {sheet && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="シート">
+              <select className={inputCls} value={sheetIdx} onChange={(ev) => {
+                const i = Number(ev.target.value); setSheetIdx(i);
+                const h = guessHeader(sheets![i].rows); setHeader(h); setMap(detectEstimateColumns(sheets![i].rows[h] ?? []));
+              }}>
+                {sheets!.map((s, i) => <option key={i} value={i}>{s.name}</option>)}
+              </select>
+            </Field>
+            <Field label="見出しの行">
+              <select className={inputCls} value={header} onChange={(ev) => { const h = Number(ev.target.value); setHeader(h); setMap(detectEstimateColumns(sheet.rows[h] ?? [])); }}>
+                {sheet.rows.slice(0, 40).map((r, i) => <option key={i} value={i}>{i + 1}行目: {r.filter(Boolean).join(" / ").slice(0, 30)}</option>)}
+              </select>
+            </Field>
+            {([["name", "名称"], ["spec", "商品名・規格"], ["qty", "数量"], ["unit", "単位"], ["price", "単価 (仕入)"]] as [keyof EstimateColumnMap, string][]).map(([k, label]) => (
+              <Field key={k} label={label}>
+                <select className={inputCls} value={map[k]} onChange={(ev) => setMap((m) => ({ ...m, [k]: Number(ev.target.value) }))}>{colOptions}</select>
+              </Field>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="住宅改修の種類">
+              <select className={inputCls} value={kind} onChange={(ev) => setKind(Number(ev.target.value) as RenovationKindNo)}>
+                {RENOVATION_KINDS.map((k) => <option key={k.no} value={k.no}>（{k.no}）{k.label}</option>)}
+              </select>
+            </Field>
+            <Field label="改修場所"><Text value={place} placeholder="廊下" onChange={setPlace} /></Field>
+          </div>
+          <div className="max-h-40 overflow-y-auto border border-gray-200 rounded bg-white">
+            <table className="w-full text-[11px]">
+              <thead className="text-gray-500 bg-gray-50"><tr><th className="text-left px-1">名称</th><th className="text-left px-1">規格</th><th className="text-right px-1">数量</th><th className="px-1">単位</th><th className="text-right px-1">仕入</th><th className="text-right px-1">単価</th></tr></thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-1">{l.name}</td><td className="px-1 text-gray-500">{l.spec}</td><td className="px-1 text-right">{l.qty}</td>
+                    <td className="px-1 text-center">{l.unit}</td><td className="px-1 text-right">{yenNum(l.cost_price)}</td><td className="px-1 text-right">{yenNum(l.unit_price)}</td>
+                  </tr>
+                ))}
+                {lines.length === 0 && <tr><td colSpan={6} className="px-1 py-2 text-center text-gray-400">取り込める行がありません (名称と単価の列を確認してください)</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {sheet.truncated && <p className="text-[10px] text-amber-700">シートが長いため先頭 400 行だけ読みました。</p>}
+          <button type="button" onClick={handleImport} disabled={lines.length === 0}
+            className="w-full text-xs px-3 py-1.5 rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40">
+            {lines.length} 行を改修箇所として追加
+          </button>
+        </>
+      )}
+    </div>
   );
 }
