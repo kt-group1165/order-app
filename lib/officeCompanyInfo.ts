@@ -34,12 +34,15 @@ export type CompanyInfoRow = {
   staff_specialist_part: string;
   staff_admin_full: string;
   staff_admin_part: string;
+  /** 適格請求書の登録番号 (T + 13 桁)。tenants に列は無く、事業所の設定にだけ持つ */
+  invoice_number: string;
 };
 
 export const COMPANY_INFO_KEYS: (keyof CompanyInfoRow)[] = [
   "business_number", "company_name", "company_address", "company_tel", "company_fax", "staff_name", "legal_name",
   "service_area", "business_days", "business_hours",
   "staff_manager_full", "staff_manager_part", "staff_specialist_full", "staff_specialist_part", "staff_admin_full", "staff_admin_part",
+  "invoice_number",
 ];
 
 export function emptyCompanyInfoRow(): CompanyInfoRow {
@@ -64,6 +67,7 @@ export function toCompanyInfo(r: CompanyInfoRow): CompanyInfo {
     staffSpecialistPart: r.staff_specialist_part,
     staffAdminFull: r.staff_admin_full,
     staffAdminPart: r.staff_admin_part,
+    invoiceNumber: r.invoice_number,
   };
 }
 

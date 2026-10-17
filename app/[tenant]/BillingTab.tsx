@@ -6,6 +6,7 @@ import { ChevronRight, ChevronLeft, X, Loader2, Printer, Download } from "lucide
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPriceHistory, ClientInsuranceRecord, ClientHospitalization } from "@/lib/supabase";
 import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
+import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { HW_KANA } from "./search-utils";
 import { calcMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
 import { getExceptionGrants, hasActiveGrant, isTableMissingError } from "@/lib/fukuyoguExceptions";
@@ -345,26 +346,15 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
   const [invoiceClient, setInvoiceClient] = useState<Client | null>(null);
 
   // 会社情報（請求書／領収書モーダル用）
-  const companyInfoForDoc: CompanyInfo = useMemo(() => {
-    if (!tenantInfo) return COMPANY_INFO_DEFAULTS;
-    return {
-      businessNumber:      tenantInfo.business_number       ?? COMPANY_INFO_DEFAULTS.businessNumber,
-      companyName:         tenantInfo.company_name          ?? COMPANY_INFO_DEFAULTS.companyName,
-      companyAddress:      tenantInfo.company_address       ?? COMPANY_INFO_DEFAULTS.companyAddress,
-      tel:                 tenantInfo.company_tel           ?? COMPANY_INFO_DEFAULTS.tel,
-      fax:                 tenantInfo.company_fax           ?? COMPANY_INFO_DEFAULTS.fax,
-      staffName:           tenantInfo.staff_name            ?? COMPANY_INFO_DEFAULTS.staffName,
-      serviceArea:         tenantInfo.service_area          ?? COMPANY_INFO_DEFAULTS.serviceArea,
-      businessDays:        tenantInfo.business_days         ?? COMPANY_INFO_DEFAULTS.businessDays,
-      businessHours:       tenantInfo.business_hours        ?? COMPANY_INFO_DEFAULTS.businessHours,
-      staffManagerFull:    tenantInfo.staff_manager_full    ?? COMPANY_INFO_DEFAULTS.staffManagerFull,
-      staffManagerPart:    tenantInfo.staff_manager_part    ?? COMPANY_INFO_DEFAULTS.staffManagerPart,
-      staffSpecialistFull: tenantInfo.staff_specialist_full ?? COMPANY_INFO_DEFAULTS.staffSpecialistFull,
-      staffSpecialistPart: tenantInfo.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
-      staffAdminFull:      tenantInfo.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
-      staffAdminPart:      tenantInfo.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
-    };
-  }, [tenantInfo]);
+  // 請求書・領収書の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
+  const [companyInfoForDoc, setCompanyInfoForDoc] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
+  useEffect(() => {
+    let cancelled = false;
+    getOfficeCompanyInfo(tenantId, currentOfficeId)
+      .then((r) => { if (!cancelled) setCompanyInfoForDoc(r.info); })
+      .catch((e) => console.error("会社情報の取得に失敗:", e instanceof Error ? e.message : e));
+    return () => { cancelled = true; };
+  }, [tenantId, currentOfficeId]);
 
   useEffect(() => {
     // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
@@ -3148,8 +3138,12 @@ function InvoiceReceiptModal({
               <p style={{ margin: "2px 0" }}>{client.address ?? ""}</p>
             </div>
             <div style={{ width: "50%", fontSize: "12px", textAlign: "left" }}>
-              <p style={{ margin: "2px 0", fontWeight: "bold" }}>{companyInfo.companyName || "介護ショップ　ケア・サポート千葉"}</p>
-              <p style={{ margin: "2px 0" }}>登録番号：T{companyInfo.businessNumber}</p>
+              {/* 以前は指定事業所番号に T を付けて「登録番号」と印字していた (適格請求書の登録番号とは別物) */}
+              {companyInfo.legalName && <p style={{ margin: "2px 0" }}>{companyInfo.legalName}</p>}
+              <p style={{ margin: "2px 0", fontWeight: "bold" }}>{companyInfo.companyName}</p>
+              {companyInfo.invoiceNumber && (
+                <p style={{ margin: "2px 0" }}>登録番号：{/^T/i.test(companyInfo.invoiceNumber) ? companyInfo.invoiceNumber.toUpperCase() : `T${companyInfo.invoiceNumber}`}</p>
+              )}
               <p style={{ margin: "2px 0" }}>{companyInfo.companyAddress}</p>
               <p style={{ margin: "2px 0" }}>TEL：{companyInfo.tel}　FAX：{companyInfo.fax}</p>
               <p style={{ margin: "4px 0 0", fontSize: "10px", color: "#555" }}>※ 押印は省略させていただきます。</p>

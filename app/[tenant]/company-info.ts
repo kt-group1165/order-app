@@ -5,6 +5,8 @@ export type CompanyInfo = {
   companyName: string;
   /** 法人名 (重要事項説明書・契約書の「事業者名」)。無ければ companyName を使う */
   legalName?: string;
+  /** 適格請求書発行事業者の登録番号 (T + 13 桁)。請求書・領収書に出す */
+  invoiceNumber?: string;
   companyAddress: string;
   tel: string;
   fax: string;

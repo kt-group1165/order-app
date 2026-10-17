@@ -57,6 +57,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     staff_specialist_part: COMPANY_INFO_DEFAULTS.staffSpecialistPart,
     staff_admin_full:      COMPANY_INFO_DEFAULTS.staffAdminFull,
     staff_admin_part:      COMPANY_INFO_DEFAULTS.staffAdminPart,
+    invoice_number:        "",
   });
   const [savingCompany, setSavingCompany] = useState(false);
   /** 会社情報をどこに保存するか: 事業所 id / "group" = グループ共通 (事業所を選ばないときの既定) */
@@ -103,6 +104,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
           staff_specialist_part: tenant.staff_specialist_part ?? COMPANY_INFO_DEFAULTS.staffSpecialistPart,
           staff_admin_full:      tenant.staff_admin_full      ?? COMPANY_INFO_DEFAULTS.staffAdminFull,
           staff_admin_part:      tenant.staff_admin_part      ?? COMPANY_INFO_DEFAULTS.staffAdminPart,
+          invoice_number:        "",
         });
       }
     }).finally(() => setLoading(false));
@@ -195,7 +197,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
         setCompanyBase(r.base);
         setCompanyMissing(r.missing);
       } else {
-        await updateTenantInfo(tenantId, company);
+        // tenants に invoice_number 列は無い (事業所の設定にだけ持つ)
+        const groupRow = Object.fromEntries(Object.entries(company).filter(([k]) => k !== "invoice_number"));
+        await updateTenantInfo(tenantId, groupRow);
       }
       setSavedCompany(true);
       setTimeout(() => setSavedCompany(false), 2500);
@@ -224,6 +228,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     { key: "company_fax",     label: "FAX",            placeholder: "000-0000-0001" },
     { key: "staff_name",      label: "担当者名（管理者）", placeholder: "山田 太郎" },
     { key: "legal_name",      label: "法人名（事業者名）", placeholder: "株式会社○○福祉用具" },
+    { key: "invoice_number",  label: "適格請求書の登録番号（請求書・領収書に出ます）", placeholder: "T1234567890123" },
   ] as const;
 
   const importantMattersFields = [
