@@ -72,7 +72,9 @@ export default function BulkRentalReportModal({
   const [visitOverride, setVisitOverride] = useState<Map<string, string>>(new Map());
   const [focusId, setFocusId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [printing, setPrinting] = useState(false);
+  /** 印刷する人 (null = 印刷していない)。描いてから印刷し、終わったら消す */
+  const [printRows, setPrintRows] = useState<Row[] | null>(null);
+  const printing = printRows !== null;
   const reportDate = todayYmd();
 
   // 貸与明細・発注 (月に依らない) と単価の改定履歴
@@ -225,9 +227,17 @@ export default function BulkRentalReportModal({
   }, []);
   useEffect(() => {
     if (!printing) return;
-    const t = setTimeout(() => { window.print(); setPrinting(false); }, 300);
+    const t = setTimeout(() => { window.print(); setPrintRows(null); }, 300);
     return () => clearTimeout(t);
   }, [printing]);
+
+  // 一度に描く枚数が多いと印刷の準備に時間がかかる (1 枚あたり表 3 つ)。ケアマネ事業所ごとの印刷を勧める
+  const startPrint = (list: Row[]) => {
+    if (list.length === 0) return;
+    if (list.length > 200 && !confirm(`${list.length} 名分を一度に印刷します。準備に時間がかかり、ブラウザが固まって見えることがあります。
+左の一覧のケアマネ事業所ごとの「印刷」ボタンで分けて出すこともできます。続けますか？`)) return;
+    setPrintRows(list);
+  };
 
   const handleSave = async () => {
     if (unsavedChecked.length === 0) return;
@@ -301,7 +311,7 @@ export default function BulkRentalReportModal({
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           未保存の {unsavedChecked.length} 名を履歴に保存
         </button>
-        <button onClick={() => setPrinting(true)} disabled={checkedRows.length === 0 || printing}
+        <button onClick={() => startPrint(checkedRows)} disabled={checkedRows.length === 0 || printing}
           className="flex items-center gap-1.5 bg-emerald-500 disabled:bg-gray-300 text-white px-4 py-2 rounded-xl text-sm font-medium">
           {printing ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />} {checkedRows.length} 名を印刷
         </button>
@@ -333,6 +343,12 @@ export default function BulkRentalReportModal({
                     <input type="checkbox" checked={allOn} onChange={(e) => toggle(ids, e.target.checked)} />
                     <span className="truncate flex-1">{g.org}</span>
                     <span className="text-gray-400 font-normal">{g.rows.length} 名</span>
+                    <button type="button" disabled={printing || ids.every((id) => unchecked.has(id))}
+                      onClick={(e) => { e.preventDefault(); startPrint(g.rows.filter((r) => !unchecked.has(r.client.id))); }}
+                      title="このケアマネ事業所の選んだ人だけ印刷"
+                      className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-gray-300 bg-white font-normal text-gray-600 hover:bg-gray-50 disabled:opacity-40">
+                      <Printer size={11} /> 印刷
+                    </button>
                   </label>
                   {g.rows.map((r) => {
                     const id = r.client.id;
@@ -366,9 +382,9 @@ export default function BulkRentalReportModal({
       </div>
 
       {/* 印刷用: 選んだ人を全員 */}
-      {printing && (
+      {printRows && (
         <div id="bulk-rental-report-print" style={{ display: "none" }}>
-          {checkedRows.map((r) => sheetFor(r, "bulk-rpt-sheet bg-white px-10 py-8"))}
+          {printRows.map((r) => sheetFor(r, "bulk-rpt-sheet bg-white px-10 py-8"))}
         </div>
       )}
     </div>
