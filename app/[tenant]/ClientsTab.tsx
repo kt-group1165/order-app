@@ -1343,13 +1343,19 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
           .select("*")
           .eq("tenant_id", tenantId)
           .is("end_date", null)
+          .order("id") // 並び順が無いとページの境目で行が抜ける・重なる
           .range(from, from + 999);
-        if (error || !data || data.length === 0) break;
+        if (error) throw new Error(`貸与履歴の読み込みに失敗: ${error.message}`);
+        if (!data || data.length === 0) break;
         all.push(...(data as ClientRentalHistory[]));
         if (data.length < 1000) break;
         from += 1000;
       }
       setJissekiRentals(all);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(msg);
+      alert(msg);
     } finally {
       setJissekiLoading(false);
     }

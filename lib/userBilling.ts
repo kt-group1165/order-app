@@ -87,7 +87,7 @@ export async function getUserInvoices(
     if (opts?.clientIds && opts.clientIds.length > 0) {
       q = q.in("client_id", opts.clientIds);
     }
-    return q.range(from, from + PAGE - 1);
+    return q.order("id").range(from, from + PAGE - 1); // order が無いとページの境目で行が抜ける
   });
 }
 
@@ -230,6 +230,7 @@ export async function getUserPaymentsByInvoiceIds(
       .from("billing_user_payments")
       .select("*")
       .in("invoice_id", invoiceIds)
+      .order("id")
       .range(from, from + PAGE - 1)
   );
 }

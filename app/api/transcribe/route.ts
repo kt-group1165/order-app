@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
             .from(table)
             .select(cols)
             .eq("tenant_id", tenantId)
+            .order("id") // 並び順が無いとページの境目で行が抜ける・重なる
             .range(from, from + PAGE - 1);
           if (error) throw error;
           if (!data || data.length === 0) break;

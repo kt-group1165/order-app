@@ -364,7 +364,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       const all: T[] = [];
       let from = 0;
       while (true) {
-        const { data, error } = await supabase.from(table).select("*").eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+        const { data, error } = await supabase.from(table).select("*").eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
         all.push(...(data as T[]));
@@ -1832,7 +1832,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           const all: T[] = [];
           let from = 0;
           while (true) {
-            const { data, error } = await supabase.from(table).select(columns).eq("tenant_id", tenantId).range(from, from + PAGE - 1);
+            const { data, error } = await supabase.from(table).select(columns).eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
             if (error) throw error;
             if (!data || data.length === 0) break;
             all.push(...(data as unknown as T[]));
