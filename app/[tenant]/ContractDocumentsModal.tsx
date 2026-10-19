@@ -49,7 +49,7 @@ export default function ContractDocumentsModal({
   // 文面テンプレート (DB 差し替え分)。fetch 失敗時 (migration 未適用等) は既定文で描画
   const [tplSections, setTplSections] = useState<DocTemplateSections>({});
   useEffect(() => {
-    getDocTemplate(tenantId, RENTAL_CONTRACT_DOC_TYPE).then(setTplSections).catch(() => {});
+    getDocTemplate(tenantId, RENTAL_CONTRACT_DOC_TYPE).then(setTplSections).catch((e) => console.error("getDocTemplate に失敗:", e));
   }, [tenantId]);
 
   const selectableItems = clientItems.filter((i) =>

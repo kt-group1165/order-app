@@ -200,7 +200,7 @@ export default function TenantPage({
     let active = true;
     getOffices(tenantId)
       .then((ofs) => { if (active) setCurrentOfficeName(ofs.find((o) => o.id === currentOfficeId)?.name ?? null); })
-      .catch(() => {});
+      .catch((e) => console.error("getOffices に失敗:", e));
     return () => { active = false; };
   }, [tenantId, currentOfficeId]);
 

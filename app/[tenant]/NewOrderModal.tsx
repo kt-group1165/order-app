@@ -359,7 +359,7 @@ export default function NewOrderModal({
       });
       // 仕入価格を発注時点でスナップショット (卸別・月次カタログから。実効卸 = 明細 or ヘッダー)
       const snapCodes = [...new Set(items.map((i) => i.equipment.product_code))];
-      const snapRows = await getPurchasePrices(tenantId, snapCodes).catch(() => []);
+      const snapRows = await getPurchasePrices(tenantId, snapCodes).catch((e) => { console.error("getPurchasePrices に失敗 (空で続行):", e); return []; });
       const snapYM = new Date().toISOString().slice(0, 7);
       // グループ代表判定（グループ内で最初に現れたアイテムが代表）
       const seenGroupsSubmit = new Set<string>();

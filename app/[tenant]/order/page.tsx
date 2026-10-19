@@ -547,7 +547,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
     try {
       const order = await createOrder({ tenantId, clientId: selectedClient.id, paymentType: paymentKind, deliveryType: "自社納品" });
       // 仕入価格を発注時点でスナップショット (卸別・月次カタログから)
-      const snapRows = await getPurchasePrices(tenantId, [...new Set(cart.map(i => i.equipment.product_code))]).catch(() => []);
+      const snapRows = await getPurchasePrices(tenantId, [...new Set(cart.map(i => i.equipment.product_code))]).catch((e) => { console.error("getPurchasePrices に失敗 (空で続行):", e); return []; });
       const snapYM = new Date().toISOString().slice(0, 7);
       for (const item of cart) {
         const purchasePrice = item.supplier_id

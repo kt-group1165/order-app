@@ -1848,7 +1848,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
           fetchAllRows<{ id: string; name: string }>("care_offices", "id, name"),
           fetchAllRows<{ id: string; name: string }>("care_managers", "id, name"),
-          getSuppliers().catch(() => [] as Supplier[]),
+          getSuppliers().catch((e) => { console.error("getSuppliers に失敗 (空で続行):", e); return [] as Supplier[]; }),
         ]);
         setSalesRecords(sr);
         setDocuments(docs);

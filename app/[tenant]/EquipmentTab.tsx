@@ -126,10 +126,10 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
     try {
       const [eq, ofs, ops, sups, spp] = await Promise.all([
         getEquipment(tenantId),
-        getOffices(tenantId).catch(() => [] as Office[]),
-        getOfficePrices(tenantId).catch(() => [] as EquipmentOfficePrice[]),
-        getActiveSuppliers().catch(() => [] as Supplier[]),
-        getAllActivePurchasePrices(tenantId).catch(() => [] as EquipmentPrice[]),
+        getOffices(tenantId).catch((e) => { console.error("getOffices に失敗 (空で続行):", e); return [] as Office[]; }),
+        getOfficePrices(tenantId).catch((e) => { console.error("getOfficePrices に失敗 (空で続行):", e); return [] as EquipmentOfficePrice[]; }),
+        getActiveSuppliers().catch((e) => { console.error("getActiveSuppliers に失敗 (空で続行):", e); return [] as Supplier[]; }),
+        getAllActivePurchasePrices(tenantId).catch((e) => { console.error("getAllActivePurchasePrices に失敗 (空で続行):", e); return [] as EquipmentPrice[]; }),
       ]);
       setEquipment(eq);
       setOffices(ofs);
@@ -645,7 +645,7 @@ function EquipmentDetail({
   // 卸マスタを読み込む
   useEffect(() => {
     let active = true;
-    getActiveSuppliers().then((s) => { if (active) setSuppliers(s); }).catch(() => {});
+    getActiveSuppliers().then((s) => { if (active) setSuppliers(s); }).catch((e) => console.error("getActiveSuppliers に失敗:", e));
     return () => { active = false; };
   }, []);
   // この用具の現行仕入価格を読み込む
@@ -654,7 +654,7 @@ function EquipmentDetail({
     let active = true;
     getActiveEquipmentPrices(tenantId, item.product_code)
       .then((ps) => { if (active) setPurchasePrices(ps); })
-      .catch(() => {});
+      .catch((e) => console.error("getActiveEquipmentPrices に失敗:", e));
     return () => { active = false; };
   }, [tenantId, item]);
   // 編集開始 or 価格更新時に入力欄へ同期
@@ -671,7 +671,7 @@ function EquipmentDetail({
   const [allEquip, setAllEquip] = useState<Equipment[]>([]);
   useEffect(() => {
     let active = true;
-    getEquipment(tenantId).then((eq) => { if (active) setAllEquip(eq); }).catch(() => {});
+    getEquipment(tenantId).then((eq) => { if (active) setAllEquip(eq); }).catch((e) => console.error("getEquipment に失敗:", e));
     return () => { active = false; };
   }, [tenantId]);
   useEffect(() => {
@@ -679,7 +679,7 @@ function EquipmentDetail({
     let active = true;
     getEquipmentSetItems(tenantId, item.product_code)
       .then((rows) => { if (active) setSetComponents(rows.map((r) => ({ component_product_code: r.component_product_code, quantity: r.quantity }))); })
-      .catch(() => {});
+      .catch((e) => console.error("getEquipmentSetItems に失敗:", e));
     return () => { active = false; };
   }, [tenantId, item]);
 
@@ -774,7 +774,7 @@ function EquipmentDetail({
         })
       );
       // 現行仕入価格を再取得
-      getActiveEquipmentPrices(tenantId, saved.product_code).then(setPurchasePrices).catch(() => {});
+      getActiveEquipmentPrices(tenantId, saved.product_code).then(setPurchasePrices).catch((e) => console.error("getActiveEquipmentPrices に失敗:", e));
       onReloadOfficePrices();
       onSave(saved);
       setIsEditing(false);
@@ -1406,7 +1406,7 @@ function ImportModal({
     if (text.includes("\uFFFD")) {
       try {
         text = new TextDecoder("shift-jis").decode(buffer);
-      } catch {}
+      } catch (e) { console.warn("CSV を Shift-JIS で読み直せませんでした (UTF-8 のまま使う):", e); }
     }
     setCsvText(text);
   };
