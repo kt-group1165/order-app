@@ -1823,27 +1823,35 @@ function DataReimportSection({ tenantId }: { tenantId: string }) {
 
       // Phase 5: opendata 再マッチ
       setProgress("5/5 オープンデータでマスタを補完中...");
-      const { data: odData } = await supabase.from("care_offices_opendata")
+      const { data: odData, error: odErr } = await supabase.from("care_offices_opendata")
         .select("name, address, phone_number, fax_number, office_number")
         .eq("prefecture", "千葉県");
+      // 補完は最後のおまけなので、失敗しても止めずに完了メッセージに件数を出す (以前は黙って飛ばしていた)
+      const odFailures: string[] = [];
+      if (odErr) odFailures.push(`オープンデータの読み込み: ${odErr.message}`);
       const odByName = new Map<string, { address: string | null; phone_number: string | null; fax_number: string | null; office_number: string }>();
       (odData ?? []).forEach((o: { name: string; address: string | null; phone_number: string | null; fax_number: string | null; office_number: string }) => {
         odByName.set(o.name, { address: o.address, phone_number: o.phone_number, fax_number: o.fax_number, office_number: o.office_number });
       });
-      const { data: currentOffs } = await supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId);
+      const { data: currentOffs, error: offsErr } = await supabase.from("care_offices").select("id, name").eq("tenant_id", tenantId);
+      if (offsErr) odFailures.push(`居宅事業所の読み込み: ${offsErr.message}`);
       for (const o of (currentOffs ?? []) as Array<{ id: string; name: string }>) {
         const od = odByName.get(o.name);
         if (!od) continue;
-        await supabase.from("care_offices").update({
+        const { error: updErr } = await supabase.from("care_offices").update({
           address: od.address,
           phone_number: od.phone_number,
           fax_number: od.fax_number,
           office_number: od.office_number,
         }).eq("id", o.id);
+        if (updErr) odFailures.push(`${o.name}: ${updErr.message}`);
       }
+      if (odFailures.length > 0) console.error("居宅事業所マスタの補完に一部失敗:", odFailures);
 
       setProgress("");
-      setDone("完了しました。");
+      setDone(odFailures.length === 0
+        ? "完了しました。"
+        : `完了しました。ただし居宅事業所マスタの住所・電話の補完に ${odFailures.length} 件失敗しました (${odFailures.slice(0, 3).join(" / ")}${odFailures.length > 3 ? " …" : ""})`);
       setParsed(null);
       setDryrun(null);
       setCsvFile(null);

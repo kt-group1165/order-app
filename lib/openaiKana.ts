@@ -38,7 +38,7 @@ async function logUsage(opts: {
   try {
     const sb = await createClient();
     const costJpy = calcKanaCostJpy(opts.inputTokens, opts.outputTokens);
-    await sb.from("openai_usage").insert({
+    const { error: usageErr } = await sb.from("openai_usage").insert({
       tenant_id: opts.tenantId ?? null,
       model: MODEL,
       purpose: opts.purpose,
@@ -47,6 +47,7 @@ async function logUsage(opts: {
       cost_jpy: Number(costJpy.toFixed(4)),
       text_count: opts.textCount,
     });
+    if (usageErr) console.error("openai_usage の記録に失敗:", usageErr.message);
   } catch (e) {
     console.error("openai usage log error:", e);
   }

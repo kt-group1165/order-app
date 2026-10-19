@@ -387,12 +387,18 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
     }).select().single();
     if (error) throw error;
     if (currentOfficeId && inserted) {
-      await supabase.from("client_office_assignments").upsert({
+      // 利用者は登録済みなので throw しない (「追加に失敗」と出すと二重登録を招く)。紐付けの失敗だけ知らせる
+      const { error: asgErr } = await supabase.from("client_office_assignments").upsert({
         tenant_id: tenantId,
         client_id: inserted.id,
         office_id: currentOfficeId,
       }, { onConflict: "tenant_id,client_id,office_id" });
-      setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
+      if (asgErr) {
+        console.error("事業所への紐付けに失敗:", asgErr.message);
+        alert(`利用者は登録しましたが、自事業所への紐付けに失敗しました (一覧の「自事業所」に出ません): ${asgErr.message}`);
+      } else {
+        setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
+      }
     }
   };
 
@@ -409,12 +415,18 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       address: newClientForm.address.trim() || null,
     });
     if (currentOfficeId) {
-      await supabase.from("client_office_assignments").upsert({
+      // 本登録化は済んでいるので throw しない。紐付けの失敗だけ知らせる
+      const { error: asgErr } = await supabase.from("client_office_assignments").upsert({
         tenant_id: tenantId,
         client_id: provisionalId,
         office_id: currentOfficeId,
       }, { onConflict: "tenant_id,client_id,office_id" });
-      setClientOfficeMap((prev) => new Set([...prev, provisionalId]));
+      if (asgErr) {
+        console.error("事業所への紐付けに失敗:", asgErr.message);
+        alert(`本登録は済みましたが、自事業所への紐付けに失敗しました (一覧の「自事業所」に出ません): ${asgErr.message}`);
+      } else {
+        setClientOfficeMap((prev) => new Set([...prev, provisionalId]));
+      }
     }
   };
 
@@ -1152,9 +1164,14 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
             client_id: cid,
             office_id: currentOfficeId,
           }));
-          await supabase.from("client_office_assignments").upsert(assignmentRows, {
+          // 紐付けが落ちると取り込んだ人が「自事業所」の一覧に出ないので、エラー一覧に出す
+          const { error: asgErr } = await supabase.from("client_office_assignments").upsert(assignmentRows, {
             onConflict: "tenant_id,client_id,office_id",
           });
+          if (asgErr) {
+            console.error("事業所への紐付けに失敗:", asgErr.message);
+            errors.push({ name: "(事業所への紐付け)", user_number: "", message: `${allIds.length} 名を自事業所に紐付けられませんでした: ${asgErr.message}` });
+          }
         }
       }
 

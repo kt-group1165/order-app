@@ -184,13 +184,15 @@ export async function POST(req: NextRequest) {
       const costJpy = (seconds / 60) * 2.4;
       if (tenantId && seconds > 0) {
         const supabase = await createClient();
-        await supabase.from("speech_usage").insert({
+        // 使用量の記録は失敗しても文字起こしは返す。ただし黙らずログに出す
+        const { error: usageErr } = await supabase.from("speech_usage").insert({
           tenant_id: tenantId,
           billed_seconds: Number(seconds.toFixed(3)),
           cost_jpy: Number(costJpy.toFixed(4)),
           model: "long",
           text_length: text.length,
         });
+        if (usageErr) console.error("speech_usage の記録に失敗:", usageErr.message);
       }
     } catch (logErr) {
       console.error("usage log error:", logErr);

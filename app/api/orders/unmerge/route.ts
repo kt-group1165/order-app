@@ -202,14 +202,19 @@ export async function POST(request: Request) {
       .update({ order_id: newOrderId })
       .in("id", itemIds);
     if (updError) {
-      // revert (best effort): 復元した orders を削除し、items は target に戻す
-      await admin.from("orders").delete().in("id", restoreIds);
-      // 既に他 source に動いた items を target に戻す
+      // revert (best effort): 既に他 source に動いた items を target に戻してから、復元した orders を削除する
+      // (順序が逆だと、明細の付いた発注を消すことになる)。巻き戻しの失敗は黙らずに返す
+      const revertErrors: string[] = [];
       for (const [movedId, movedItemIds] of reassignMap) {
         if (movedId === order_id) continue;
-        await admin.from("order_items").update({ order_id: order_id }).in("id", movedItemIds);
+        const { error: backErr } = await admin.from("order_items").update({ order_id: order_id }).in("id", movedItemIds);
+        if (backErr) revertErrors.push(`明細 ${movedItemIds.length} 件を発注 ${order_id} に戻せず: ${backErr.message}`);
       }
-      return NextResponse.json({ error: "items_reassign_failed", detail: updError.message }, { status: 500 });
+      const { error: rmErr } = await admin.from("orders").delete().in("id", restoreIds);
+      if (rmErr) revertErrors.push(`復元した発注 ${restoreIds.length} 件を消せず: ${rmErr.message}`);
+      console.error(`orders/unmerge items_reassign_failed: ${updError.message}`);
+      if (revertErrors.length > 0) console.error(`orders/unmerge 巻き戻しにも失敗 (手で直す必要あり): ${revertErrors.join(" / ")}`);
+      return NextResponse.json({ error: "items_reassign_failed", detail: updError.message, revert_failed: revertErrors }, { status: 500 });
     }
   }
 

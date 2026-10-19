@@ -200,8 +200,8 @@ export async function POST(request: Request) {
     .eq("id", target_order_id);
   if (updTargetError) {
     // revert: items を元に戻す
-    await revertItems(admin, sourceItems);
-    return NextResponse.json({ error: "target_update_failed", detail: updTargetError.message }, { status: 500 });
+    const revertErrors = await revertItems(admin, sourceItems);
+    return mergeFailed("target_update_failed", updTargetError.message, revertErrors);
   }
 
   // 6) source orders を DELETE
@@ -211,12 +211,13 @@ export async function POST(request: Request) {
     .in("id", sourceIds);
   if (delError) {
     // revert: items を元に戻し、target.merged_from_order_ids も戻す
-    await revertItems(admin, sourceItems);
-    await admin
+    const revertErrors = await revertItems(admin, sourceItems);
+    const { error: restoreError } = await admin
       .from("orders")
       .update({ merged_from_order_ids: existingMerged })
       .eq("id", target_order_id);
-    return NextResponse.json({ error: "source_delete_failed", detail: delError.message }, { status: 500 });
+    if (restoreError) revertErrors.push(`統合先 ${target_order_id} の merged_from_order_ids: ${restoreError.message}`);
+    return mergeFailed("source_delete_failed", delError.message, revertErrors);
   }
 
   return NextResponse.json({
@@ -227,8 +228,19 @@ export async function POST(request: Request) {
   });
 }
 
+/**
+ * 統合の途中で失敗したときの返事。巻き戻しまで失敗していたら、明細が統合先に付いたままなど
+ * 中途半端な状態で残っているので、ログと返事の両方に出して手で直せるようにする (黙って 500 を返さない)。
+ */
+function mergeFailed(error: string, detail: string, revertErrors: string[]) {
+  console.error(`orders/merge ${error}: ${detail}`);
+  if (revertErrors.length > 0) console.error(`orders/merge 巻き戻しにも失敗 (手で直す必要あり): ${revertErrors.join(" / ")}`);
+  return NextResponse.json({ error, detail, revert_failed: revertErrors }, { status: 500 });
+}
+
+/** 明細を元の発注に戻す。失敗したものを返す (空 = 全部戻せた) */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase admin client の generic 推論が tsc で食い違うため
-async function revertItems(admin: any, sourceItems: { id: string; order_id: string }[]) {
+async function revertItems(admin: any, sourceItems: { id: string; order_id: string }[]): Promise<string[]> {
   // 元の order_id ごとにグループ化して個別 UPDATE
   const groups = new Map<string, string[]>();
   for (const it of sourceItems) {
@@ -236,7 +248,10 @@ async function revertItems(admin: any, sourceItems: { id: string; order_id: stri
     arr.push(it.id);
     groups.set(it.order_id, arr);
   }
+  const errors: string[] = [];
   for (const [orderId, ids] of groups) {
-    await admin.from("order_items").update({ order_id: orderId }).in("id", ids);
+    const { error } = await admin.from("order_items").update({ order_id: orderId }).in("id", ids);
+    if (error) errors.push(`明細 ${ids.length} 件を発注 ${orderId} に戻せず: ${error.message}`);
   }
+  return errors;
 }

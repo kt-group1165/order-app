@@ -85,6 +85,7 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
     try {
       // 50件ずつバッチでAPIに投げる
       const BATCH = 50;
+      let failed = 0;
       for (let i = 0; i < targets.length; i += BATCH) {
         const batch = targets.slice(i, i + BATCH);
         const res = await fetch("/api/kana-convert", {
@@ -98,16 +99,18 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
         for (let j = 0; j < batch.length; j++) {
           const kana = (kanaArr[j] ?? "").trim();
           if (kana) {
-            await supabase
+            const { error: updErr } = await supabase
               .from("equipment_master")
               .update({ furigana: kana, updated_at: new Date().toISOString() })
               .eq("id", batch[j].id);
+            if (updErr) { failed++; console.error(`フリガナの保存に失敗 (${batch[j].name}):`, updErr.message); }
           }
         }
         setBulkFuriganaProgress({ done: Math.min(i + BATCH, targets.length), total: targets.length });
       }
       // ブラウザ内のメモリキャッシュを無効化（音声発注のマッチング側が古い equipment を見ないように）
       invalidateCache("equipment:");
+      if (failed > 0) alert(`フリガナを ${targets.length - failed} 件保存し、${failed} 件は保存に失敗しました (詳細はブラウザのコンソール)。`);
       setBulkFuriganaState("done");
       await load();
       setTimeout(() => setBulkFuriganaState("idle"), 2500);
