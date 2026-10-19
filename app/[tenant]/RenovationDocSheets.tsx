@@ -1,4 +1,5 @@
 "use client";
+import { todayYmd } from "@/lib/date-jst";
 
 // 住宅改修の書類 (印刷用 A4)。旧 Excel「<利用者>様住改見積.xlsx」の各シートを HTML で再現する。
 // 入力は RenovationDocsModal、計算は lib/renovationDocs.ts。ここは表示だけ (状態を持たない)。
@@ -222,7 +223,7 @@ function careLevelParts(level: string | null | undefined): { kind: "要支援" |
 export function ReasonP1Sheet({ docs, project, client }: DocSheetProps) {
   const r = docs.reason;
   const birth = toWareki(client?.birth_date);
-  const age = ageAt(client?.birth_date, r.created_date ?? r.site_visit_date ?? new Date().toISOString().slice(0, 10));
+  const age = ageAt(client?.birth_date, r.created_date ?? r.site_visit_date ?? todayYmd());
   const cl = careLevelParts(client?.care_level);
   const gender = client?.gender?.startsWith("男") ? "男" : client?.gender?.startsWith("女") ? "女" : null;
   const postal = (client as unknown as { postal_code?: string | null } | null)?.postal_code ?? "";

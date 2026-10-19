@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash, timingSafeEqual } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 // スマホ入力ページ (/m/meeting) からの担当者会議録 送信 API。
@@ -18,6 +19,17 @@ const OFFICES: Record<string, { id: string; label: string }> = {
   "links":      { id: "c3a5a2f7-a8f9-4d7a-81f5-3cf6a9c51f08", label: "リンクス福祉用具" },
 };
 
+/**
+ * 共有キーの照合。`!==` は先頭から 1 文字ずつ比べて違ったところで返るので、
+ * 応答時間の差からキーを推測されうる (2026-08-31 監査)。長さを揃えるため両方を SHA-256 にして定数時間で比べる。
+ */
+function keyMatches(given: unknown, expected: string): boolean {
+  if (typeof given !== "string") return false;
+  const a = createHash("sha256").update(given).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 const s = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
   const t = v.trim();
@@ -35,7 +47,7 @@ export async function GET(req: Request) {
     );
   }
   const url = new URL(req.url);
-  if (url.searchParams.get("key") !== formKey) {
+  if (!keyMatches(url.searchParams.get("key"), formKey)) {
     return NextResponse.json({ error: "キーが正しくありません" }, { status: 403 });
   }
   const officeSlug = url.searchParams.get("office");
@@ -76,7 +88,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "不正なリクエストです" }, { status: 400 });
   }
 
-  if (typeof body.key !== "string" || body.key !== formKey) {
+  if (!keyMatches(body.key, formKey)) {
     return NextResponse.json({ error: "キーが正しくありません" }, { status: 403 });
   }
 
@@ -161,7 +173,7 @@ export async function DELETE(req: Request) {
     );
   }
   const url = new URL(req.url);
-  if (url.searchParams.get("key") !== formKey) {
+  if (!keyMatches(url.searchParams.get("key"), formKey)) {
     return NextResponse.json({ error: "キーが正しくありません" }, { status: 403 });
   }
   const id = url.searchParams.get("id");

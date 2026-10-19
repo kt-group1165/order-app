@@ -2880,7 +2880,7 @@ function ClientDetail({
   const emptyGrantForm = () => ({
     restriction_group: "車いす系", judgment_route: null,
     doctor_opinion_date: null, meeting_confirmed_date: null, insurer_confirmed_date: null,
-    valid_from: new Date().toISOString().slice(0, 10), valid_end: null, notes: null,
+    valid_from: todayYmd(), valid_end: null, notes: null,
   });
 
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
