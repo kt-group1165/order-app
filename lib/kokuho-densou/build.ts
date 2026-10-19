@@ -324,6 +324,11 @@ export function buildFukuyoguDensou(
 
     // 明細情報レコード (02) — サービスコードごと
     for (const d of r.details) {
+      // 桁あふれは返戻になる (_if_form2.txt: 9 単位数=数字4 / 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
+      // 福祉用具は月額 ÷10 が単位数なので月額 10 万円以上で 4 桁を超える (2026-10-19 時点の最大は 58,000 円)。
+      if (d.unitPer > 9999) warnings.push(`${r.userName}: ${d.serviceCode} の単位数 ${d.unitPer} が 4 桁を超えています (月額 ${d.unitPer * 10} 円?)。伝送できません`);
+      if (d.count > 99) warnings.push(`${r.userName}: ${d.serviceCode} の日数・回数 ${d.count} が 2 桁を超えています`);
+      if (d.units > 999999) warnings.push(`${r.userName}: ${d.serviceCode} のサービス単位数 ${d.units} が 6 桁を超えています`);
       dataParts.push([
         "7131", // 1
         "02", // 2 レコード種別コード
