@@ -28,7 +28,8 @@
     "check:renovation-docs": "tsx scripts/renovation-estimate-verify.mts",
     "check:doc-checklist": "tsx scripts/doc-checklist-verify.mts",
     "check:rental-report": "tsx scripts/rental-report-verify.mts",
-    "check:write-errors": "tsx scripts/write-error-check.mts"
+    "check:write-errors": "tsx scripts/write-error-check.mts",
+    "check:paging-order": "tsx scripts/paging-order-check.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",
