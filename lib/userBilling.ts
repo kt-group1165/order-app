@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { IN_CHUNK } from "./inChunks";
 
 // ── 型定義 ────────────────────────────────────────────────────────────────
 
@@ -78,17 +79,21 @@ export async function getUserInvoices(
   month: string,
   opts?: { clientIds?: string[] }
 ): Promise<BillingUserInvoice[]> {
-  return pagedSelect<BillingUserInvoice>((from) => {
+  const page = (clientIds: string[] | null) => pagedSelect<BillingUserInvoice>((from) => {
     let q = supabase
       .from("billing_user_invoices")
       .select("*")
       .eq("tenant_id", tenantId)
       .eq("month", month);
-    if (opts?.clientIds && opts.clientIds.length > 0) {
-      q = q.in("client_id", opts.clientIds);
-    }
+    if (clientIds) q = q.in("client_id", clientIds);
     return q.order("id").range(from, from + PAGE - 1); // order が無いとページの境目で行が抜ける
   });
+  if (!opts?.clientIds || opts.clientIds.length === 0) return page(null);
+  // 多数の id を 1 回の .in() に渡すと URL が長すぎて 400 になる → IN_CHUNK 件ずつ (lib/inChunks.ts)
+  const ids = [...new Set(opts.clientIds)];
+  const out: BillingUserInvoice[] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) out.push(...(await page(ids.slice(i, i + IN_CHUNK))));
+  return out;
 }
 
 export async function getUserInvoice(
@@ -225,14 +230,21 @@ export async function getUserPaymentsByInvoiceIds(
   invoiceIds: string[]
 ): Promise<BillingUserPayment[]> {
   if (invoiceIds.length === 0) return [];
-  return pagedSelect<BillingUserPayment>((from) =>
-    supabase
-      .from("billing_user_payments")
-      .select("*")
-      .in("invoice_id", invoiceIds)
-      .order("id")
-      .range(from, from + PAGE - 1)
-  );
+  // 多数の id を 1 回の .in() に渡すと URL が長すぎて 400 になる → IN_CHUNK 件ずつ (lib/inChunks.ts)
+  const ids = [...new Set(invoiceIds)];
+  const out: BillingUserPayment[] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const chunk = ids.slice(i, i + IN_CHUNK);
+    out.push(...(await pagedSelect<BillingUserPayment>((from) =>
+      supabase
+        .from("billing_user_payments")
+        .select("*")
+        .in("invoice_id", chunk)
+        .order("id")
+        .range(from, from + PAGE - 1)
+    )));
+  }
+  return out;
 }
 
 export async function addUserPayment(

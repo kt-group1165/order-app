@@ -28,6 +28,7 @@ import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type 
 import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
+import { selectInChunks } from "@/lib/inChunks";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 
 const UserBillingTab = dynamic(() => import("./UserBillingTab"), {
@@ -702,14 +703,19 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
     const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
     {
       const clientIds = billingGroups.map((g) => g.client.id);
-      const { data: kohiData, error: kohiErr } = await supabase
-        .from("client_public_expenses")
-        .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
-        .eq("tenant_id", tenantId)
-        .in("client_id", clientIds);
-      if (kohiErr) {
-        console.error("公費取得失敗:", kohiErr.message);
-        alert(`公費情報の取得に失敗しました: ${kohiErr.message}`);
+      // 1,000 人分を 1 回の .in() に渡すと URL が長すぎて 400 になる → 150 人ずつ (lib/inChunks.ts)
+      type KohiRow = { client_id: string; hohei_code: string | null; futan_sha_number: string | null; jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null };
+      let kohiData: KohiRow[];
+      try {
+        kohiData = await selectInChunks<KohiRow>(clientIds, (chunk) => supabase
+          .from("client_public_expenses")
+          .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
+          .eq("tenant_id", tenantId)
+          .in("client_id", chunk));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+        console.error("公費取得失敗:", msg);
+        alert(`公費情報の取得に失敗しました: ${msg}`);
         return;
       }
       for (const k of kohiData ?? []) {
@@ -1077,14 +1083,19 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       const monthStart = `${ym}-01`;
       const monthEnd = monthEndYmd(yy, mm);
       const clientIds = entries.map((e) => e.client.id);
-      const { data: kohiData, error: kohiErr } = await supabase
-        .from("client_public_expenses")
-        .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
-        .eq("tenant_id", tenantId)
-        .in("client_id", clientIds);
-      if (kohiErr) {
-        console.error("公費取得失敗:", kohiErr.message);
-        alert(`公費情報の取得に失敗しました: ${kohiErr.message}`);
+      // 1,000 人分を 1 回の .in() に渡すと URL が長すぎて 400 になる → 150 人ずつ (lib/inChunks.ts)
+      type KohiRow = { client_id: string; hohei_code: string | null; futan_sha_number: string | null; jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null };
+      let kohiData: KohiRow[];
+      try {
+        kohiData = await selectInChunks<KohiRow>(clientIds, (chunk) => supabase
+          .from("client_public_expenses")
+          .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
+          .eq("tenant_id", tenantId)
+          .in("client_id", chunk));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+        console.error("公費取得失敗:", msg);
+        alert(`公費情報の取得に失敗しました: ${msg}`);
         return;
       }
       const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();

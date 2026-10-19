@@ -4,6 +4,7 @@
 //   存在せず PostgREST が 42P01 を返す。呼出側は必ず { error } を見て
 //   「テーブル未作成」を握りつぶさずに区別できるようにする。
 import { supabase } from "./supabase";
+import { selectInChunks } from "./inChunks";
 
 export type FukuyoguExceptionGrant = {
   id: string;
@@ -28,13 +29,12 @@ export function isTableMissingError(error: { code?: string } | null): boolean {
 
 export async function getExceptionGrants(tenantId: string, clientIds: string[]): Promise<FukuyoguExceptionGrant[]> {
   if (clientIds.length === 0) return [];
-  const { data, error } = await supabase
+  // 事業所全員 (1,000 人超) を 1 回の .in() に渡すと 400 になる → 150 人ずつ
+  return selectInChunks<FukuyoguExceptionGrant>(clientIds, (chunk) => supabase
     .from("fukuyogu_exception_grants")
     .select("*")
     .eq("tenant_id", tenantId)
-    .in("client_id", clientIds);
-  if (error) throw error;
-  return (data ?? []) as FukuyoguExceptionGrant[];
+    .in("client_id", chunk));
 }
 
 export async function createExceptionGrant(
