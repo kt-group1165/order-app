@@ -182,7 +182,7 @@ export async function getUserInvoiceItems(invoiceId: string): Promise<BillingUse
       .select("*")
       .eq("invoice_id", invoiceId)
       .order("created_at", { ascending: true })
-      .range(from, from + PAGE - 1)
+      .order("id").range(from, from + PAGE - 1)
   );
 }
 
@@ -222,7 +222,7 @@ export async function getUserPayments(invoiceId: string): Promise<BillingUserPay
       .select("*")
       .eq("invoice_id", invoiceId)
       .order("paid_at", { ascending: true })
-      .range(from, from + PAGE - 1)
+      .order("id").range(from, from + PAGE - 1)
   );
 }
 

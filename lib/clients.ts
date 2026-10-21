@@ -21,7 +21,7 @@ export async function getClients(
         .select("*")
         .eq("tenant_id", tenantId)
         .order("furigana", { ascending: true, nullsFirst: false })
-        .range(from, from + PAGE - 1);
+        .order("id").range(from, from + PAGE - 1);
       if (opts.officeId) {
         q = q.eq("office_id", opts.officeId);
       }

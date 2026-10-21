@@ -13,7 +13,7 @@ export async function getEquipment(tenantId: string, bypassCache = false): Promi
         .eq("tenant_id", tenantId)
         .order("sort_order", { ascending: true, nullsFirst: false })
         .order("created_at", { ascending: true })
-        .range(from, from + pageSize - 1);
+        .order("id").range(from, from + pageSize - 1);
       if (error) throw error;
       if (!data || data.length === 0) break;
       all.push(...data);

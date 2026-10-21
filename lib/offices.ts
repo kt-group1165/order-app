@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { cached, invalidateCache } from "./cache";
+import { selectAllPagedParallel } from "./pagedParallel";
 import { todayYmd } from "./date-jst";
 
 export type Office = {
@@ -157,20 +158,11 @@ export async function getClientOfficeAssignments(tenantId: string): Promise<Clie
     // ⚠ PostgREST は 1 回 1000 行しか返さない。割当は約 5,000 行あるので
     //   ページングしないと **自事業所フィルタから利用者が静かに消える**
     //   (2026-08-31 是正。同じ Promise.all の中で保険レコードだけページング済みだった)。
-    const PAGE = 1000;
-    const all: ClientOfficeAssignment[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase
-        .from("client_office_assignments")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("id")
-        .range(from, from + PAGE - 1);
-      if (error) throw error;
-      all.push(...((data ?? []) as ClientOfficeAssignment[]));
-      if (!data || data.length < PAGE) break;
-    }
-    return all;
+    // 直列だと 1 ページずつ待つので、件数を聞いてページを並列に読む (lib/pagedParallel.ts)
+    return selectAllPagedParallel<ClientOfficeAssignment>(
+      () => supabase.from("client_office_assignments").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) => supabase.from("client_office_assignments").select("*").eq("tenant_id", tenantId).order("id").range(from, to),
+    );
   });
 }
 

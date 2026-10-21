@@ -218,7 +218,7 @@ export default function MobileOrderPage({ params }: { params: Promise<{ tenant: 
           .select("tais_code, effective_from, ceiling_price")
           .eq("tenant_id", tenantId)
           .order("tais_code")
-          .range(from, from + 999);
+          .order("id").range(from, from + 999);
         if (error) {
           console.error("上限価格の取得に失敗 (警告表示のみ無効):", error.message);
           return;

@@ -52,7 +52,7 @@ export async function getCarePlanElementsByClient(
       // 日付は新しい順、同日内は INSERT 順 (作業順: 新規 → 追加 → 回収)
       .order("occurred_at", { ascending: false })
       .order("created_at", { ascending: true })
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...(data as CarePlanElement[]));

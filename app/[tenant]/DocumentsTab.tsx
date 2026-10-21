@@ -108,7 +108,7 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
       const all: Client[] = [];
       let from = 0;
       while (true) {
-        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana").range(from, from + PAGE - 1);
+        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana").order("id").range(from, from + PAGE - 1);
         if (officeFilter) q = q.eq("office_id", officeFilter);
         const { data, error } = await q;
         if (error) throw error;

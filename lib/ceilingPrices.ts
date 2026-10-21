@@ -42,7 +42,7 @@ export async function getCeilingPrices(tenantId: string): Promise<EquipmentPrice
       .eq("tenant_id", tenantId)
       .order("effective_from", { ascending: false })
       .order("tais_code", { ascending: true })
-      .range(from, from + pageSize - 1);
+      .order("id").range(from, from + pageSize - 1);
     if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...(data as EquipmentPriceCeiling[]));

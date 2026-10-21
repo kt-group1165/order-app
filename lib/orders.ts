@@ -29,7 +29,7 @@ export async function getOrders(tenantId: string, officeId?: string | null): Pro
         .eq("tenant_id", tenantId)
         .neq("status", "cancelled")
         .order("ordered_at", { ascending: false })
-        .range(from, from + PAGE - 1);
+        .order("id").range(from, from + PAGE - 1);
       if (officeId) q = q.eq("office_id", officeId);
       const { data, error } = await q;
       if (error) throw error;
@@ -54,7 +54,7 @@ export async function getAllOrders(tenantId: string, officeId?: string | null): 
         .select("*")
         .eq("tenant_id", tenantId)
         .order("ordered_at", { ascending: false })
-        .range(from, from + PAGE - 1);
+        .order("id").range(from, from + PAGE - 1);
       if (officeId) q = q.eq("office_id", officeId);
       const { data, error } = await q;
       if (error) throw error;
@@ -89,7 +89,7 @@ export async function getAllOrderItemsByTenant(tenantId: string): Promise<OrderI
         .select("*")
         .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false })
-        .range(from, from + PAGE - 1);
+        .order("id").range(from, from + PAGE - 1);
       if (error) throw error;
       if (!data || data.length === 0) break;
       all.push(...data);

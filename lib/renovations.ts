@@ -351,7 +351,7 @@ export async function getRenovationProjects(
       .select("*")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (officeId) q = q.eq("office_id", officeId);
     if (fiscalYear !== null) q = q.eq("fiscal_year", fiscalYear);
     const { data, error } = await q;
@@ -383,7 +383,7 @@ export async function getRenovationProjects(
           .in("project_id", chunk)
           .order("project_id")
           .order("step_key")
-          .range(from, from + PAGE - 1);
+          .order("id").range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
         out.push(...(data as RenovationStep[]));

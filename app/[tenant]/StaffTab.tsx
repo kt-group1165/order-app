@@ -36,7 +36,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
               .from("member_offices")
               .select("member_id")
               .in("office_id", officeIds)
-              .order("member_id").order("office_id").range(from, from + PAGE - 1);
+              .order("member_id").order("office_id").range(from, from + PAGE - 1); // paging-order: unique (member_id, office_id が複合主キー)
             if (error) {
               console.warn("member_offices fetch failed:", error.message);
               break;

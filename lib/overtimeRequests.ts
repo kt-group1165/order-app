@@ -32,7 +32,7 @@ export async function getOvertimeRequests(
       .select("*")
       .eq("tenant_id", tenantId)
       .order("target_date", { ascending: false })
-      .range(from, from + PAGE - 1);
+      .order("id").range(from, from + PAGE - 1);
     if (officeId) q = q.eq("office_id", officeId);
     const { data, error } = await q;
     if (error) throw error;

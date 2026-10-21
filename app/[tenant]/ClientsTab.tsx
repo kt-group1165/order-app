@@ -22,6 +22,7 @@ import { getOrders, getOrderItems, updateOrderItemStatus, getAllOrderItemsByTena
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
 import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient } from "@/lib/clients";
 import { getTenantById, type Tenant } from "@/lib/tenants";
+import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import {
   getOffices, getClientOfficeAssignments, getClientAssignmentsForClient,
   ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment,
@@ -137,7 +138,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       try {
         // Phase 8: office filter (officeViewAll=false 時)
         const officeFilter = officeViewAll ? null : currentOfficeId;
-        const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments] = await Promise.all([
+        const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments, allInsur] = await Promise.all([
           getClients(tenantId, { onlyDeleted: trashFilter, officeId: officeFilter }),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
@@ -166,6 +167,19 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
           })(),
           getTenantById(tenantId),
           getClientOfficeAssignments(tenantId),
+          // 保険レコード (約 19,000 行)。以前は上の読み込みが全部終わってから 1000 行ずつ直列に読み、
+          // 並び順が effective_date だけ (同じ日付が大量にある) でページの境目の行が抜け・重なりうる状態で、
+          // エラーも見ていなかった (2026-10-21 是正)。id を二次キーにして、件数を聞いてページ並列に読む。
+          selectAllPagedParallel<ClientInsuranceRecord>(
+            () => supabase.from("client_insurance_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+            (from, to) => supabase
+              .from("client_insurance_records")
+              .select("*")
+              .eq("tenant_id", tenantId)
+              .order("effective_date", { ascending: false })
+              .order("id")
+              .range(from, to),
+          ),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -179,21 +193,6 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         if (currentOfficeId) {
           const assigned = new Set(assignments.filter(a => a.office_id === currentOfficeId).map(a => a.client_id));
           setClientOfficeMap(assigned);
-        }
-        // 保険レコードは件数が多いので全件ページング取得
-        const allInsur: ClientInsuranceRecord[] = [];
-        let insurFrom = 0;
-        while (true) {
-          const { data: insurChunk } = await supabase
-            .from("client_insurance_records")
-            .select("*")
-            .eq("tenant_id", tenantId)
-            .order("effective_date", { ascending: false })
-            .range(insurFrom, insurFrom + 999);
-          if (!insurChunk || insurChunk.length === 0) break;
-          allInsur.push(...(insurChunk as ClientInsuranceRecord[]));
-          if (insurChunk.length < 1000) break;
-          insurFrom += 1000;
         }
         setAllInsuranceRecords(allInsur);
         if (initialClientId) {
