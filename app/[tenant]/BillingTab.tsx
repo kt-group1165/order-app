@@ -29,6 +29,7 @@ import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectInChunks } from "@/lib/inChunks";
+import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 
 const UserBillingTab = dynamic(() => import("./UserBillingTab"), {
@@ -360,20 +361,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
   useEffect(() => {
     // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
     // PostgREST default limit 1000 を超えるテーブル (insurance_records 8370 件等) は必ずページング
-    const fetchAllPaged = async <T,>(table: string): Promise<T[]> => {
-      const PAGE = 1000;
-      const all: T[] = [];
-      let from = 0;
-      while (true) {
-        const { data, error } = await supabase.from(table).select("*").eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        all.push(...(data as T[]));
-        if (data.length < PAGE) break;
-        from += PAGE;
-      }
-      return all;
-    };
+    // 認定 (約 25,000 行) を 1000 行ずつ直列に読むと約 5 秒かかっていた → 件数を聞いてページを並列に (lib/pagedParallel.ts)
+    const fetchAllPaged = <T,>(table: string): Promise<T[]> =>
+      selectAllPagedParallel<T>(
+        () => supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+        (from, to) => supabase.from(table).select("*").eq("tenant_id", tenantId).order("id").range(from, to),
+      );
     Promise.all([
       getClients(tenantId, { officeId: currentOfficeId ?? undefined }),
       getEquipment(tenantId),
