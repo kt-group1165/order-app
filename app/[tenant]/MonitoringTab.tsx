@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Send, Eye, Download }
 import { supabase, Client, Equipment, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientInsuranceRecord, OrderItem } from "@/lib/supabase";
 import { getEquipment } from "@/lib/equipment";
 import { todayYmd } from "@/lib/date-jst";
+import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import SendRentalReportModal from "./SendRentalReportModal";
@@ -43,70 +44,62 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
     try {
       // Phase 8: officeViewAll=false なら currentOfficeId で絞り込み
       const officeFilter = officeViewAll ? null : currentOfficeId;
-      // clients は 1000 件超えるケースあり (kt-group の office=1bfc0d57 で 1777 件)。
-      // 必ずページングで全件取得する。
-      const fetchAllClients = async (): Promise<Client[]> => {
-        const PAGE = 1000;
-        const all: Client[] = [];
-        let from = 0;
-        while (true) {
-          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("id").range(from, from + PAGE - 1);
-          if (officeFilter) q = q.eq("office_id", officeFilter);
-          const { data, error } = await q;
-          if (error) throw error;
-          if (!data || data.length === 0) break;
-          all.push(...(data as Client[]));
-          if (data.length < PAGE) break;
-          from += PAGE;
-        }
-        return all;
-      };
-      const [cls, monRes, eqData, rentalHistRes] = await Promise.all([
-        fetchAllClients(),
-        supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId).order("target_month", { ascending: false }),
+      // 2026-10-21: 利用者 → 発注 → 発注明細 を 1 つずつ順番に待っていた (約 2.9 秒) のを全部同時に読む。
+      //   どれも 1000 行を超えうるので、件数を聞いてページを並列に読む (lib/pagedParallel.ts・id を二次キーに)。
+      //   以前は発注・明細の読み込みエラーを見ずに黙って打ち切っていた。
+      const [cls, monitoring, eqData, rentalHist, allOrders, items] = await Promise.all([
+        selectAllPagedParallel<Client>(
+          () => {
+            const q = supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
+            return officeFilter ? q.eq("office_id", officeFilter) : q;
+          },
+          (from, to) => {
+            const q = supabase.from("clients").select("*").eq("tenant_id", tenantId);
+            return (officeFilter ? q.eq("office_id", officeFilter) : q).order("id").range(from, to);
+          },
+        ),
+        selectAllPagedParallel<MonitoringRecord>(
+          () => supabase.from("monitoring_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+          (from, to) => supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId)
+            .order("target_month", { ascending: false }).order("id").range(from, to),
+        ),
         getEquipment(tenantId),
-        supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
-          .or(`end_date.is.null,end_date.gte.${todayYmd()}`),
+        selectAllPagedParallel<ClientRentalHistory>(
+          () => supabase.from("client_rental_history").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId)
+            .or(`end_date.is.null,end_date.gte.${todayYmd()}`),
+          (from, to) => supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId)
+            .or(`end_date.is.null,end_date.gte.${todayYmd()}`).order("id").range(from, to),
+        ),
+        selectAllPagedParallel<{ id: string; client_id: string }>(
+          () => {
+            const q = supabase.from("orders").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
+            return officeFilter ? q.eq("office_id", officeFilter) : q;
+          },
+          (from, to) => {
+            const q = supabase.from("orders").select("id, client_id").eq("tenant_id", tenantId);
+            return (officeFilter ? q.eq("office_id", officeFilter) : q).order("id").range(from, to);
+          },
+        ),
+        // order_items は office_id 列を持たないので、office filter 済の orders で後から絞る
+        selectAllPagedParallel<OrderItem>(
+          () => supabase.from("order_items").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId)
+            .in("status", ["rental_started", "delivered", "trial"]),
+          (from, to) => supabase.from("order_items").select("*").eq("tenant_id", tenantId)
+            .in("status", ["rental_started", "delivered", "trial"]).order("id").range(from, to),
+        ),
       ]);
-      // orders をページングで全件取得
-      const allOrders: { id: string; client_id: string }[] = [];
-      let ordFrom = 0;
-      while (true) {
-        let ordQ = supabase
-          .from("orders").select("id, client_id")
-          .eq("tenant_id", tenantId)
-          .order("id").range(ordFrom, ordFrom + 999);
-        if (officeFilter) ordQ = ordQ.eq("office_id", officeFilter);
-        const { data: ordChunk } = await ordQ;
-        if (!ordChunk || ordChunk.length === 0) break;
-        allOrders.push(...(ordChunk as { id: string; client_id: string }[]));
-        if (ordChunk.length < 1000) break;
-        ordFrom += 1000;
-      }
       setClients(cls);
       setClientOrders(allOrders);
-      setMonitoringRecords((monRes.data ?? []) as MonitoringRecord[]);
+      setMonitoringRecords(monitoring);
       setEquipment(eqData);
-      setRentalHistory((rentalHistRes.data ?? []) as ClientRentalHistory[]);
-      // order_items を tenant_id で直接取得（URLの長さ制限を回避）
-      // order_items は office_id 列を持たないので、上で office filter 済の allOrders 経由で絞る
-      const items: OrderItem[] = [];
-      let itemFrom = 0;
-      while (true) {
-        const { data: chunk } = await supabase
-          .from("order_items")
-          .select("*")
-          .eq("tenant_id", tenantId)
-          .in("status", ["rental_started", "delivered", "trial"])
-          .order("id").range(itemFrom, itemFrom + 999);
-        if (!chunk || chunk.length === 0) break;
-        items.push(...(chunk as OrderItem[]));
-        if (chunk.length < 1000) break;
-        itemFrom += 1000;
-      }
+      setRentalHistory(rentalHist);
       const orderIds = new Set(allOrders.map((o) => o.id));
       const filteredItems = officeFilter ? items.filter((i) => orderIds.has(i.order_id)) : items;
       setActiveItems(filteredItems);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("モニタリングの読み込みに失敗:", msg);
+      alert(`モニタリングの読み込みに失敗しました: ${msg}`);
     } finally {
       setLoading(false);
     }

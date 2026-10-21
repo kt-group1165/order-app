@@ -46,6 +46,8 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
   const [selectedClientInitialViewMode, setSelectedClientInitialViewMode] = useState<"current" | "insurance" | undefined>(undefined);
   const [viewMode, setViewMode] = useState<"list" | "insurance" | "history">("list");
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  /** 保険情報一覧の読み込み状態。一覧に切り替えたときだけ読む (null = まだ読んでいない) */
+  const [insuranceLoadState, setInsuranceLoadState] = useState<null | "loading" | "done" | "error">(null);
   const [newOrderClient, setNewOrderClient] = useState<Client | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ inserted: { name: string; user_number: string }[]; updated: { name: string; user_number: string }[]; merged: { name: string; user_number: string }[]; errors: { name: string; user_number: string; message: string }[]; reunited: number; insuranceAdded: number; addedOffices: number; addedManagers: number } | null>(null);
@@ -138,7 +140,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       try {
         // Phase 8: office filter (officeViewAll=false 時)
         const officeFilter = officeViewAll ? null : currentOfficeId;
-        const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments, allInsur] = await Promise.all([
+        const [c, items, eq, ords, sup, mem, hospRes, tenant, assignments] = await Promise.all([
           getClients(tenantId, { onlyDeleted: trashFilter, officeId: officeFilter }),
           getAllOrderItemsByTenant(tenantId),
           getEquipment(tenantId),
@@ -167,19 +169,6 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
           })(),
           getTenantById(tenantId),
           getClientOfficeAssignments(tenantId),
-          // 保険レコード (約 19,000 行)。以前は上の読み込みが全部終わってから 1000 行ずつ直列に読み、
-          // 並び順が effective_date だけ (同じ日付が大量にある) でページの境目の行が抜け・重なりうる状態で、
-          // エラーも見ていなかった (2026-10-21 是正)。id を二次キーにして、件数を聞いてページ並列に読む。
-          selectAllPagedParallel<ClientInsuranceRecord>(
-            () => supabase.from("client_insurance_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
-            (from, to) => supabase
-              .from("client_insurance_records")
-              .select("*")
-              .eq("tenant_id", tenantId)
-              .order("effective_date", { ascending: false })
-              .order("id")
-              .range(from, to),
-          ),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -194,7 +183,6 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
           const assigned = new Set(assignments.filter(a => a.office_id === currentOfficeId).map(a => a.client_id));
           setClientOfficeMap(assigned);
         }
-        setAllInsuranceRecords(allInsur);
         if (initialClientId) {
           const target = c.find((cl) => cl.id === initialClientId);
           if (target) setSelectedClient(target);
@@ -206,6 +194,49 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [tenantId, trashFilter, currentOfficeId, officeViewAll]);
+
+  // 保険レコード (約 19,000 行) は「保険情報一覧」でしか使わないので、一覧に切り替えたときだけ読む。
+  //   以前は利用者別を開くたびに全件読み (約 6 秒)、しかも effective_date だけで並べて 1000 行ずつ直列に
+  //   読んでいたためページの境目で 1,198 行が抜け・別の 1,198 行が重複していた (2026-10-21 是正)。
+  //   id を二次キーにして、件数を聞いてページ並列に読む (lib/pagedParallel.ts)。
+  //   どのテナントの分を頼んだかを ref で覚える (状態を deps に入れると「読み込み中」にした瞬間に
+  //   effect がやり直しになり、前の読み込みを取り消してしまう)。
+  const insuranceRequestedFor = useRef<string | null>(null);
+  // テナントが変わったら読み直す (下の読み込みより先に宣言する = 先に動く)
+  useEffect(() => {
+    insuranceRequestedFor.current = null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- テナント切替時に保険情報の読み込み状態を戻す
+    setInsuranceLoadState(null);
+    setAllInsuranceRecords([]);
+  }, [tenantId]);
+  useEffect(() => {
+    if (viewMode !== "insurance" || insuranceRequestedFor.current === tenantId) return;
+    insuranceRequestedFor.current = tenantId;
+    const reqTenant = tenantId;
+    setInsuranceLoadState("loading");
+    selectAllPagedParallel<ClientInsuranceRecord>(
+      () => supabase.from("client_insurance_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) => supabase
+        .from("client_insurance_records")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .order("effective_date", { ascending: false })
+        .order("id")
+        .range(from, to),
+    )
+      .then((rows) => {
+        if (insuranceRequestedFor.current !== reqTenant) return; // 途中でテナントが変わった
+        setAllInsuranceRecords(rows);
+        setInsuranceLoadState("done");
+      })
+      .catch((e) => {
+        console.error("保険情報の読み込みに失敗:", e instanceof Error ? e.message : e);
+        if (insuranceRequestedFor.current !== reqTenant) return;
+        insuranceRequestedFor.current = null; // 一覧を開き直せば再試行する
+        setInsuranceLoadState("error");
+      });
+  }, [viewMode, tenantId]);
+
 
   // ⚡ パフォーマンス最適化：Map ルックアップ（O(N) → O(1)）
   // 注意: フックの順序を保つため、必ず早期 return より前に置くこと
@@ -1985,7 +2016,14 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       )}
 
       {/* 保険情報一覧ビュー */}
-      {viewMode === "insurance" && (() => {
+      {viewMode === "insurance" && insuranceLoadState !== "done" && (
+        <div className="flex-1 flex items-center justify-center bg-white text-sm text-gray-500 gap-2">
+          {insuranceLoadState === "error"
+            ? <span className="text-red-600">保険情報の読み込みに失敗しました。別の表示に切り替えてから戻ると読み直します。</span>
+            : <><Loader2 size={16} className="animate-spin" /> 保険情報を読み込み中…</>}
+        </div>
+      )}
+      {viewMode === "insurance" && insuranceLoadState === "done" && (() => {
         // 各利用者の「最新認定の最良レコード」を取得
         //   1. effective_date が最新のものを選ぶ
         //   2. 同じ effective_date なら copay_rate が埋まってるレコードを優先
