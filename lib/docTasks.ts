@@ -1,4 +1,5 @@
 import { supabase, DocTask, DocTaskStatus, DocTaskTriggerType } from "./supabase";
+import { selectAllPagedParallel } from "./pagedParallel";
 import { PAIRED_DOC_TYPES } from "./docTaskMatch";
 
 /** 書類タスク fetch (office × pending のみ)。office_id NULL は対象外。 */
@@ -17,35 +18,24 @@ export async function getDocTasks(
   officeIds: string[] | null,
   statuses: DocTaskStatus[] | null,
 ): Promise<DocTask[]> {
-  const PAGE = 1000;
-  const all: DocTask[] = [];
-  let from = 0;
-  // 統合された子 task は表示対象から除外したいので、fetch 時に弾く
-  while (true) {
-    let q = supabase
-      .from("doc_tasks")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .is("merged_into_task_id", null)
+  // 統合された子 task は表示対象から除外したいので、fetch 時に弾く。
+  // 2026-10-21: 1000 行ずつ直列に読んでいた (約 4,200 行で 5 往復) のを、件数を聞いてページ並列に (lib/pagedParallel.ts)。
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- count 用 (head) と本体の select で型が違うクエリに同じ絞り込みを掛けるため
+  const filter = (q: any) => {
+    let r = q.eq("tenant_id", tenantId).is("merged_into_task_id", null);
+    r = statuses && statuses.length > 0 ? r.in("status", statuses) : r.neq("status", "cancelled");
+    if (officeIds && officeIds.length > 0) r = r.in("office_id", officeIds);
+    return r;
+  };
+  return selectAllPagedParallel<DocTask>(
+    () => filter(supabase.from("doc_tasks").select("id", { count: "exact", head: true })),
+    (from, to) => filter(supabase.from("doc_tasks").select("*"))
       .order("trigger_date", { ascending: true })
       // trigger_date は重複が多い (例: 2026-04-01)。一意な tiebreaker が無いと
       // ページ境界で同じ行が 2 回返り、統合候補が「同一 task × 2」になる
       .order("id", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (statuses && statuses.length > 0) {
-      q = q.in("status", statuses);
-    } else {
-      q = q.neq("status", "cancelled");
-    }
-    if (officeIds && officeIds.length > 0) q = q.in("office_id", officeIds);
-    const { data, error } = await q;
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...(data as DocTask[]));
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+      .range(from, to),
+  );
 }
 
 /** doc_task を completed にして linked_document_id をセット。
