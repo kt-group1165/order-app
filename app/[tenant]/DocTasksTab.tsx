@@ -5,6 +5,8 @@ import { FileWarning, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronRi
 import { supabase, Client, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
 import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, completeDocTask, findExistingDocForTask, type MergeCandidateGroup } from "@/lib/docTasks";
 import { todayYmd, addDaysYmd } from "@/lib/date-jst";
+import { selectAllPagedParallel } from "@/lib/pagedParallel";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 // ─── DocTasksTab v3 ───────────────────────────────────────────────────────────
 // v1 (commit da99236) の「client × 書類種別」計算ベースから、event-driven な
@@ -181,30 +183,43 @@ export default function DocTasksTab({
             ? [currentOfficeId]
             : []; // 全社 view OFF & office 未選択 → 何も見せない
 
-        // 2. doc_tasks (v3: 全 active status を fetch して client 側で filter)
-        // 統合候補検出のため pending / completed / received すべて取る (cancelled は除外)
-        const fetchedTasks = officeIds && officeIds.length === 0
-          ? []
-          : await getDocTasks(tenantId, officeIds, ["pending", "completed", "received"]);
+        // 2026-10-21: 書類タスク → 利用者 → 認定 → 書類 を 1 つずつ順番に待っていた (約 3.6 秒)。
+        //   書類タスク・利用者・書類は互いに依存しないので同時に読み、認定だけ利用者の後に読む。
+        const noOffice = officeIds !== null && officeIds.length === 0;
+        const [fetchedTasks, allClients, docs] = await Promise.all([
+          // 2. doc_tasks (v3: 全 active status を fetch して client 側で filter)
+          // 統合候補検出のため pending / completed / received すべて取る (cancelled は除外)
+          noOffice ? Promise.resolve([] as DocTask[]) : getDocTasks(tenantId, officeIds, ["pending", "completed", "received"]),
+          // 3. clients (office 絞り込み) — task client_id 解決と cert_renewal 表示用
+          selectAllPagedParallel<Client>(
+            () => {
+              const q = supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).is("deleted_at", null);
+              return officeIds && officeIds.length > 0 ? q.in("office_id", officeIds) : q;
+            },
+            (from, to) => {
+              const q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null);
+              return (officeIds && officeIds.length > 0 ? q.in("office_id", officeIds) : q).order("id").range(from, to);
+            },
+          ),
+          // 5. client_documents (rental_report 以外の全 type)
+          //    - care_plan: cert_renewal で「対応 care_plan が無い場合のみ」絞るため
+          //    - 全 type: 書類タスク経由以外で作られた書類を「作成済書類で完了」の候補に出すため (B-2n)
+          selectAllPagedParallel<DocLite>(
+            () => supabase.from("client_documents").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).neq("type", "rental_report"),
+            (from, to) => supabase
+              .from("client_documents")
+              .select("id, client_id, type, title, created_at, params")
+              .eq("tenant_id", tenantId)
+              .neq("type", "rental_report")
+              .order("created_at", { ascending: false })
+              .order("id", { ascending: true })
+              .range(from, to),
+          ),
+        ]);
 
-        // 3. clients (office 絞り込み) — task client_id 解決と cert_renewal 表示用
-        const PAGE = 1000;
-        const allClients: Client[] = [];
-        let from = 0;
-        while (true) {
-          let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, from + PAGE - 1);
-          if (officeIds && officeIds.length > 0) q = q.in("office_id", officeIds);
-          const { data, error } = await q;
-          if (error) throw error;
-          if (!data || data.length === 0) break;
-          allClients.push(...(data as Client[]));
-          if (data.length < PAGE) break;
-          from += PAGE;
-        }
-
-        // 4. client_insurance_records (cert_renewal 計算用)
-        //    chunk は並列 fetch (lib/renovations.ts と同じ型)。直列だと全社規模で
-        //    chunk 数 × 往復時間が積み上がってページ読み込みが遅くなる。
+        // 4. client_insurance_records (cert_renewal 計算用) — 利用者 200 人ずつ、同時 6 本まで
+        //    1 回の返事は 1000 行まで。200 人分が 1000 行に届いたら切れているので黙らずエラーにする
+        //    (2026-10-21 実測: ケアサポ 1,566 名で 1 回あたり最大 311 行)。
         const clientIdSet = new Set(allClients.map((c) => c.id));
         const insRecs: ClientInsuranceRecord[] = [];
         if (clientIdSet.size > 0) {
@@ -212,42 +227,23 @@ export default function DocTasksTab({
           const CHUNK = 200;
           const idChunks: string[][] = [];
           for (let i = 0; i < ids.length; i += CHUNK) idChunks.push(ids.slice(i, i + CHUNK));
-          const results = await Promise.all(
-            idChunks.map(async (slice) => {
-              const { data, error } = await supabase
-                .from("client_insurance_records")
-                .select("*")
-                .eq("tenant_id", tenantId)
-                .in("client_id", slice);
-              if (error) throw error;
-              return (data ?? []) as ClientInsuranceRecord[];
-            }),
-          );
+          const errors: string[] = [];
+          const results = await mapWithConcurrency(idChunks, async (slice) => {
+            const { data, error } = await supabase
+              .from("client_insurance_records")
+              .select("*")
+              .eq("tenant_id", tenantId)
+              .in("client_id", slice);
+            if (error) { errors.push(error.message); return [] as ClientInsuranceRecord[]; }
+            if ((data ?? []).length >= 1000) { errors.push(`認定が ${slice.length} 人分で 1000 行に達し、切れています (CHUNK を小さくする)`); }
+            return (data ?? []) as ClientInsuranceRecord[];
+          }, 6);
+          if (errors.length > 0) throw new Error(errors[0]);
           for (const rows of results) insRecs.push(...rows);
         }
 
-        // 5. client_documents (rental_report 以外の全 type)
-        //    - care_plan: cert_renewal で「対応 care_plan が無い場合のみ」絞るため
-        //    - 全 type: 書類タスク経由以外で作られた書類を「作成済書類で完了」の候補に出すため (B-2n)
         const carePlanMap = new Map<string, string>();
-        const docs: DocLite[] = [];
         if (clientIdSet.size > 0) {
-          let dFrom = 0;
-          while (true) {
-            const { data, error } = await supabase
-              .from("client_documents")
-              .select("id, client_id, type, title, created_at, params")
-              .eq("tenant_id", tenantId)
-              .neq("type", "rental_report")
-              .order("created_at", { ascending: false })
-              .order("id", { ascending: true })
-              .range(dFrom, dFrom + PAGE - 1);
-            if (error) throw error;
-            if (!data || data.length === 0) break;
-            docs.push(...(data as DocLite[]));
-            if (data.length < PAGE) break;
-            dFrom += PAGE;
-          }
           for (const d of docs) {
             if (d.type !== "care_plan") continue;
             if (!carePlanMap.has(d.client_id)) carePlanMap.set(d.client_id, d.created_at);

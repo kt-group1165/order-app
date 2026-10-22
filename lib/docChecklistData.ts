@@ -1,5 +1,6 @@
 import { supabase, type ClientDocument, type DocTask } from "./supabase";
 import { DOC_CHECK_CUTOFF } from "./docChecklist";
+import { selectAllPagedParallel } from "./pagedParallel";
 
 // 書類画面の左の一覧用: 利用者ごとの貸与明細 (介護保険のみ)・書類・運用で発生した書類タスクをまとめて読む。
 // 貸与明細は全社で約 4,700 行なので 1000 行ずつページングして読み切る (order 必須: 無いと行が抜ける)。
@@ -17,31 +18,36 @@ export type DocIndex = {
   tasksByClient: Map<string, DocTask[]>;
 };
 
-async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
-  const PAGE = 1000;
-  const out: T[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build(from, from + PAGE - 1);
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as T[];
-    out.push(...rows);
-    if (rows.length < PAGE) return out;
-  }
+// 2026-10-21: 1000 行ずつ直列に読んでいた (貸与明細 約 4,700 行で 5 往復) のを、件数を聞いてページ並列に。
+//   count は build と同じ絞り込みで head: true の件数を返すこと。
+function fetchAll<T>(
+  count: () => PromiseLike<{ count: number | null; error: { message: string } | null }>,
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  return selectAllPagedParallel<T>(count, build);
 }
 
 export async function getDocIndex(tenantId: string): Promise<DocIndex> {
   type ItemRow = ClientRental & { orders: { client_id: string; payment_type: string | null } | null };
   const [items, docs, tasks] = await Promise.all([
-    fetchAll<ItemRow>((from, to) =>
+    fetchAll<ItemRow>(
+      () => supabase.from("order_items").select("id, orders!inner(tenant_id)", { count: "exact", head: true }).eq("orders.tenant_id", tenantId),
+      (from, to) =>
       supabase
         .from("order_items")
         .select("rental_start_date, rental_end_date, status, orders!inner(client_id, payment_type, tenant_id)")
         .eq("orders.tenant_id", tenantId)
         .order("id")
         .range(from, to)),
-    fetchAll<ClientDocument>((from, to) =>
+    fetchAll<ClientDocument>(
+      () => supabase.from("client_documents").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) =>
       supabase.from("client_documents").select("*").eq("tenant_id", tenantId).order("id").range(from, to)),
-    fetchAll<DocTask>((from, to) =>
+    fetchAll<DocTask>(
+      () => supabase.from("doc_tasks").select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId).eq("status", "pending").is("merged_into_task_id", null)
+        .gte("created_at", `${DOC_CHECK_CUTOFF}T00:00:00+09:00`),
+      (from, to) =>
       supabase
         .from("doc_tasks")
         .select("*")
