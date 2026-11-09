@@ -21,6 +21,9 @@ import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsag
 
 type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "contract_template" | "speech_usage" | "data_reimport";
 
+// データ再取込 (SettingsTab の data_reimport) を出すか。2026-11-09 に停止 (理由はメニュー定義の注記)
+const DATA_REIMPORT_ENABLED = false;
+
 export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeChange, onViewModeChange }: {
   tenantId: string;
   currentOfficeId: string | null;
@@ -251,7 +254,10 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
     { id: "contract_template", label: "契約書・重要事項の文面", desc: "帳票の文章ブロックを編集" },
     { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
-    { id: "data_reimport", label: "データ再取込（危険）",    desc: "利用者・保険情報・居宅マスタを一括再構築" },
+    // ★ 2026-11-09 非表示: 「データ再取込」は client_insurance_records を tenant 全体で DELETE し (kaigo-app の認定も消える)、
+    //   clients.care_office_id も全件 NULL にする。共有表を壊すので止めた。取込は migrations/sync_fukuyogu_from_honobono.mjs
+    //   (記録付き・--revert 可) に一本化。最終的には削除予定 (DESIGN_INSURANCE_PER_OFFICE.md 決定 5)
+    ...(DATA_REIMPORT_ENABLED ? [{ id: "data_reimport" as SettingsPage, label: "データ再取込（危険）", desc: "利用者・保険情報・居宅マスタを一括再構築" }] : []),
   ];
 
   // ── メニュー画面 ──
@@ -519,7 +525,11 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="データ再取込" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <DataReimportSection tenantId={tenantId} />
+          {DATA_REIMPORT_ENABLED ? (
+            <DataReimportSection tenantId={tenantId} />
+          ) : (
+            <p className="text-sm text-gray-600">この機能は停止しています (介護側と共有の保険情報を全件消すため)。</p>
+          )}
         </div>
       </div>
     );
