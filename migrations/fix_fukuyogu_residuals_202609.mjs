@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -60,6 +61,7 @@ const DIR = join(DENSOU_ROOT, "ケアサポ/福祉用具/202609/ほのぼのか�
 const KK_PATH = join(DIR, "KK261004.CSV");
 const KDS_PATH = join(DIR, "KDS0031_明細書明細付_処理R8-09.CSV");
 const SCRIPT_REL = "apps/order-app/migrations/fix_fukuyogu_residuals_202609.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const STEP = "fyd2-residuals";
 
 // ── 定義 (user 承認 2026-11-09) ─────────────────────────────────────────────
@@ -92,6 +94,7 @@ const log = (...a) => console.log(a.join(" "));
 const env = readEnv();
 const { createClient } = await import("@supabase/supabase-js");
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 async function selectAll(table, select, build) {
   const out = [];
   for (let from = 0; ; from += 1000) {
@@ -261,11 +264,10 @@ for (const t of ["data_import_batches", "data_import_rows"]) { const { error } =
 
 // ── 本番 ──────────────────────────────────────────────────────────────────
 const DERIVED = [["doc_tasks", "trigger_ref_id"], ["care_plan_elements", "ref_id"]];
-const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-  tenant_id: TENANT, source_system: "honobono-fukuyogu", source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP, status: "running",
+const batch = await execLockAcquire(sb, EXEC_LOCK, {
+  tenant_id: TENANT, source_system: "honobono-fukuyogu", source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP,
   notes: `提供 ${MONTH} / FY-D2 残差の個別是正 (担当居宅・貸与追加・萱野 分割・単価 null) user 承認 2026-11-09`,
-}).select("id").single();
-if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+});
 const BATCH = batch.id;
 log(`batch ${BATCH}`);
 const fail = async (msg) => { const { error } = await sb.from("data_import_batches").update({ status: "failed", notes: `提供 ${MONTH} / FY-D2 失敗: ${msg}`.slice(0, 2000) }).eq("id", BATCH); if (error) console.error(error.message); throw new Error(msg); };

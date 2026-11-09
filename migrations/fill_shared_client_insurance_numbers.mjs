@@ -19,6 +19,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -38,6 +39,7 @@ const REVERT = opt("--revert");
 const REPO_ROOT = resolve(HERE, "../../..");
 const KK_PATH = resolve(opt("--kk") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/202609/ほのぼのから/KK261004.CSV"));
 const SCRIPT_REL = "apps/order-app/migrations/fill_shared_client_insurance_numbers.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "fill-shared-insurance-numbers";
 const CAPASAPO_OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
@@ -107,11 +109,10 @@ async function plan(sb) {
 }
 
 async function execute(sb, ops) {
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
     tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [relative(REPO_ROOT, KK_PATH).replace(/\\/g, "/")], script: SCRIPT_REL,
-    args: argv.join(" "), step: STEP_NAME, status: "running", notes: `共有の利用者で clients の保険者番号・被保番が両方空の ${ops.length} 名を KK で埋める`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+    args: argv.join(" "), step: STEP_NAME, notes: `共有の利用者で clients の保険者番号・被保番が両方空の ${ops.length} 名を KK で埋める`,
+  });
   const BATCH = batch.id;
   console.log(`batch ${BATCH}`);
   const fail = async (msg) => {
@@ -142,18 +143,21 @@ async function revert(sb, batchId) {
   const back = recs.filter((r) => { const c = cur.get(r.row_id); return c && c.insurer_number === r.after.insurer_number && c.insured_number === r.after.insured_number; });
   console.log(`${EXECUTE ? "EXECUTE" : "DRY RUN"} 戻す ${back.length} / 記録 ${recs.length}`);
   if (!EXECUTE) return;
-  for (const r of back) {
-    const { error, count } = await sb.from("clients").update({ insurer_number: null, insured_number: null }, { count: "exact" })
-      .eq("id", r.row_id).eq("insurer_number", r.after.insurer_number).eq("insured_number", r.after.insured_number);
-    if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
-  }
-  const status = back.length === recs.length ? "reverted" : "partially_reverted";
-  const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (error) throw new Error(`batch: ${error.message}`);
-  console.log(`取り消し完了 (${status})`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const r of back) {
+      const { error, count } = await sb.from("clients").update({ insurer_number: null, insured_number: null }, { count: "exact" })
+        .eq("id", r.row_id).eq("insurer_number", r.after.insurer_number).eq("insured_number", r.after.insured_number);
+      if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
+    }
+    const status = back.length === recs.length ? "reverted" : "partially_reverted";
+    const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (error) throw new Error(`batch: ${error.message}`);
+    console.log(`取り消し完了 (${status})`);
+  });
 }
 
 const sb = await makeSb();
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 if (REVERT) { await revert(sb, REVERT); process.exit(0); }
 const { ops, skip, kkCount } = await plan(sb);
 console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  KK 基本レコード ${kkCount} / 埋める ${ops.length} 名 / 対象外 ${skip.length}`);

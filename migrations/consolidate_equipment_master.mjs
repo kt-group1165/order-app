@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -68,6 +69,7 @@ const CSV_PATH = resolve(opt("--csv") ?? join(DENSOU, "202609/ほのぼのから
 const MASTER_CSV = resolve(opt("--master-csv") ?? join(DENSOU, "マスタ/FYGMST01_用具マスタ_20261109.CSV"));
 const OUT_TXT = opt("--out") ? resolve(opt("--out")) : null;
 const SCRIPT_REL = "apps/order-app/migrations/consolidate_equipment_master.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "consolidate-equipment";
 const TAIS_RE = /^\d{5}-[0-9A-Z]{6}$/; // 00170-Z00019 のような Z 付きも TAIS として扱う
@@ -185,6 +187,7 @@ async function main() {
 
   // ── DB (★ SELECT のみ) ─────────────────────────────────────────────
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   const cachePath = EXECUTE ? join(tmpdir(), `consolidate_eq_db_${Date.now()}.json`) : resolve(opt("--db-cache") ?? join(tmpdir(), `honobono_sync_db_snapshot_${MONTH}.json`));
   const snap = await loadSnapshot(MONTH, cachePath, EXECUTE || argv.includes("--refresh"));
   log("DB 読込 (用具まわりは毎回読み直す・READ ONLY)...");
@@ -513,11 +516,10 @@ async function main() {
 // ── 書込み ────────────────────────────────────────────────────────────────
 async function execute(sb, ops, sourceFiles) {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME,
     notes: `用具マスタ 同 TAIS 統合${WITH_CATEGORY ? " + 種目名" : ""}`,
-  }).select("id,created_at").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  }, "id,created_at");
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {
@@ -602,6 +604,7 @@ async function execute(sb, ops, sourceFiles) {
 // ── 取り消し ──────────────────────────────────────────────────────────────
 async function revert(batchId) {
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   const ready = await provenanceReady(sb);
   if (!ready.ok) { console.error(`出どころ記録の表が無い (${ready.why})`); process.exit(2); }
   const { data: batch, error } = await sb.from("data_import_batches").select("*").eq("id", batchId).maybeSingle();
@@ -638,24 +641,26 @@ async function revert(batchId) {
   console.log(`戻さない ${plan.skip.length} ${JSON.stringify(countBy(plan.skip, (d) => `${d.table} ${d.why.split(" (")[0]}`))}`);
   for (const s of plan.skip.slice(0, 10)) console.log(`   - ${JSON.stringify(s)}`);
   if (!EXECUTE) { console.log("\nDRY RUN — 何も変えていない。--execute で取り消し"); return; }
-  // 順番: 消した行を入れ直す (用具 → 価格等) → 更新を戻す → 追加した行を消す
-  const reOrder = ["equipment_master", "equipment_price_history", "equipment_prices", "equipment_office_prices", "equipment_set_items"];
-  for (const table of reOrder) for (const c of chunks(plan.reinsert.filter((r) => r.table === table).map((r) => r.row), 100)) {
-    const { error: e } = await sb.from(table).insert(c);
-    if (e) throw new Error(`reinsert ${table}: ${e.message}`);
-  }
-  for (const r of plan.restore) {
-    const { error: e, count } = await sb.from(r.table).update(r.patch, { count: "exact" }).eq("id", r.id).eq("tenant_id", TENANT);
-    if (e || count !== 1) throw new Error(`restore ${r.table} ${r.id}: ${e?.message ?? `件数 ${count}`}`);
-  }
-  for (const table of ["equipment_price_history", "equipment_master"]) for (const c of chunks(plan.del.filter((d) => d.table === table).map((d) => d.id), 150)) {
-    const { error: e, count } = await sb.from(table).delete({ count: "exact" }).in("id", c).eq("tenant_id", TENANT);
-    if (e || count !== c.length) throw new Error(`delete ${table}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
-  }
-  const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
-  const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (e3) throw new Error(`batch 更新: ${e3.message}`);
-  console.log(`\n取り消し完了 (${status})`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    // 順番: 消した行を入れ直す (用具 → 価格等) → 更新を戻す → 追加した行を消す
+    const reOrder = ["equipment_master", "equipment_price_history", "equipment_prices", "equipment_office_prices", "equipment_set_items"];
+    for (const table of reOrder) for (const c of chunks(plan.reinsert.filter((r) => r.table === table).map((r) => r.row), 100)) {
+      const { error: e } = await sb.from(table).insert(c);
+      if (e) throw new Error(`reinsert ${table}: ${e.message}`);
+    }
+    for (const r of plan.restore) {
+      const { error: e, count } = await sb.from(r.table).update(r.patch, { count: "exact" }).eq("id", r.id).eq("tenant_id", TENANT);
+      if (e || count !== 1) throw new Error(`restore ${r.table} ${r.id}: ${e?.message ?? `件数 ${count}`}`);
+    }
+    for (const table of ["equipment_price_history", "equipment_master"]) for (const c of chunks(plan.del.filter((d) => d.table === table).map((d) => d.id), 150)) {
+      const { error: e, count } = await sb.from(table).delete({ count: "exact" }).in("id", c).eq("tenant_id", TENANT);
+      if (e || count !== c.length) throw new Error(`delete ${table}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+    }
+    const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
+    const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (e3) throw new Error(`batch 更新: ${e3.message}`);
+    console.log(`\n取り消し完了 (${status})`);
+  });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

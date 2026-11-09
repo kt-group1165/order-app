@@ -47,6 +47,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
+import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -64,6 +65,7 @@ const REBUILD_BATCH = "8583d46b-3572-415d-bffe-a369e90ff28c";
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP = "teikyo-rebuild-fix";
 const SCRIPT_REL = "apps/order-app/migrations/fix_rebuild_rentals_202611.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const DUPS = [
   { dup: "d42c37ba-4ac9-4984-8b66-15253debcd8c", orig: "1aed1f73-bb3b-4d6d-ae13-e2075f99a63f", name: "松本 ちよ" },
   { dup: "4ed8b7c6-3dcd-459a-921a-515f2fde6ef6", orig: "f9100f6d-c4ee-4058-bc5f-93637558557b", name: "小山 いわ" },
@@ -122,6 +124,7 @@ async function main() {
   mkdirSync(OUT_DIR, { recursive: true });
   const env = readEnv();
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   console.log(`${EXECUTE ? "★★ EXECUTE (本番書込み)" : "DRY RUN (DB は書き換えない)"} / 組み直しの batch ${REBUILD_BATCH}`);
 
   // DB (READ ONLY)
@@ -274,11 +277,10 @@ async function execute(sb, ops) {
     const { error } = await sb.from(t).select("id").limit(1);
     if (error) stop(`出どころ記録の表 ${t} が無い (${error.message})`);
   }
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: STEP, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: STEP,
     notes: `組み直し (batch ${REBUILD_BATCH}) の是正: 二重の明細の削除 / 介護 0 円 → 自費 と 0 円明細の統合 / 価格履歴`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => { const { error } = await sb.from("data_import_batches").update({ status: "failed", notes: `失敗: ${msg}`.slice(0, 2000) }).eq("id", BATCH); if (error) console.error(`batch を failed にできない: ${error.message}`); throw new Error(msg); };

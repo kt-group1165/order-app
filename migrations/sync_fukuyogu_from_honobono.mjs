@@ -74,6 +74,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // .mts / lib の .ts を読むため、tsx の下で自分自身を起動し直す (node 22.14 は TypeScript を直接読めない)
@@ -113,6 +114,7 @@ const CSV_PATH = resolve(opt("--csv") ?? join(DENSOU, "202609/ほのぼのから
 const MASTER_CSV = resolve(opt("--master-csv") ?? join(DENSOU, "マスタ/FYGMST01_用具マスタ_20261109.CSV"));
 const UM_DIR = resolve(opt("--user-master-dir") ?? join(DENSOU, "利用者マスタ_20261109"));
 const SCRIPT_REL = "apps/order-app/migrations/sync_fukuyogu_from_honobono.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 
 // ── 小道具 ────────────────────────────────────────────────────────────────
@@ -339,6 +341,7 @@ async function main() {
   const officeName = new Map(snap.offices.map((o) => [o.id, o.name]));
   console.log(`事業所: ${office.name} (${OFFICE})`);
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 
   // ── 計画 (sim = 反映後の想定データ。全フラグ有効で書き換えていく) ──────
   const sim = clone(snap);
@@ -1090,11 +1093,10 @@ async function cleanupDerived(sb, clientIds, beforeSets, refIds) {
 async function execute(sb, ops, { MONTH, sourceFiles, cleanupEst }) {
   const ym = MONTH.replace("-", "");
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP,
     notes: `提供 ${MONTH} / フラグ ${[...ENABLED].join(",") || "なし"}`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {
@@ -1214,6 +1216,7 @@ async function execute(sb, ops, { MONTH, sourceFiles, cleanupEst }) {
 // ── 取り消し ──────────────────────────────────────────────────────────────
 async function revert(batchId) {
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   const ready = await provenanceReady(sb);
   if (!ready.ok) { console.error(`出どころ記録の表が無い (${ready.why})。migrations/data_import_provenance.sql を先に適用すること`); process.exit(2); }
   const { data: batch, error } = await sb.from("data_import_batches").select("*").eq("id", batchId).maybeSingle();
@@ -1273,31 +1276,33 @@ async function revert(batchId) {
   for (const s of plan.skip.slice(0, 10)) console.log(`   - ${JSON.stringify(s)}`);
   console.log(`取り消しでも trigger が doc_tasks / care_plan_elements を作るので、取り消しの後に 対象 ${clientIds.size} 名ぶんを同じ方法で掃除する`);
   if (!EXECUTE) { console.log("\nDRY RUN — 何も変えていない。--execute で取り消し"); return; }
-  const beforeDerived = await snapshotDerived(sb, [...clientIds]);
-  for (const r of plan.restore) {
-    const { error: e, count } = await sb.from(r.table).update(r.patch, { count: "exact" }).eq("id", r.id);
-    if (e || count !== 1) throw new Error(`restore ${r.table} ${r.id}: ${e?.message ?? `件数 ${count}`}`);
-  }
-  const delOrder = ["order_items", "orders", "client_public_expenses", "client_insurance_records", "client_office_assignments", "clients", "equipment_price_history", "equipment_master"];
-  for (const table of delOrder) {
-    for (const c of chunks(plan.del.filter((d) => d.table === table).map((d) => d.id), 150)) {
-      const { error: e, count } = await sb.from(table).delete({ count: "exact" }).in("id", c);
-      if (e || count !== c.length) throw new Error(`delete ${table}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    const beforeDerived = await snapshotDerived(sb, [...clientIds]);
+    for (const r of plan.restore) {
+      const { error: e, count } = await sb.from(r.table).update(r.patch, { count: "exact" }).eq("id", r.id);
+      if (e || count !== 1) throw new Error(`restore ${r.table} ${r.id}: ${e?.message ?? `件数 ${count}`}`);
     }
-  }
-  for (const [table, rs] of groupBy(plan.reinsert, (r) => r.table)) for (const c of chunks(rs.map((r) => r.row), 100)) {
-    const { error: e } = await sb.from(table).insert(c);
-    if (e) throw new Error(`reinsert ${table}: ${e.message}`);
-  }
-  const deletedClients = new Set(plan.del.filter((d) => d.table === "clients").map((d) => d.id));
-  const res = await cleanupDerived(sb, [...clientIds].filter((id) => !deletedClients.has(id)), beforeDerived, refIds);
-  const bpath = join(HERE, `_backup_honobono_sync_revert_${batchId}_cleanup.json`);
-  writeFileSync(bpath, JSON.stringify(Object.fromEntries(Object.entries(res).map(([t, v]) => [t, v.mine])), null, 2));
-  for (const [t, { mine, others }] of Object.entries(res)) console.log(`  掃除 ${t}: 消した ${mine.length} / 消さなかった新しい行 ${others.length}`);
-  const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
-  const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (e3) throw new Error(`batch 更新: ${e3.message}`);
-  console.log(`\n取り消し完了 (${status})。消した ${plan.del.length} / 戻した ${plan.restore.length} / 入れ直した ${plan.reinsert.length} / 戻さなかった ${plan.skip.length} / 掃除の控え ${bpath}`);
+    const delOrder = ["order_items", "orders", "client_public_expenses", "client_insurance_records", "client_office_assignments", "clients", "equipment_price_history", "equipment_master"];
+    for (const table of delOrder) {
+      for (const c of chunks(plan.del.filter((d) => d.table === table).map((d) => d.id), 150)) {
+        const { error: e, count } = await sb.from(table).delete({ count: "exact" }).in("id", c);
+        if (e || count !== c.length) throw new Error(`delete ${table}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+      }
+    }
+    for (const [table, rs] of groupBy(plan.reinsert, (r) => r.table)) for (const c of chunks(rs.map((r) => r.row), 100)) {
+      const { error: e } = await sb.from(table).insert(c);
+      if (e) throw new Error(`reinsert ${table}: ${e.message}`);
+    }
+    const deletedClients = new Set(plan.del.filter((d) => d.table === "clients").map((d) => d.id));
+    const res = await cleanupDerived(sb, [...clientIds].filter((id) => !deletedClients.has(id)), beforeDerived, refIds);
+    const bpath = join(HERE, `_backup_honobono_sync_revert_${batchId}_cleanup.json`);
+    writeFileSync(bpath, JSON.stringify(Object.fromEntries(Object.entries(res).map(([t, v]) => [t, v.mine])), null, 2));
+    for (const [t, { mine, others }] of Object.entries(res)) console.log(`  掃除 ${t}: 消した ${mine.length} / 消さなかった新しい行 ${others.length}`);
+    const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
+    const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (e3) throw new Error(`batch 更新: ${e3.message}`);
+    console.log(`\n取り消し完了 (${status})。消した ${plan.del.length} / 戻した ${plan.restore.length} / 入れ直した ${plan.reinsert.length} / 戻さなかった ${plan.skip.length} / 掃除の控え ${bpath}`);
+  });
 }
 
 // ── batch の掃除の取りこぼしを後から消す ──────────────────────────────────
@@ -1305,6 +1310,7 @@ async function revert(batchId) {
 // doc_tasks / care_plan_elements を消す。消した行は新しい batch に op=delete・before 付きで記録する (取り消し可能)。
 async function cleanupBatch(batchId) {
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   const ready = await provenanceReady(sb);
   if (!ready.ok) { console.error(`出どころ記録の表が無い (${ready.why})`); process.exit(2); }
   const { data: batch, error } = await sb.from("data_import_batches").select("*").eq("id", batchId).maybeSingle();
@@ -1335,11 +1341,10 @@ async function cleanupBatch(batchId) {
   if (!EXECUTE) { console.log("\nDRY RUN — 何も消していない。--execute で掃除 (新しい batch に記録)"); return; }
   const total = Object.values(found).reduce((a, v) => a + v.mine.length, 0);
   if (!total) { console.log("消す行 0 件"); return; }
-  const { data: nb, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "cleanup", status: "running",
+  const nb = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "cleanup",
     notes: `batch ${batchId} の trigger 掃除の取りこぼし`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   for (const [t, { mine }] of Object.entries(found)) {
     for (const c of chunks(mine, 150)) {
       const { error: e, count } = await sb.from(t).delete({ count: "exact" }).in("id", c.map((r) => r.id));

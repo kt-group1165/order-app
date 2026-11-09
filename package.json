@@ -33,7 +33,8 @@
     "check:rental-report": "tsx scripts/rental-report-verify.mts",
     "check:write-errors": "tsx scripts/write-error-check.mts",
     "check:paging-order": "tsx scripts/paging-order-check.mts",
-    "check:attendance-excel": "tsx scripts/attendance-excel-import-check.mts"
+    "check:attendance-excel": "tsx scripts/attendance-excel-import-check.mts",
+    "check:exec-lock": "tsx scripts/exec-lock-test.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",

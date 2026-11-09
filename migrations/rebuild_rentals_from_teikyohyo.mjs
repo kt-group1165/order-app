@@ -70,6 +70,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -100,6 +101,7 @@ const UM_DIR = resolve(opt("--user-master-dir") ?? join(FUKUYOGU, "利用者マ�
 const OUT_DIR = resolve(opt("--out-dir") ?? join(tmpdir(), "teikyo-rebuild"));
 const REPO_ROOT = resolve(HERE, "../../..");
 const SCRIPT_REL = "apps/order-app/migrations/rebuild_rentals_from_teikyohyo.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP = "teikyo-rebuild";
 const MARK = "[teikyo-rebuild-20261109]";
@@ -323,6 +325,7 @@ async function main() {
 
   // DB
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   // DRY RUN は DB の読み直しを避けて控えを使える (--db-cache <json>・--refresh で読み直す)。--execute は必ず読み直す
   const CACHE = opt("--db-cache");
   let db;
@@ -710,11 +713,10 @@ async function execute(sb, ops, sourceFiles) {
     const { error } = await sb.from(t).select("id").limit(1);
     if (error) { console.error(`★ 出どころ記録の表 ${t} が無い (${error.message}) → --execute しない`); process.exit(2); }
   }
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP,
     notes: `提供票から貸与を組み直す / --remove-db-only ${REMOVE_DB_ONLY ? "あり" : "なし"}`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => { const { error } = await sb.from("data_import_batches").update({ status: "failed", notes: `失敗: ${msg}`.slice(0, 2000) }).eq("id", BATCH); if (error) console.error(`batch を failed にできない: ${error.message}`); throw new Error(msg); };

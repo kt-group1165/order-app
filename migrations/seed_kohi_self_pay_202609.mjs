@@ -22,6 +22,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -42,6 +43,7 @@ const REPO_ROOT = resolve(HERE, "../../..");
 const CSV_PATH = resolve(opt("--csv") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/公費_全件.CSV"));
 const INSURED = (opt("--insured") ?? "1000063779").split(",").map((s) => s.trim()).filter(Boolean);
 const SCRIPT_REL = "apps/order-app/migrations/seed_kohi_self_pay_202609.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "seed-kohi-self-pay";
 const TABLE = "client_public_expenses";
@@ -117,11 +119,10 @@ async function plan(sb, csv, colOk) {
 }
 
 async function execute(sb, ops) {
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
     tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [relative(REPO_ROOT, CSV_PATH).replace(/\\/g, "/")], script: SCRIPT_REL,
-    args: argv.join(" "), step: STEP_NAME, status: "running", notes: `生保の本人支払額 ${ops.length} 行 (被保番 ${INSURED.join(",")})`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+    args: argv.join(" "), step: STEP_NAME, notes: `生保の本人支払額 ${ops.length} 行 (被保番 ${INSURED.join(",")})`,
+  });
   const BATCH = batch.id;
   console.log(`batch ${BATCH}`);
   const fail = async (msg) => {
@@ -158,19 +159,22 @@ async function revert(sb, batchId) {
   const back = recs.filter((r) => cur.get(r.row_id)?.self_pay_amount === r.after.self_pay_amount);
   console.log(`${EXECUTE ? "EXECUTE" : "DRY RUN"} 戻す ${back.length} / 記録 ${recs.length} (値が変わった行・既に無い行は触らない)`);
   if (!EXECUTE) return;
-  for (const r of back) {
-    const { error, count } = await sb.from(TABLE).update({ self_pay_amount: r.before?.self_pay_amount ?? null }, { count: "exact" }).eq("id", r.row_id).eq("self_pay_amount", r.after.self_pay_amount);
-    if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
-  }
-  const status = back.length === recs.length ? "reverted" : "partially_reverted";
-  const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (error) throw new Error(`batch: ${error.message}`);
-  console.log(`取り消し完了 (${status})`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const r of back) {
+      const { error, count } = await sb.from(TABLE).update({ self_pay_amount: r.before?.self_pay_amount ?? null }, { count: "exact" }).eq("id", r.row_id).eq("self_pay_amount", r.after.self_pay_amount);
+      if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
+    }
+    const status = back.length === recs.length ? "reverted" : "partially_reverted";
+    const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (error) throw new Error(`batch: ${error.message}`);
+    console.log(`取り消し完了 (${status})`);
+  });
 }
 
 const csv = readKohiCsv(CSV_PATH);
 console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  CSV ${relative(REPO_ROOT, CSV_PATH)} / ${csv.length} 行 / 本人支払額あり ${csv.filter((k) => k.pay).length} 行 / 対象被保番 ${INSURED.join(",")}`);
 const sb = await makeSb();
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 const col = await columnExists(sb);
 if (!col.ok && (EXECUTE || REVERT)) {
   console.log(`\n★ ${col.why} — ここで止めます (DB には何も書いていません)`);

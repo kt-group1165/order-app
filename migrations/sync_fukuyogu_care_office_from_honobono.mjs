@@ -53,6 +53,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // scripts/_honobono-sync-core.mts (.mts) を読むため、tsx の下で自分自身を起動し直す (既存 sync script と同じ)
@@ -84,6 +85,7 @@ const KK_PATH = resolve(opt("--kk") ?? join(DENSOU, "202609/ほのぼのから/K
 const KDS_PATH = resolve(opt("--csv") ?? join(DENSOU, "202609/ほのぼのから/KDS0031_明細書明細付_処理R8-09.CSV"));
 const KAIGO_CSV = resolve(opt("--kaigo-csv") ?? join(DENSOU, "利用者マスタ_20261109/介護保険_全件_保険と認定.CSV"));
 const SCRIPT_REL = "apps/order-app/migrations/sync_fukuyogu_care_office_from_honobono.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "care_office";
 
@@ -386,11 +388,10 @@ async function plan(sb, { read, write }) {
 // ── 本番書込み ────────────────────────────────────────────────────────────
 async function execute(sb, ops, { MONTH, ym, sourceFiles }) {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME,
     notes: `提供 ${MONTH} / 担当居宅 / フラグ ${[FILL_EMPTY_SHARED && "fill-empty-shared", ADD_CARE_OFFICES && "add-care-offices"].filter(Boolean).join(",") || "なし"}`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {
@@ -482,23 +483,26 @@ async function revert(sb, batchId) {
   console.log(`戻す clients ${restore.length} / 消す care_offices ${del.length} / 戻さない ${skip.length}`);
   for (const s of skip.slice(0, 10)) console.log(`   - ${JSON.stringify(s)}`);
   if (!EXECUTE) { console.log("\nDRY RUN — 何も変えていない。--execute で取り消し"); return; }
-  for (const x of restore) {
-    const { error: e, count } = await sb.from("clients").update({ care_office_id: x.to }, { count: "exact" }).eq("id", x.id).eq("care_office_id", x.from);
-    if (e || count !== 1) throw new Error(`restore clients ${x.id}: ${e?.message ?? `件数 ${count}`}`);
-  }
-  for (const c of chunks(del, 150)) {
-    const { error: e, count } = await sb.from("care_offices").delete({ count: "exact" }).in("id", c);
-    if (e || count !== c.length) throw new Error(`delete care_offices: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
-  }
-  const status = skip.length ? "partially_reverted" : "reverted";
-  const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (e3) throw new Error(`batch を ${status} にできない: ${e3.message}`);
-  console.log(`取り消し完了 (${status})`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const x of restore) {
+      const { error: e, count } = await sb.from("clients").update({ care_office_id: x.to }, { count: "exact" }).eq("id", x.id).eq("care_office_id", x.from);
+      if (e || count !== 1) throw new Error(`restore clients ${x.id}: ${e?.message ?? `件数 ${count}`}`);
+    }
+    for (const c of chunks(del, 150)) {
+      const { error: e, count } = await sb.from("care_offices").delete({ count: "exact" }).in("id", c);
+      if (e || count !== c.length) throw new Error(`delete care_offices: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+    }
+    const status = skip.length ? "partially_reverted" : "reverted";
+    const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (e3) throw new Error(`batch を ${status} にできない: ${e3.message}`);
+    console.log(`取り消し完了 (${status})`);
+  });
 }
 
 // ── main ─────────────────────────────────────────────────────────────────
 async function main() {
   const sb = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   if (REVERT) return revert(sb, REVERT);
   console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"} 担当居宅の同期 (フラグ: ${[FILL_EMPTY_SHARED && "--fill-empty-shared", ADD_CARE_OFFICES && "--add-care-offices"].filter(Boolean).join(" ") || "なし"})`);
   if (EXECUTE) {

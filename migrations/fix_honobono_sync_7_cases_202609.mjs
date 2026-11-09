@@ -52,6 +52,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -84,6 +85,7 @@ const REPO_ROOT = resolve(HERE, "../../..");
 const CSV_PATH = join(DENSOU, "202609/ほのぼのから/KDS0031_明細書明細付_処理R8-09.CSV");
 const UM_DIR = join(DENSOU, "利用者マスタ_20261109");
 const SCRIPT_REL = "apps/order-app/migrations/fix_honobono_sync_7_cases_202609.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "fix7";
 
@@ -285,6 +287,7 @@ async function main() {
   const officeName = new Map(snap.offices.map((o) => [o.id, o.name]));
   log(`事業所: ${office.name} (${OFFICE})`);
   const { sb, env } = await makeSb();
+  if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
   const careOfficeByNo = groupBy(snap.careOffices.filter((c) => c.office_number), (c) => nfkc(c.office_number));
   const careOfficeByName = groupBy(snap.careOffices, (c) => nName(c.name));
   const careOfficeFor = (cert, kdsNo) => {
@@ -661,11 +664,10 @@ async function cleanupDerived(sb, clientIds, beforeSets, refIds) {
 async function execute(sb, writes, observes, { MONTH, sourceFiles }) {
   const ym = MONTH.replace("-", "");
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: sourceFiles, script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME,
     notes: `提供 ${MONTH} / 同期で落ちた 7 件の個別是正 (user 合意 2026-11-09)`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {

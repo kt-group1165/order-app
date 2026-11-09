@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -36,11 +37,13 @@ const REVERT = opt("--revert");
 const KK_PATH = resolve(opt("--kk") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/202609/ほのぼのから/KK261004.CSV"));
 const MONTH_START = "2026-09-01", MONTH_END = "2026-09-30";
 const SCRIPT_REL = "apps/order-app/migrations/fix_shared_benefit_rate_contradiction.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const chunks = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
 
 const env = readEnv();
 const { createClient } = await import("@supabase/supabase-js");
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 async function selectAll(table, select, build) {
   const out = [];
   for (let from = 0; ; from += 1000) {
@@ -60,13 +63,15 @@ if (REVERT) {
   const recs = await selectAll("data_import_rows", "*", (q) => q.eq("batch_id", REVERT));
   console.log(`${EXECUTE ? "EXECUTE" : "DRY RUN"} 取り消し ${recs.length} 行`);
   if (EXECUTE) {
-    for (const r of recs) {
-      const { error, count } = await sb.from("clients").update(r.before, { count: "exact" }).eq("id", r.row_id)
-        .eq("benefit_rate", r.after.benefit_rate);
-      if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
-    }
-    const { error } = await sb.from("data_import_batches").update({ status: "reverted", reverted_at: new Date().toISOString() }).eq("id", REVERT);
-    if (error) throw new Error(error.message);
+    await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: "honobono-fukuyogu", source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${REVERT} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+      for (const r of recs) {
+        const { error, count } = await sb.from("clients").update(r.before, { count: "exact" }).eq("id", r.row_id)
+          .eq("benefit_rate", r.after.benefit_rate);
+        if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
+      }
+      const { error } = await sb.from("data_import_batches").update({ status: "reverted", reverted_at: new Date().toISOString() }).eq("id", REVERT);
+      if (error) throw new Error(error.message);
+    });
   }
   process.exit(0);
 }
@@ -98,11 +103,10 @@ console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  KK ${kk.size} 名中 DB 
 for (const o of ops) console.log(`  - ${o.name}: clients 給付率 ${o.before.benefit_rate}/負担 ${o.before.copay_rate} → ${o.after.benefit_rate}/${o.after.copay_rate} (認定行・KK とも ${o.kk})`);
 if (!EXECUTE || !ops.length) process.exit(0);
 
-const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
+const batch = await execLockAcquire(sb, EXEC_LOCK, {
   tenant_id: TENANT, source_system: "honobono-fukuyogu", source_files: ["apps/kaigo-app/伝送データ/ケアサポ/福祉用具/202609/ほのぼのから/KK261004.CSV"],
-  script: SCRIPT_REL, args: argv.join(" "), step: "fix-benefit-rate-contradiction", status: "running", notes: `clients.benefit_rate が認定行と矛盾 ${ops.length} 名`,
-}).select("id").single();
-if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  script: SCRIPT_REL, args: argv.join(" "), step: "fix-benefit-rate-contradiction", notes: `clients.benefit_rate が認定行と矛盾 ${ops.length} 名`,
+});
 writeFileSync(join(HERE, `_backup_fix_benefit_rate_${new Date().toISOString().replace(/[:.]/g, "-")}.json`), JSON.stringify({ batch: batch.id, ops }, null, 2));
 for (const o of ops) {
   let q = sb.from("clients").update(o.after, { count: "exact" }).eq("id", o.id).eq("tenant_id", TENANT);

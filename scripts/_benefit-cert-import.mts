@@ -14,6 +14,7 @@ import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBenefitCsv, nInsurer, nInsured, type BenefitCsvEntry } from "./_benefit-cert-csv.mjs";
+import { execLockStart, execLockAcquire, execLockRun } from "../migrations/_exec_lock.mjs";
 
 export const TENANT = "kt-group";
 const TABLE = "client_benefit_certificates";
@@ -78,6 +79,8 @@ export async function runBenefitCertImport(cfg: ImportConfig): Promise<void> {
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("kaigo-app/.env.local に SUPABASE_URL / SERVICE_ROLE_KEY が無い");
   const { createClient } = await import("@supabase/supabase-js");
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  // 同じ script (cfg.scriptRel) の同時 --execute を止める (../migrations/_exec_lock.mjs)。★ 計画の DB 読みより前
+  const lock = EXECUTE ? await execLockStart(sb, { script: cfg.scriptRel, argv }) : null;
 
   // ── 取り消し ─────────────────────────────────────────────────────────────
   if (REVERT) {
@@ -87,13 +90,15 @@ export async function runBenefitCertImport(cfg: ImportConfig): Promise<void> {
     console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"} 取り消し batch ${REVERT}: 記録 ${recs.length} 行 / うち ${TABLE} の insert ${ins.length} 行 (現存 ${still.length} 行) を DELETE`);
     if (!EXECUTE) { console.log("  (DRY RUN。実行は --execute)"); return; }
     let n = 0;
-    for (const c of chunks(still.map((r) => r.id), 150)) {
-      const { error, count } = await sb.from(TABLE).delete({ count: "exact" }).in("id", c);
-      if (error) throw new Error(`revert delete: ${error.message}`);
-      n += count ?? 0;
-    }
-    const { error } = await sb.from("data_import_batches").update({ status: n === ins.length ? "reverted" : "partially_reverted", reverted_at: new Date().toISOString() }).eq("id", REVERT);
-    if (error) throw new Error(`data_import_batches: ${error.message}`);
+    await execLockRun(sb, lock, { tenant_id: TENANT, source_system: cfg.sourceSystem, source_files: [], script: cfg.scriptRel, args: argv.join(" "), step: "revert-lock", notes: `batch ${REVERT} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+      for (const c of chunks(still.map((r) => r.id), 150)) {
+        const { error, count } = await sb.from(TABLE).delete({ count: "exact" }).in("id", c);
+        if (error) throw new Error(`revert delete: ${error.message}`);
+        n += count ?? 0;
+      }
+      const { error } = await sb.from("data_import_batches").update({ status: n === ins.length ? "reverted" : "partially_reverted", reverted_at: new Date().toISOString() }).eq("id", REVERT);
+      if (error) throw new Error(`data_import_batches: ${error.message}`);
+    });
     console.log(`  削除 ${n} 行 / 記録 ${ins.length} 行`);
     console.log(`  確認 SQL: SELECT count(*) FROM ${TABLE} WHERE notes LIKE '%${cfg.marker}%';`);
     return;
@@ -203,12 +208,11 @@ export async function runBenefitCertImport(cfg: ImportConfig): Promise<void> {
   if (!tableExists) { console.error("★ 表が未作成なので止める"); process.exit(2); }
   if (ambiguousPeople.size > 0) console.log(`  (複数に当たる ${ambiguousPeople.size} 名は入れずに進める)`);
 
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
+  const batch = await execLockAcquire(sb, lock, {
     tenant_id: TENANT, source_system: cfg.sourceSystem,
     source_files: [cfg.futanCsv, ...cfg.kaigoInsCsvs].map((p) => ({ path: p, sha256: sha256(p) })),
-    script: cfg.scriptRel, args: argv.join(" "), step: "benefit_certificates", status: "running", notes: cfg.marker,
-  }).select("id").single();
-  if (bErr || !batch) throw new Error(`data_import_batches: ${bErr?.message}`);
+    script: cfg.scriptRel, args: argv.join(" "), step: "benefit_certificates", notes: cfg.marker,
+  }) as { id: string };
   let written = 0;
   try {
     for (const part of chunks(toInsert, 200)) {

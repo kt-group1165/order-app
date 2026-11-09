@@ -21,6 +21,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -40,6 +41,7 @@ const REVERT = opt("--revert");
 const REPO_ROOT = resolve(HERE, "../../..");
 const KK_PATH = resolve(opt("--kk") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/202609/ほのぼのから/KK261004.CSV"));
 const SCRIPT_REL = "apps/order-app/migrations/seed_fukuyogu_cm_units_202609.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "seed-fukuyogu-cm-units";
 const CAPASAPO_OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
@@ -133,11 +135,10 @@ async function plan(sb, capped, tableOk) {
 }
 
 async function execute(sb, ops) {
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
     tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [relative(REPO_ROOT, KK_PATH).replace(/\\/g, "/")], script: SCRIPT_REL,
-    args: argv.join(" "), step: STEP_NAME, status: "running", notes: `福祉用具 CM 指示単位数の初期値 ${ops.length} 名 (KK 10 項9 < 項10)`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+    args: argv.join(" "), step: STEP_NAME, notes: `福祉用具 CM 指示単位数の初期値 ${ops.length} 名 (KK 10 項9 < 項10)`,
+  });
   const BATCH = batch.id;
   console.log(`batch ${BATCH}`);
   const fail = async (msg) => {
@@ -173,20 +174,23 @@ async function revert(sb, batchId) {
   const back = recs.filter((r) => cur.get(r.row_id)?.units === r.after.units);
   console.log(`${EXECUTE ? "EXECUTE" : "DRY RUN"} 消す ${back.length} / 記録 ${recs.length} (値が変わった行・既に無い行は触らない)`);
   if (!EXECUTE) return;
-  for (const r of back) {
-    const { error, count } = await sb.from(TABLE).delete({ count: "exact" }).eq("id", r.row_id).eq("units", r.after.units);
-    if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
-  }
-  const status = back.length === recs.length ? "reverted" : "partially_reverted";
-  const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (error) throw new Error(`batch: ${error.message}`);
-  console.log(`取り消し完了 (${status})`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const r of back) {
+      const { error, count } = await sb.from(TABLE).delete({ count: "exact" }).eq("id", r.row_id).eq("units", r.after.units);
+      if (error || count !== 1) throw new Error(`revert ${r.row_id}: ${error?.message ?? `件数 ${count}`}`);
+    }
+    const status = back.length === recs.length ? "reverted" : "partially_reverted";
+    const { error } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (error) throw new Error(`batch: ${error.message}`);
+    console.log(`取り消し完了 (${status})`);
+  });
 }
 
 const { capped, n10 } = readCapped(KK_PATH);
 console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  KK ${relative(REPO_ROOT, KK_PATH)} / 集計レコード ${n10} / 頭打ち (項9 < 項10) ${capped.length} 名`);
 for (const k of capped) console.log(`  KK ${k.form} ${k.insurerRaw}|${k.insuredRaw}  計画 ${k.plan} / 実績 ${k.limit} (超過 ${k.limit - k.plan})`);
 const sb = await makeSb();
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 const t = await tableExists(sb);
 if (!t.ok && (EXECUTE || REVERT)) {
   console.log(`\n★ ${t.why} — ここで止めます (DB には何も書いていません)`);

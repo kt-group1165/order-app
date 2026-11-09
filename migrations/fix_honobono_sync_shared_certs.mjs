@@ -42,6 +42,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // lib の .ts を読むため tsx の下で自分自身を起動し直す (sync script と同じ)
@@ -72,6 +73,7 @@ const MARK = "[honobono-sync-202609]";
 const SOURCE_SYSTEM_SYNC = "honobono-fukuyogu";
 const SOURCE_SYSTEM = "honobono-fukuyogu-fix-shared-certs";
 const SCRIPT_REL = "apps/order-app/migrations/fix_honobono_sync_shared_certs.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const CARE_SUPO = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
 const KAIGO_FROM = "2026-06-01"; // kaigo の検証範囲 (2026-06〜11) の先頭。これより前だけの端のずれは 削除候補 に入れる
 const OA_MONTH = ["2026-09-01", "2026-09-30"]; // order-app 福祉用具 の検証月 (KK261004)
@@ -348,11 +350,10 @@ function printPlan(p) {
 
 // ── 本番 ──────────────────────────────────────────────────────────────────
 async function execute(sb, p, fill) {
-  const { data: batch, error: bErr } = await sb.from("data_import_batches").insert({
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: STEP, status: "running",
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: STEP,
     notes: `honobono-sync-202609 の後始末 (copay 補完 / 共有の重複認定の削除)`,
-  }).select("id").single();
-  if (bErr) throw new Error(`data_import_batches: ${bErr.message}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {
@@ -432,41 +433,44 @@ async function revert(sb, batchId) {
   }
   console.log(`戻す 認定 (copay_rate → null) ${restore.length} / clients (copay_rate → 元の値) ${restoreC.length} / 入れ直す ${reinsert.length} / 戻さない ${skip.length} ${JSON.stringify(countBy(skip, (s) => s.why))}`);
   if (!EXECUTE) { console.log("DRY RUN — 何も変えていない"); return; }
-  for (const c of chunks(restore, 150)) {
-    const { error: e, count } = await sb.from("client_insurance_records").update({ copay_rate: null }, { count: "exact" }).in("id", c);
-    if (e || count !== c.length) throw new Error(`restore: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
-  }
-  for (const r of restoreC) {
-    const { error: e, count } = await sb.from("clients").update({ copay_rate: r.before?.copay_rate ?? null }, { count: "exact" }).eq("id", r.row_id);
-    if (e || count !== 1) throw new Error(`restore clients ${r.row_id}: ${e?.message ?? `件数 ${count}`}`);
-  }
-  // 入れ直しは INSERT → trigger が派生行を作る。入れ直した行を参照するものだけ消す
-  const clientIds = [...new Set(reinsert.map((r) => r.client_id))];
-  const beforeSets = {};
-  for (const [t] of DERIVED) beforeSets[t] = new Set((await selectIn(sb, t, "id", "client_id", clientIds, (q) => q.eq("tenant_id", TENANT))).map((r) => r.id));
-  reinsert.sort((a, b) => (a.certification_start_date ?? "").localeCompare(b.certification_start_date ?? ""));
-  for (const row of reinsert) { // trigger が「直前の行」を見るので 1 行ずつ・古い順
-    const { error: e } = await sb.from("client_insurance_records").insert(row);
-    if (e) throw new Error(`reinsert ${row.id}: ${e.message}`);
-  }
-  const refIds = new Set(reinsert.map((r) => r.id));
-  for (const [t, refCol] of DERIVED) {
-    const fresh = (await selectIn(sb, t, "*", "client_id", clientIds, (q) => q.eq("tenant_id", TENANT))).filter((r) => !beforeSets[t].has(r.id));
-    const mine = fresh.filter((r) => refIds.has(r[refCol]));
-    for (const c of chunks(mine.map((r) => r.id), 150)) {
-      const { error: e, count } = await sb.from(t).delete({ count: "exact" }).in("id", c);
-      if (e || count !== c.length) throw new Error(`掃除 ${t}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const c of chunks(restore, 150)) {
+      const { error: e, count } = await sb.from("client_insurance_records").update({ copay_rate: null }, { count: "exact" }).in("id", c);
+      if (e || count !== c.length) throw new Error(`restore: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
     }
-    console.log(`  掃除 ${t}: 消した ${mine.length} / 消さなかった新しい行 ${fresh.length - mine.length}`);
-  }
-  const status = skip.length ? "partially_reverted" : "reverted";
-  const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (e3) throw new Error(`batch 更新: ${e3.message}`);
-  console.log(`取り消し完了 (${status})`);
+    for (const r of restoreC) {
+      const { error: e, count } = await sb.from("clients").update({ copay_rate: r.before?.copay_rate ?? null }, { count: "exact" }).eq("id", r.row_id);
+      if (e || count !== 1) throw new Error(`restore clients ${r.row_id}: ${e?.message ?? `件数 ${count}`}`);
+    }
+    // 入れ直しは INSERT → trigger が派生行を作る。入れ直した行を参照するものだけ消す
+    const clientIds = [...new Set(reinsert.map((r) => r.client_id))];
+    const beforeSets = {};
+    for (const [t] of DERIVED) beforeSets[t] = new Set((await selectIn(sb, t, "id", "client_id", clientIds, (q) => q.eq("tenant_id", TENANT))).map((r) => r.id));
+    reinsert.sort((a, b) => (a.certification_start_date ?? "").localeCompare(b.certification_start_date ?? ""));
+    for (const row of reinsert) { // trigger が「直前の行」を見るので 1 行ずつ・古い順
+      const { error: e } = await sb.from("client_insurance_records").insert(row);
+      if (e) throw new Error(`reinsert ${row.id}: ${e.message}`);
+    }
+    const refIds = new Set(reinsert.map((r) => r.id));
+    for (const [t, refCol] of DERIVED) {
+      const fresh = (await selectIn(sb, t, "*", "client_id", clientIds, (q) => q.eq("tenant_id", TENANT))).filter((r) => !beforeSets[t].has(r.id));
+      const mine = fresh.filter((r) => refIds.has(r[refCol]));
+      for (const c of chunks(mine.map((r) => r.id), 150)) {
+        const { error: e, count } = await sb.from(t).delete({ count: "exact" }).in("id", c);
+        if (e || count !== c.length) throw new Error(`掃除 ${t}: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+      }
+      console.log(`  掃除 ${t}: 消した ${mine.length} / 消さなかった新しい行 ${fresh.length - mine.length}`);
+    }
+    const status = skip.length ? "partially_reverted" : "reverted";
+    const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (e3) throw new Error(`batch 更新: ${e3.message}`);
+    console.log(`取り消し完了 (${status})`);
+  });
 }
 
 // ── main ──────────────────────────────────────────────────────────────────
 const sb = await makeSb();
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 const ready = await provenanceReady(sb);
 if (!ready.ok) { console.error(`出どころ記録の表が無い (${ready.why})`); process.exit(2); }
 if (REVERT) { await revert(sb, REVERT); process.exit(0); }

@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // lib の .ts を読むため tsx の下で自分自身を起動し直す (sync_fukuyogu_from_honobono.mjs と同じ)
@@ -61,6 +62,7 @@ const PAYROLL_OFFICE_ID = "31614965-3b87-4c3b-901c-6e408cd89b96"; // ケアサ�
 const TABLE = "payroll_kyotaku_attendance_records";
 const SOURCE_SYSTEM = "pdf-attendance-caresupport";
 const SCRIPT_REL = "apps/order-app/migrations/import_attendance_pdf_202609_10.mjs";
+let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const MONTHS = ["2026-09", "2026-10"];
 const DEFAULT_JSON =
   "C:/Users/domen-PC/AppData/Local/Temp/claude/86e0579a1baf6b3b/125aee8c-5732-4f4c-913b-d7baace40828/scratchpad/att/pdf/attendance_2026-09_10.json";
@@ -115,6 +117,7 @@ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= ENV.NEXT_PUBLIC_SUPABASE_ANON_KEY 
 const { toRecord } = await import("../lib/attendance");
 const { createClient } = await import("@supabase/supabase-js");
 const sb = createClient(ENV.NEXT_PUBLIC_SUPABASE_URL, ENV.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 
 // ── 小道具 ────────────────────────────────────────────────────────────────
 const chunks = (arr, n) => {
@@ -392,9 +395,7 @@ async function execute(plan) {
   }
   const jsonBuf = readFileSync(JSON_PATH);
   const pdfs = [...new Set(plan.src.employees.map((e) => e.source?.file).filter(Boolean))];
-  const { data: batch, error: bErr } = await sb
-    .from("data_import_batches")
-    .insert({
+  const batch = await execLockAcquire(sb, EXEC_LOCK, {
       tenant_id: TENANT,
       source_system: SOURCE_SYSTEM,
       source_files: [
@@ -404,12 +405,8 @@ async function execute(plan) {
       script: SCRIPT_REL,
       args: argv.join(" "),
       step: "attendance",
-      status: "running",
       notes: `ケアサポ 出勤簿 ${MONTHS.join(",")}`,
-    })
-    .select("id")
-    .single();
-  if (bErr || !batch) throw new Error(`data_import_batches: ${bErr?.message ?? "id が返らない"}`);
+  });
   const BATCH = batch.id;
   console.log(`\nbatch ${BATCH}`);
   const fail = async (msg) => {
@@ -504,18 +501,20 @@ async function revert(batchId) {
     console.log("\nDRY RUN — 何も変えていない。--execute で取り消し");
     return;
   }
-  for (const r of plan.restore) {
-    const { error: e, count } = await sb.from(TABLE).update(r.patch, { count: "exact" }).eq("id", r.id);
-    if (e || count !== 1) throw new Error(`restore ${r.id}: ${e?.message ?? `件数 ${count}`}`);
-  }
-  for (const c of chunks(plan.del, 150)) {
-    const { error: e, count } = await sb.from(TABLE).delete({ count: "exact" }).in("id", c);
-    if (e || count !== c.length) throw new Error(`delete: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
-  }
-  const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
-  const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
-  if (e3) throw new Error(`batch 更新: ${e3.message}`);
-  console.log(`\n取り消し完了 (${status})。消した ${plan.del.length} / 戻した ${plan.restore.length} / 戻さなかった ${plan.skip.length}`);
+  await execLockRun(sb, EXEC_LOCK, { tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert-lock", notes: `batch ${batchId} の取り消し (同時実行ロック用。行の記録はしない)` }, async () => {
+    for (const r of plan.restore) {
+      const { error: e, count } = await sb.from(TABLE).update(r.patch, { count: "exact" }).eq("id", r.id);
+      if (e || count !== 1) throw new Error(`restore ${r.id}: ${e?.message ?? `件数 ${count}`}`);
+    }
+    for (const c of chunks(plan.del, 150)) {
+      const { error: e, count } = await sb.from(TABLE).delete({ count: "exact" }).in("id", c);
+      if (e || count !== c.length) throw new Error(`delete: ${e?.message ?? `件数 ${count} ≠ ${c.length}`}`);
+    }
+    const status = plan.skip.some((s) => s.why !== "既に無い") ? "partially_reverted" : "reverted";
+    const { error: e3 } = await sb.from("data_import_batches").update({ status, reverted_at: new Date().toISOString() }).eq("id", batchId);
+    if (e3) throw new Error(`batch 更新: ${e3.message}`);
+    console.log(`\n取り消し完了 (${status})。消した ${plan.del.length} / 戻した ${plan.restore.length} / 戻さなかった ${plan.skip.length}`);
+  });
 }
 
 // ── main ──────────────────────────────────────────────────────────────────
