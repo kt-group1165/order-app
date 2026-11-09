@@ -475,7 +475,8 @@ export default function AttendanceExcelImportModal({
                   if (p.blocked) notes.push(p.blocked);
                   if (p.submitted) notes.push("提出済みの月 (上書きすると本人の提出内容が変わります)");
                   if (p.emp.kind === "existing" && p.emp.retired) notes.push("退職者の職員に入ります");
-                  if (p.sheet.warnings.length) notes.push(`読み取りの注意 ${p.sheet.warnings.length} 件`);
+                  // 件数だけでは何のことか分からないので、注意の本文をそのまま並べる
+                  notes.push(...p.sheet.warnings);
                   const result = results?.find((r) => r.sheetName === key);
                   return (
                     <Fragment key={key}>
@@ -525,7 +526,7 @@ export default function AttendanceExcelImportModal({
                         <td className="px-2 py-1 text-right tabular-nums text-gray-500">
                           {p.entries.length > 0 && excelMin !== null ? formatHM(p.appOvertime - excelMin) : ""}
                         </td>
-                        <td className="px-2 py-1 truncate max-w-[18rem]" title={notes.join("\n")}>
+                        <td className="px-2 py-1 max-w-[28rem] whitespace-normal break-words text-xs" title={notes.join("\n")}>
                           {result ? (
                             result.ok ? (
                               <span className="text-emerald-700">反映済み {result.written} 日{result.message ? ` (${result.message})` : ""}</span>
