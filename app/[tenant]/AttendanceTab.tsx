@@ -198,8 +198,11 @@ export default function AttendanceTab({
   tenantId,
   currentOfficeId,
   onDirtyChange,
+  initialView,
 }: {
   tenantId: string;
+  /** 直リンク (?tab=attendance&view=overtime) で開いたときは残業集計から表示する */
+  initialView?: "input" | "summary";
   /** app 全体で選択中の共通 office id。出勤簿タブ内 dropdown の初期選択にだけ使う */
   currentOfficeId: string | null;
   /** 未保存の入力件数を親に通知 (タブ離脱時の警告に使う) */
@@ -722,7 +725,7 @@ export default function AttendanceTab({
   const [showUrlModal, setShowUrlModal] = useState(false);
 
   // ─── 残業集計 (職員 × 月) ───────────────────────────────────────────
-  const [view, setView] = useState<"input" | "summary">("input");
+  const [view, setView] = useState<"input" | "summary">(initialView ?? "input");
   if (view === "summary") {
     return (
       <AttendanceSummaryView

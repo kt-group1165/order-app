@@ -166,6 +166,14 @@ export default function TenantPage({
 
   const urlOfficeId = searchParams.get("office");
   const [activeTab, setActiveTab] = useState<Tab>("home");
+  // 直リンク: ?tab=attendance&view=overtime で 出勤簿の残業集計を直接開く (管理者に URL を渡す用)。
+  // 静的プリレンダでは初期値に URL を読めないので、マウント後に反映する
+  const urlTab = searchParams.get("tab");
+  const urlView = searchParams.get("view");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL パラメータの初回反映
+    if (urlTab === "attendance") setActiveTab("attendance");
+  }, [urlTab]);
   const [tenantName, setTenantName] = useState(tenantId);
   const [ordersDirty, setOrdersDirty] = useState(false);
   // 出勤簿タブの未保存件数 (0 = 変更なし)。タブ離脱時の警告に使う
@@ -281,7 +289,7 @@ export default function TenantPage({
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "overtime" && <OvertimeTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
-        {activeTab === "attendance" && <AttendanceTab tenantId={tenantId} currentOfficeId={currentOfficeId} onDirtyChange={setAttendanceDirty} />}
+        {activeTab === "attendance" && <AttendanceTab tenantId={tenantId} currentOfficeId={currentOfficeId} onDirtyChange={setAttendanceDirty} initialView={urlTab === "attendance" && urlView === "overtime" ? "summary" : undefined} />}
         {activeTab === "renovation" && <RenovationTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "notifications" && <NotificationsTab currentOfficeId={currentOfficeId} />}
         {activeTab === "meeting-notes" && <MeetingNotesTab tenantId={tenantId} currentOfficeId={currentOfficeId} currentOfficeName={currentOfficeName} officeViewAll={officeViewAll} />}
