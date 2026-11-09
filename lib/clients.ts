@@ -37,6 +37,35 @@ export async function getClients(
       if (data.length < PAGE) break;
       from += PAGE;
     }
+    // ★ 2026-11-10: 事業所で絞るときは client_office_assignments (junction) で割り当てられた利用者も含める。
+    //   kaigo と共有の利用者は clients.office_id が空 (または kaigo 側の事業所) のことがあり、
+    //   office_id だけで絞ると ケアサポの貸与があるのに請求画面に出ず 請求漏れになる
+    //   (2026-10 で 18 名。川名正子・富田行良・在原一善 ほか。CLAUDE.md §3.1)。
+    //   終了した割当も含める (office_id で絞る側も元利用者を含むのと揃える。過去月の請求・過誤で要る)。
+    if (opts.officeId) {
+      const have = new Set(all.map((c) => c.id));
+      const assigned: string[] = [];
+      for (let f = 0; ; f += PAGE) {
+        const { data, error } = await supabase
+          .from("client_office_assignments")
+          .select("client_id")
+          .eq("office_id", opts.officeId)
+          .order("id").range(f, f + PAGE - 1);
+        if (error) throw error;
+        for (const r of data ?? []) if (r.client_id && !have.has(r.client_id)) assigned.push(r.client_id);
+        if (!data || data.length < PAGE) break;
+      }
+      const extraIds = [...new Set(assigned)];
+      for (let i = 0; i < extraIds.length; i += 150) {
+        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).in("id", extraIds.slice(i, i + 150));
+        if (opts.onlyDeleted) q = q.not("deleted_at", "is", null);
+        else if (!opts.includeDeleted) q = q.is("deleted_at", null);
+        const { data, error } = await q;
+        if (error) throw error;
+        all.push(...(data ?? []));
+      }
+      if (extraIds.length) all.sort((a, b) => (a.furigana ?? "￿").localeCompare(b.furigana ?? "￿", "ja"));
+    }
     return all;
   };
   if (opts.bypassCache) return fetcher();

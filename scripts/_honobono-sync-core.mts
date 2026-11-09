@@ -59,7 +59,9 @@ export type Snapshot = {
   fetchedAt: string; month: string;
   offices: OfficeRow[]; clients: ClientRow[]; ins: InsRow[]; kohi: KohiRow[]; orders: OrderRow[]; items: ItemRow[];
   equipment: EqRow[]; priceHist: PriceHist[]; hosp: HospRow[]; overrides: OverrideRow[]; late: LateRow[]; careOffices: CareOfficeRow[];
+  coa?: CoaRow[]; // 2026-11-10 追加 (古いキャッシュには無い → --refresh)
 };
+export type CoaRow = { id: string; client_id: string; office_id: string; end_date: string | null };
 
 // ── CSV ───────────────────────────────────────────────────────────────────
 export function parseCsvLine(line: string): string[] {
@@ -204,6 +206,7 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
     overrides: await all<OverrideRow>("billing_unit_overrides", "id,client_id,month,order_item_id,units_override", ["month", month]),
     late: await all<LateRow>("billing_late_flags", "id,client_id,month", ["month", month]),
     careOffices: await all<CareOfficeRow>("care_offices", "id,office_number,name"),
+    coa: await all<CoaRow>("client_office_assignments", "id,client_id,office_id,end_date"),
   };
   // 0 件は偽陰性を疑う (列名ミスなら上で error になるが、tenant 違い等で 0 になりうる)
   for (const k of ["clients", "ins", "orders", "items", "equipment"] as const) {
@@ -290,7 +293,9 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
     k.hohei_code && !(k.valid_start && k.valid_start > monthEndS) && !(k.valid_end && k.valid_end < monthStartS)) ?? null;
 
   // ── DB 側の当月請求対象を組む ────────────────────────────────────────
-  const officeClients = new Set(snap.clients.filter((c) => c.office_id === officeId && !c.deleted_at).map((c) => c.id));
+  // ★ 2026-11-10: アプリ (lib/clients.ts getClients) と同じく junction の割当も含める
+  const assignedIds = new Set((snap.coa ?? []).filter((a) => a.office_id === officeId).map((a) => a.client_id));
+  const officeClients = new Set(snap.clients.filter((c) => (c.office_id === officeId || assignedIds.has(c.id)) && !c.deleted_at).map((c) => c.id));
   const dbLines = new Map<string, DbLine[]>(); // client_id → 請求に乗る明細
   const dbSkipped = new Map<string, DbLine[]>(); // 有効だが請求に乗らない明細
   const activeOtherScope = new Map<string, { itemId: string; tais: string; why: string }[]>(); // 他事業所 / clients 側で落ちる

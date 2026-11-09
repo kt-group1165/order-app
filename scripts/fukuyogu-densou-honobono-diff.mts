@@ -409,7 +409,7 @@ async function main() {
     const c = clientById.get(cids[0])!;
     const exn = { ...ex, 氏名: c.name, client_id: c.id };
     if (c.deleted_at) why.add("ほのぼのだけ: 利用者が削除済み", exn);
-    else if (c.office_id !== office.id) why.add("ほのぼのだけ: clients.office_id が別事業所", { ...exn, office_id: c.office_id });
+    else if (!model.officeClients.has(c.id)) why.add("ほのぼのだけ: clients.office_id が別事業所で割当も無い", { ...exn, office_id: c.office_id });
     else if (model.noCareLevel.has(c.id)) why.add("ほのぼのだけ: 新システムは要介護度をコードにできず (当月に有効な認定なし 等) 月遅れ扱いで伝送から外す", exn);
     else if (isLate(c.id)) why.add("ほのぼのだけ: 月遅れ扱い (認定 申請中 / 月遅れフラグ) で伝送から外れる", exn);
     else if (model.dbSkipped.has(c.id) && !dbLines.has(c.id)) why.add("ほのぼのだけ: 貸与はあるが請求に乗らない (単位 0 / サービスコード不明)", { ...exn, 理由: model.dbSkipped.get(c.id)!.map((l) => l.skipped) });
