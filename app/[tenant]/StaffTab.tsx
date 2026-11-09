@@ -10,6 +10,12 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
   const [includeInactive, setIncludeInactive] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState({ display_name: "", login_id: "", role: "member" as "member" | "office_admin" });
+  // 招待の氏名と空白を除いて一致する既存職員 (1 名に決まるときだけ)
+  const normStaffName = (v: string) => v.replace(/[\s　]/g, "");
+  const inviteMatches = inviteForm.display_name.trim()
+    ? members.filter((m) => normStaffName(m.name ?? "") === normStaffName(inviteForm.display_name))
+    : [];
+  const matchedInviteMember = inviteMatches.length === 1 ? inviteMatches[0] : null;
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState<{ invite_url: string; initial_password: string; login_id: string } | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -115,6 +121,8 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
     }
     setInviting(true);
     try {
+      // 既存の職員と同じ氏名なら その member に紐付ける (付けないと consume 時に同名の職員がもう 1 人作られる)
+      const linkMember = matchedInviteMember;
       const res = await fetch("/api/staff/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -123,6 +131,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
           login_id: inviteForm.login_id.trim() || undefined,
           role: inviteForm.role,
           office_id: currentOfficeId,
+          member_id: linkMember?.id,
         }),
       });
       const json = await res.json();
@@ -240,9 +249,14 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
                       onChange={(e) => setInviteForm((f) => ({ ...f, display_name: e.target.value }))}
                       className="w-full border border-gray-300 rounded px-2 py-1"
                     />
+                    {matchedInviteMember ? (
+                      <p className="text-[11px] text-emerald-700 mt-1">既存の職員「{matchedInviteMember.name}{matchedInviteMember.role ? ` (${matchedInviteMember.role})` : ""}」に紐付けて発行します</p>
+                    ) : inviteForm.display_name.trim() ? (
+                      <p className="text-[11px] text-gray-500 mt-1">一覧に同じ氏名の職員がいないため、新しい職員として作られます</p>
+                    ) : null}
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">ログイン ID (任意、空欄なら自動派生)</label>
+                    <label className="text-xs text-gray-600">ログイン ID (英小文字・数字。漢字の氏名からは作れないので入力してください 例: yarita)</label>
                     <input
                       value={inviteForm.login_id}
                       onChange={(e) => setInviteForm((f) => ({ ...f, login_id: e.target.value }))}
