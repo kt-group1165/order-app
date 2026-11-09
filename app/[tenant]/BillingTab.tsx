@@ -24,8 +24,9 @@ import {
 } from "@/lib/billing";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
-import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
+import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
+import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectInChunks } from "@/lib/inChunks";
@@ -783,7 +784,11 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           preWarnings.push(`${client.name}: 種目「${eq?.category ?? "未設定"}」(${eq?.name ?? item.product_code}) の福祉用具貸与サービスコードが不明です`);
           continue;
         }
-        details.push({ serviceCode: code, unitPer, count, units });
+        details.push({
+          serviceCode: code, unitPer, count, units,
+          days: fukuyoguRentalDaysInMonth(item.rental_start_date, item.rental_end_date, billingMonth),
+          taisCode: eq?.tais_code ?? null,
+        });
         totalUnits += units;
         ceilingLines.push({
           id: item.id,
@@ -841,9 +846,8 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         insuredNumber: client.insured_number ?? null,
         birthDate: client.birth_date,
         gender: client.gender,
-        careLevel: client.care_level,
-        certStart: client.certification_start_date,
-        certEnd: client.certification_end_date,
+        // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
+        ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
         careOfficeNumber: careOffice?.office_number ?? null,
         copayRate,
         details,
@@ -856,6 +860,8 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         kohiJukyusha: kohi?.jukyusha ?? null,
         kohiAmount,
         kohiTandoku: amt.kohiTandoku,
+        // 開始年月日・中止年月日 (7131/7132-01 項21/22) は渡さない — order_items.rental_start_date が
+        //   移行時の仮の日付 (2026-04-01 / 09-01) のため。build.ts の serviceStartDate の注記を参照
       });
     }
 
@@ -1123,7 +1129,11 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
             allWarnings.push(`[${ym}] ${client.name}: 種目「${eq?.category ?? "未設定"}」のサービスコードが不明です`);
             continue;
           }
-          details.push({ serviceCode: code, unitPer, count, units });
+          details.push({
+            serviceCode: code, unitPer, count, units,
+            days: fukuyoguRentalDaysInMonth(item.rental_start_date, item.rental_end_date, ym),
+            taisCode: eq?.tais_code ?? null,
+          });
           totalUnits += units;
         }
         if (details.length === 0) continue;
@@ -1163,9 +1173,8 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           insuredNumber: client.insured_number ?? null,
           birthDate: client.birth_date,
           gender: client.gender,
-          careLevel: client.care_level,
-          certStart: client.certification_start_date,
-          certEnd: client.certification_end_date,
+          // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
+          ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
           careOfficeNumber: careOffice?.office_number ?? null,
           copayRate,
           details,

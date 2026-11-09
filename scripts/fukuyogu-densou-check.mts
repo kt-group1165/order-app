@@ -3,6 +3,11 @@
  *
  *   npx tsx scripts/fukuyogu-densou-check.mts
  *
+ * ★ 2026-11-09: ほのぼの福祉用具の実伝送 (ケアサポ 1272400050 / KK261004 = 提供 2026-09) を入手。
+ *   明細 (02) の 単位数 0・日数 = 貸与日数・1 用具 1 行・摘要 TAIS、集計 (10) の実日数、
+ *   要支援の 7132 / 67 の期待値を実伝送に合わせて書き換えた。DB 実データでの突合は
+ *   scripts/fukuyogu-densou-honobono-diff.mts。以下の注記は入手前の記録。
+ *
  * ⚠⚠ **期待値の出どころに注意 (3-5)**
  *   ほのぼのの **福祉用具の伝送は手元に 1 本も無い** (2026-09-03 実測。
  *   福祉用具 5 事業所の番号 1272400050 / 1270402124 / 1270502097 / 1271502500 /
@@ -21,7 +26,8 @@
  * DB は読まない (純関数のみ)。
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { buildFukuyoguDensou, fukuyoguServiceCode, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
+import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
+import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
 
 const BASELINE = "scripts/fukuyogu-densou-check-baseline.json";
@@ -43,9 +49,9 @@ const eq = (label: string, a: unknown, b: unknown) => {
 //   1 割: 保険 = floor(14000 × 9 / 10) = 12,600 / 本人 = 14,000 − 12,600 = 1,400
 //   3 割: 保険 = floor(14000 × 7 / 10) =  9,800 / 本人 = 4,200
 const detail = [
-  { serviceCode: "171001", unitPer: 300, count: 1, units: 300 },
-  { serviceCode: "171003", unitPer: 900, count: 1, units: 900 },
-  { serviceCode: "171007", unitPer: 100, count: 2, units: 200 },
+  { serviceCode: "171001", unitPer: 300, count: 1, units: 300, days: 30, taisCode: "00066-000352" },
+  { serviceCode: "171003", unitPer: 900, count: 1, units: 900, days: 22, taisCode: "00170-001265" },
+  { serviceCode: "171007", unitPer: 100, count: 2, units: 200, days: 30, taisCode: "00254-000133" },
 ];
 const base: FukuyoguSeikyuRow = {
   userName: "見本 太郎", insurerNumber: "122192", insuredNumber: "1000000001",
@@ -62,7 +68,10 @@ const kohi: FukuyoguSeikyuRow = {
 
 const res = buildFukuyoguDensou([base, kohi], { officeNumber: "1270402124", year: 2026, month: 12 });
 const lines = res.content.split("\r\n").filter((l) => l !== "");
-const cols = (l: string) => l.split(",");
+// ★ 2026-11-09: build.ts がほのぼの書式 (引用符) で出すようになったので、値を見るときは引用符を外す
+const unq = (v: string) => v.replace(/^"(.*)"$/, "$1");
+const cols = (l: string) => l.split(",").map(unq);
+const rawCols = (l: string) => l.split(",");
 const pick = (form: string, kind: string | null) =>
   lines.filter((l) => {
     const c = cols(l);
@@ -123,6 +132,7 @@ eq("担当居宅介護支援事業所番号", b[0][21], "1272401876");
 eq("★ 保険給付率 1割 → 90", b[0][30], "90");
 eq("合計 単位数 / 請求額 / 利用者負担", [b[0][34], b[0][35], b[0][36]], ["1400", "12600", "1400"]);
 eq("公費なしの人は公費欄が空", [b[0][8], b[0][9], b[0][31]], ["", "", ""]);
+eq("★ 開始・中止年月日は渡さなければ空", [b[0][22], b[0][23], b[0][24]], ["", "", ""]);
 eq("★ 公費ありの人は 負担者/受給者番号が出る", [b[1][8], b[1][9]], ["12123519", "0068742"]);
 eq("★ 公費1給付率 100", b[1][31], "100");
 eq("公費1 合計 (単位数 / 請求額 / 本人負担)", [b[1][40], b[1][41], b[1][42]], ["1400", "1400", "0"]);
@@ -130,23 +140,83 @@ eq("★ 公費ありの人は 利用者負担 0 (公費へ振替済み)", b[1][3
 
 console.log("\n══ 7131-02 明細 ══");
 const d = pick("7131", "02");
-eq("明細は 3 種目 × 2 名 = 6 行", d.length, 6);
+// ★ 2026-11-09 期待値を ほのぼの実伝送 (ケアサポ KK261004) に合わせた。旧期待値は仕様書由来で
+//   [単位数, 回数] = [300, 1] / 個数 2 は 1 行 (100 × 2) だったが、ほのぼのは
+//   項9 単位数 = 0 / 項10 = 当月の貸与日数 / 1 用具 1 行 (同じ用具 2 個は 2 行) / 項18 摘要 = TAIS
+eq("★ 明細は 1 用具 1 行 (個数 2 は 2 行) → (3 + 1) × 2 名 = 8 行", d.length, 8);
 eq("★ サービス種類コードは 17 (福祉用具貸与)", d[0][8], "17");
 eq("サービス項目コード (171001 → 1001)", d[0][9], "1001");
-eq("単位数 / 回数 / サービス単位数", [d[0][10], d[0][11], d[0][15]], ["300", "1", "300"]);
-eq("★ 個数 2 の行は 単位数 100 × 回数 2 = 200", [d[2][10], d[2][11], d[2][15]], ["100", "2", "200"]);
-eq("公費なしは 公費1対象 が空", [d[0][12], d[0][16]], ["", ""]);
-eq("★ 公費ありは 公費1対象 = 保険と同値", [d[3][12], d[3][16]], ["1", "300"]);
+eq("★ 単位数 0 / 日数 = 貸与日数 30 / サービス単位数 300", [d[0][10], d[0][11], d[0][15]], ["0", "30", "300"]);
+eq("★ 月途中から (22 日) の用具は 日数 22", [d[1][11], d[1][15]], ["22", "900"]);
+eq("★ 個数 2 は 100 単位の行が 2 本", [d[2][15], d[3][15], d[2][9], d[3][9]], ["100", "100", "1007", "1007"]);
+eq("★ 摘要 (項18) = TAIS コード (引用符付き)", [d[0][19], rawCols(lines.find((l) => cols(l)[3] === "02")!)[19]], ["00066-000352", `"00066-000352"`]);
+eq("公費なしは 公費1対象 が 0 (ほのぼの書式の 0 埋め)", [d[0][12], d[0][16]], ["0", "0"]);
+eq("★ 公費ありは 公費1対象 = 保険と同値 (日数・単位)", [d[4][12], d[4][16]], ["30", "300"]);
 
 console.log("\n══ 7131-10 集計 ══");
 const s = pick("7131", "10");
 eq("利用者ごとに 1 行", s.length, 2);
 eq("サービス種類コード 17", s[0][8], "17");
-eq("★ サービス実日数は 0 (福祉用具貸与は日数の概念が無い)", s[0][9], "0");
+// ★ 2026-11-09: 旧期待値 0 は仕様書の読み違い (※6 は 明細の単位数 の注記)。ほのぼのは明細の貸与日数の最大を入れる
+eq("★ サービス実日数 = 明細の貸与日数の最大 (30)", s[0][9], "30");
 eq("計画単位数 / 限度額管理対象 / 対象外", [s[0][10], s[0][11], s[0][12]], ["1400", "1400", "0"]);
 eq("★ 単位数単価は 1000 (= 10.00円。地域区分の対象外で固定)", s[0][16], "1000");
 eq("保険 単位数合計 / 請求額 / 利用者負担", [s[0][15], s[0][17], s[0][18]], ["1400", "12600", "1400"]);
 eq("公費1 (単位数 / 請求額 / 本人負担)", [s[1][19], s[1][20], s[1][21]], ["1400", "1400", "0"]);
+
+console.log("\n══ ★ 介護予防 (要支援 → 7132 / サービス種類 67) — ほのぼの実伝送 KK261004 と同じ形 ══");
+eq("要支援2 の種目コード → 671007", fukuyoguServiceCode("手すり", "要支援２"), "671007");
+eq("要介護1 の種目コード → 171007", fukuyoguServiceCode("手すり", "要介護1"), "171007");
+eq("★ isYoboCareLevel (要支援1/2 のみ。事業対象者・要介護は false)",
+  [isYoboCareLevel("要支援1"), isYoboCareLevel("要支援２"), isYoboCareLevel("事業対象者"), isYoboCareLevel("要介護1"), isYoboCareLevel(null)],
+  [true, true, false, false, false]);
+{
+  // 17 のコードのまま渡しても 要介護度で 67 に直る (BillingTab は種目からのコードを 17 で渡す)
+  const yobo: FukuyoguSeikyuRow = {
+    ...base, userName: "見本 予防", insurerNumber: "122069", insuredNumber: "0000000009", careLevel: "要支援2",
+    details: [{ serviceCode: "171007", unitPer: 300, count: 1, units: 300, days: 7, taisCode: "00254-000416" }],
+    totalUnits: 300, totalCost: 3000, insuranceAmount: 2700, userAmount: 300,
+    serviceStartDate: "2026-12-08", serviceStopDate: "2026-12-14", stopReason: "3",
+  };
+  const yr = buildFukuyoguDensou([yobo, base, { ...base, insuredNumber: "0000000001" }], { officeNumber: "1270402124", year: 2026, month: 12 });
+  const yLines = yr.content.split("\r\n").filter(Boolean);
+  const yl = yLines.map(cols).filter((c) => c[0] === "2" && c[2] !== "7111");
+  eq("★ 要支援は 7132 で 01/02/10", yl.filter((c) => c[2] === "7132").map((c) => c[3]), ["01", "02", "10"]);
+  eq("★ 並び順: 7131 を (保険者+被保番) 昇順で全部 → 7132",
+    yl.filter((c) => c[3] === "01").map((c) => `${c[2]}|${c[6]}|${c[7]}`),
+    ["7131|00122192|0000000001", "7131|00122192|1000000001", "7132|00122069|0000000009"]);
+  const y1 = yl.find((c) => c[2] === "7132" && c[3] === "01")!;
+  const y2 = yl.find((c) => c[2] === "7132" && c[3] === "02")!;
+  const y10 = yl.find((c) => c[2] === "7132" && c[3] === "10")!;
+  eq("★ 7132-02 サービス種類 67 / 項目 1007 / 日数 7", [y2[8], y2[9], y2[11]], ["67", "1007", "7"]);
+  eq("★ 7132-10 サービス種類 67 / 実日数 7 / 単価 1000", [y10[8], y10[9], y10[16]], ["67", "7", "1000"]);
+  eq("★ 7132-01 要介護度 13 / 開始 20261208 / 中止 20261214 / 理由 3", [y1[16], y1[22], y1[23], y1[24]], ["13", "20261208", "20261214", "3"]);
+  const yh = yLines.map(cols).find((c) => c[2] === "7111" && c[5] === "1")!;
+  eq("★ 7111 の件数・単位数は 7131 と 7132 の合計 (3 件 / 1400+1400+300)", [yh[8], yh[9]], ["3", "3100"]);
+  // KK261004 の 7132-02 の実レコードと同じ形 (引用符・0 埋めまで)
+  eq("★ 7132-02 の書式は ほのぼの実伝送と同じ", rawCols(yLines.find((l) => l.includes(`"7132",02`))!).slice(2).join(","),
+    `"7132",02,202612,1270402124,00122069,"0000000009",67,1007,0,7,0,0,0,300,0,0,0,"00254-000416"`);
+}
+
+console.log("\n══ ★ 日付・貸与日数・認定の選び方 (2026-11-09 実データで見つかったもの) ══");
+{
+  const sl = buildFukuyoguDensou([{ ...base, certStart: "2026/2/19", certEnd: "2027/2/28" }], { officeNumber: "1270402124", year: 2026, month: 12 });
+  const sb = sl.content.split("\r\n").filter(Boolean).map(cols).find((c) => c[3] === "01")!;
+  eq("★ 認定期間 \"2026/2/19\" 形式も YYYYMMDD に直る", [sb[18], sb[19]], ["20260219", "20270228"]);
+  eq("貸与日数 通月 (2026-09)", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09"), 30);
+  eq("貸与日数 9/9 開始 → 22", fukuyoguRentalDaysInMonth("2026-09-09", null, "2026-09"), 22);
+  eq("貸与日数 9/22 終了 → 22", fukuyoguRentalDaysInMonth("2026-04-01", "2026-09-22", "2026-09"), 22);
+  eq("貸与日数 9/30 開始 → 1 / 9/11〜9/27 → 17",
+    [fukuyoguRentalDaysInMonth("2026-09-30", null, "2026-09"), fukuyoguRentalDaysInMonth("2026-09-11", "2026-09-27", "2026-09")], [1, 17]);
+  eq("★ 負のコントロール: 当月に掛からない貸与は 0", fukuyoguRentalDaysInMonth("2026-10-01", null, "2026-09"), 0);
+  const c1 = pickCertForMonth([
+    { effective_date: "2025-09-01", certification_start_date: "2025-09-01", certification_end_date: "2026-08-31", care_level: "要介護1" },
+    { effective_date: "2026-09-01", certification_start_date: "2026-09-01", certification_end_date: "2030-08-31", care_level: "要介護2" },
+  ], "2026-09-01", "2026-09-30");
+  eq("★ 当月有効の認定を選ぶ (更新後の 要介護2)", c1?.care_level, "要介護2");
+  eq("★ 認定が無ければ clients の列",
+    certFieldsForDensou({ care_level: "要支援1", certification_start_date: "2026-01-01", certification_end_date: null }, null).careLevel, "要支援1");
+}
 
 console.log("\n══ 金額の丸め (国保連は 円未満切り捨て) ══");
 // 端数が出る組み合わせ: 1,401 単位 = 14,010 円 / 2割 → floor(14010 × 8/10) = 11,208
@@ -178,7 +248,8 @@ let fmtDiff = 0;
 for (const l of lines) {
   const c = cols(l);
   if (c[0] !== "2") continue;
-  const parts = c.slice(2);
+  // 書式は引用符付きのまま見る (cols は引用符を外すので rawCols)。7132 は kaigo-app に規則が無いので素通り
+  const parts = rawCols(l).slice(2);
   const want = formatRecordLikeHonobono(parts);
   if (JSON.stringify(parts) !== JSON.stringify(want)) {
     if (fmtDiff < 3) {
@@ -199,8 +270,9 @@ if (fmtDiff === 0) {
 }
 
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);
-console.log(`⚠ この検査の期待値は **仕様書 _if_svc.txt と手計算** から作っている`);
-console.log(`  (ほのぼのの福祉用具伝送が手元に無いため)。★ 入手したら突合し直すこと。`);
+console.log(`⚠ この検査の期待値は 仕様書 _if_svc.txt と手計算 から作り、2026-11-09 に`);
+console.log(`  ほのぼの福祉用具の実伝送 (ケアサポ KK261004) で明細・集計・7132 の形を突合し直した。`);
+console.log(`  実データでの突合は scripts/fukuyogu-densou-honobono-diff.mts (DB を読む。手で回す)。`);
 
 // =====================================================================
 // 基準値方式 (2026-09-05 / DECISIONS_PENDING.md B-2t・B-2x)

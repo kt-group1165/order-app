@@ -9,16 +9,27 @@
  *   2 行目〜: データレコード       (レコード種別 2) — 7111 請求書 + 7131 明細書
  *   最終行:   エンドレコード       (レコード種別 3)
  *
- * 7131 (居宅サービス介護給付費明細書 = 様式第二) は利用者ごとに
- *   基本情報レコード (01) → 明細情報レコード (02) × n → 集計情報レコード (10)。
+ * 7131 (居宅サービス介護給付費明細書 = 様式第二) / 7132 (介護予防サービス給付費明細書 = 様式第二の二)
+ * は利用者ごとに 基本情報レコード (01) → 明細情報レコード (02) × n → 集計情報レコード (10)。
+ *
+ * ★ 2026-11-09: ほのぼの福祉用具の実伝送 (ケアサポ KK261004 = 提供 2026-09・1,116 レセプト) と
+ *   突合して形を合わせた (scripts/fukuyogu-densou-honobono-diff.mts)。以前の形は仕様書由来で、
+ *   ほのぼのとは次が違っていた:
+ *     - 要支援 (要支援1・2) は 7132 / サービス種類 67 (介護予防福祉用具貸与) で出す。
+ *       並びは 7131 を全部出してから 7132。それぞれ 保険者番号+被保険者番号 の昇順
+ *     - 明細 (02) は **1 用具 1 行** (同じ用具 2 個は 2 行)。項9 単位数 = 0 (仕様 ※6: 福祉用具貸与は
+ *       NULL もしくは 0)、項10 日数・回数 = **当月の貸与日数**、項14 サービス単位数 = その用具の単位数、
+ *       項18 摘要 = TAIS コード (例 "00170-000527")
+ *     - 集計 (10) 項8 サービス実日数 = 明細の貸与日数の最大 (以前は 0 固定)
+ *     - 基本 (01) 項21/22/23 開始年月日・中止年月日・中止理由 (月内にサービスを始めた/やめた人)
+ *     - 書式: 引用符 (識別番号・被保険者番号・摘要) と 使わない数値項目の 0 埋め
+ *       (kaigo-app honobono-format.ts の 7111/7131 規則と同じ。7132 は 7131 と同じ形)
  *
  * 福祉用具貸与の固有ルール:
- *   - サービス種類コード = 17
- *   - サービス実日数 = 0 (様式第二 仕様 ※6: 福祉用具貸与は 0 / NULL)
- *   - 単位数単価 = 10.00 円固定 (地域区分の対象外)
+ *   - サービス種類コード = 17 (要介護) / 67 (要支援)。サービス項目コードは同じ (1001〜1013)
+ *   - 単位数単価 = 10.00 円固定 (地域区分の対象外。ほのぼの実伝送も 7131/7132 とも 1000)
  *   - 処遇改善等の加算は無し
  *
- * 注意: 空欄項目は空文字のまま出力する (可変長 CSV)。
  * Shift_JIS への変換は呼出側 (UI) で行う。
  */
 
@@ -58,11 +69,53 @@ export const FUKUYOGU_SERVICE_CODES: Record<string, string> = {
   自動排せつ処理装置: "171013",
 };
 
-/** 種目名から福祉用具貸与のサービスコード (6 桁) を引く。未一致は null */
-export function fukuyoguServiceCode(category: string | null | undefined): string | null {
-  if (!category) return null;
-  return FUKUYOGU_SERVICE_CODES[category.trim()] ?? null;
+// 介護予防福祉用具貸与 (サービス種類 67)。項目コードは 17 と同じ 1001〜1013
+//   (kaigo_service_codes 671001〜671013 = 予防車いす貸与〜予防自動排泄処理装置貸与 で確認済み。
+//    ほのぼの実伝送 KK261004 の 7132-02 も 67+1007/1008/1009/1010 等で出ている)。
+export const FUKUYOGU_YOBO_SERVICE_CODES: Record<string, string> = Object.fromEntries(
+  Object.entries(FUKUYOGU_SERVICE_CODES).map(([k, v]) => [k, `67${v.slice(2)}`]),
+);
+
+/** 要支援 (要支援1・2) = 介護予防 (7132 / サービス種類 67) で請求する人か */
+export function isYoboCareLevel(careLevel: string | null | undefined): boolean {
+  const code = CARE_LEVEL_CODE[(careLevel ?? "").normalize("NFKC").replace(/\s/g, "")];
+  return code === "12" || code === "13";
 }
+
+/**
+ * 種目名から福祉用具貸与のサービスコード (6 桁) を引く。未一致は null。
+ * careLevel を渡すと 要支援は 67xxxx (介護予防福祉用具貸与) を返す。省略時は 17xxxx。
+ * ⚠ 伝送 (buildFukuyoguDensou) は 要介護度から 17/67 を決め直すので、17 のまま渡しても正しく出る。
+ */
+export function fukuyoguServiceCode(category: string | null | undefined, careLevel?: string | null): string | null {
+  if (!category) return null;
+  const table = isYoboCareLevel(careLevel) ? FUKUYOGU_YOBO_SERVICE_CODES : FUKUYOGU_SERVICE_CODES;
+  return table[category.trim()] ?? null;
+}
+
+/** "YYYY-MM-DD" の 2 日付の間の日数 (両端含む) */
+const daysBetween = (a: string, b: string) => {
+  const t = (s: string) => Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)));
+  return Math.round((t(b) - t(a)) / 86400000) + 1;
+};
+const monthBounds = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { first: `${ym}-01`, last: `${ym}-${String(last).padStart(2, "0")}`, days: last };
+};
+
+/**
+ * 当月の貸与日数 (明細 項10 日数・回数)。貸与開始日〜終了日を当月に切り詰めた日数 (両端含む)。
+ * ほのぼの実伝送 KK261004 の 7131/7132-02 項10 と同じ (9/9 開始 → 22、9/22 終了 → 22、通月 → 30)。
+ * ⚠ 入院で半月按分になった月でも日数は貸与期間で数える (単位数だけが半分になる)。
+ */
+export function fukuyoguRentalDaysInMonth(rentalStart: string | null, rentalEnd: string | null, ym: string): number {
+  const { first, last } = monthBounds(ym);
+  const s = rentalStart && rentalStart.slice(0, 10) > first ? rentalStart.slice(0, 10) : first;
+  const e = rentalEnd && rentalEnd.slice(0, 10) < last ? rentalEnd.slice(0, 10) : last;
+  return e < s ? 0 : daysBetween(s, e);
+}
+
 
 // 福祉用具貸与の単位数単価 (円)。地域区分の対象外で 10.00 円固定。
 // ⚠ **同じ前提がもう 1 か所にある** (2026-09-03 実測):
@@ -84,6 +137,10 @@ export interface FukuyoguDetailLine {
   count: number;
   /** サービス単位数 (unitPer × count) */
   units: number;
+  /** 当月の貸与日数 (fukuyoguRentalDaysInMonth)。省略時は当月の日数 (通月) */
+  days?: number;
+  /** TAIS コード (明細 項18 摘要)。ほのぼのは用具ごとに "00170-000527" 形式で出す */
+  taisCode?: string | null;
 }
 
 export interface FukuyoguSeikyuRow {
@@ -122,6 +179,41 @@ export interface FukuyoguSeikyuRow {
    * kaigo-app src/lib/kokuho-densou/build.ts と同じ扱い (ほのぼの実伝送で裏取り済み)。
    */
   kohiTandoku?: boolean;
+  /**
+   * 基本 項21 開始年月日。月内にサービスを始めた人だけ。
+   * ⚠ 2026-11-09 時点では呼出側 (BillingTab) は渡していない: order_items.rental_start_date が
+   *   移行時の仮の日付 (2026-04-01 / 2026-09-01) で、そこから決めるとほのぼのと 152 件食い違うため
+   *   (scripts/fukuyogu-densou-honobono-diff.mts の「開始・中止の導出」で測定)。
+   */
+  serviceStartDate?: string | null;
+  /** 基本 項22 中止年月日。月内にサービスをやめた人だけ (同上の理由で 今は渡していない) */
+  serviceStopDate?: string | null;
+  /** 基本 項23 中止理由コード (1 非該当 / 3 医療機関入院 / 4 死亡 / 5 その他 …)。DB に持っていないので通常 null */
+  stopReason?: string | null;
+}
+
+// ─── ほのぼの書式 (引用符・0 埋め) ───────────────────────────────────────────
+// ほのぼの福祉用具の実伝送 KK261004 (7382 レコード) を項目ごとに数えて決めた。
+//   kaigo-app src/lib/kokuho-densou/honobono-format.ts の 7111 / 7131-01・02・10 の規則と同じで、
+//   7132 (様式第二の二) は 7131 と同じ形 (実伝送で全項目同じだった)。
+//   ⚠ order-app は kaigo-app を import できない (別ビルド) ので表を持つ。
+//     乖離は scripts/fukuyogu-densou-check.mts が kaigo-app の formatRecordLikeHonobono と比べて検知する。
+// 項番は IF 仕様の項番 (1 始まり)。0 を書くのは **空欄のときだけ** (値があれば触らない)。
+const rng = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const FORMAT_RULES: Record<string, { quote: number[]; zero: number[] }> = {
+  "7111": { quote: [1], zero: rng(1, 18) },
+  "01": { quote: [1, 6], zero: [...rng(1, 5), 13, 14, 15, 17, 18, 19, 29, ...rng(33, 56)] },
+  "02": { quote: [1, 6, 18], zero: [...rng(1, 5), ...rng(7, 17)] },
+  "10": { quote: [1, 6], zero: [...rng(1, 5), ...rng(7, 11), ...rng(14, 26)] },
+};
+function formatFukuyoguRecord(parts: string[]): string[] {
+  const id = parts[0];
+  const rule = id === "7111" ? FORMAT_RULES["7111"] : id === "7131" || id === "7132" ? FORMAT_RULES[parts[1]] : undefined;
+  if (!rule) return parts;
+  return parts.map((v, i) => {
+    const filled = v === "" && rule.zero.includes(i + 1) ? "0" : v;
+    return rule.quote.includes(i + 1) ? `"${filled}"` : filled;
+  });
 }
 
 export interface FukuyoguDensouOptions {
@@ -138,7 +230,15 @@ export interface DensouBuildResult {
   warnings: string[];
 }
 
-const dateNum = (iso: string | null) => (iso ? iso.replaceAll("-", "") : "");
+// ★ 2026-11-09: clients.certification_start/end_date に "2026/2/19" 形式 (ほのぼの由来) が混ざっていた
+//   (2026-09 の請求対象で 認定開始 61 名・終了 58 名)。"-" を消すだけだと "2026/2/19" のまま出て
+//   数字8 の項目に "/" が入る。YYYY-MM-DD / YYYY/M/D のどちらも YYYYMMDD に直す。読めない値は空欄にして警告。
+const dateNum = (s: string | null | undefined) => {
+  const t = (s ?? "").normalize("NFKC").trim();
+  if (!t) return "";
+  const m = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  return m ? `${m[1]}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}` : "";
+};
 const genderCode = (g: string | null) =>
   g == null ? "" : g.includes("女") ? "2" : g.includes("男") ? "1" : "";
 
@@ -237,8 +337,18 @@ export function buildFukuyoguDensou(
     ]);
   }
 
-  // ── 7131 明細書 (利用者ごと: 基本 01 → 明細 02×n → 集計 10) ──
-  for (const r of rows) {
+  // ── 7131 / 7132 明細書 (利用者ごと: 基本 01 → 明細 02×n → 集計 10) ──
+  // 並び順は ほのぼの実伝送 (KK261004) と同じ: 7131 (要介護) を全部 → 7132 (要支援)、
+  //   それぞれ 保険者番号 (8 桁) + 被保険者番号 の昇順。
+  const sortKey = (r: FukuyoguSeikyuRow) =>
+    `${isYoboCareLevel(r.careLevel) ? "7132" : "7131"}|${(r.insurerNumber ?? "").trim().padStart(8, "0")}|${(r.insuredNumber ?? "").trim()}`;
+  const ordered = rows.slice().sort((a, b) => (sortKey(a) < sortKey(b) ? -1 : sortKey(a) > sortKey(b) ? 1 : 0));
+  const daysInMonth = new Date(Date.UTC(opts.year, opts.month, 0)).getUTCDate();
+  for (const r of ordered) {
+    // 要支援 = 介護予防福祉用具貸与 (様式第二の二 = 7132 / サービス種類 67)
+    const yobo = isYoboCareLevel(r.careLevel);
+    const formId = yobo ? "7132" : "7131";
+    const kind = yobo ? "67" : "17";
     // 2026-08-31 監査: padStart が無く 6 桁のまま出していた (仕様は数字8)。
     //   clients.insurer_number は実測で 6 桁が 5,393 件 = 福祉用具伝送は全件が桁不足だった。
     //   kaigo-app build.ts:246 / build-sougou.ts:231 と同じく 8 桁に 0 埋めする。
@@ -270,7 +380,7 @@ export function buildFukuyoguDensou(
 
     // 基本情報レコード (01) — 福祉用具。施設系項目は空欄、公費は生保等のとき充填
     dataParts.push([
-      "7131", // 1 交換情報識別番号
+      formId, // 1 交換情報識別番号 (7131 / 7132)
       "01", // 2 レコード種別コード
       ym, // 3 サービス提供年月
       office, // 4 事業所番号
@@ -295,9 +405,9 @@ export function buildFukuyoguDensou(
       //     居宅側の給付管理票と突合できず返戻になり得る。上の warning を必ず潰すこと。
       r.careOfficeNumber ? "1" : "2", // 19 居宅サービス計画作成区分コード
       r.careOfficeNumber ?? "", // 20 事業所番号 (居宅介護支援事業所)
-      "", // 21 開始年月日
-      "", // 22 中止年月日
-      "", // 23 中止理由・入所前状況
+      dateNum(r.serviceStartDate ?? null), // 21 開始年月日 (月内にサービスを始めた人)
+      dateNum(r.serviceStopDate ?? null), // 22 中止年月日 (月内にサービスをやめた人)
+      r.serviceStopDate ? (r.stopReason ?? "") : "", // 23 中止理由・入所前状況
       "", // 24 入所年月日
       "", // 25 退所年月日
       "", // 26 入所実日数
@@ -322,46 +432,59 @@ export function buildFukuyoguDensou(
       "", "", "", "", "", "", // 51-56 公費3 合計情報
     ]);
 
-    // 明細情報レコード (02) — サービスコードごと
+    // 明細情報レコード (02) — ★ 1 用具 1 行 (ほのぼの実伝送と同じ。同じ用具 2 個は 2 行)
+    //   項9 単位数 = 0 (_if_svc.txt ※6「福祉用具貸与は NULL もしくは 0」) / 項10 = 当月の貸与日数 /
+    //   項14 = その用具の単位数 / 項18 摘要 = TAIS コード
+    let serviceDays = 0;
     for (const d of r.details) {
-      // 桁あふれは返戻になる (_if_form2.txt: 9 単位数=数字4 / 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
-      // 福祉用具は月額 ÷10 が単位数なので月額 10 万円以上で 4 桁を超える (2026-10-19 時点の最大は 58,000 円)。
+      // 桁あふれは返戻になる (_if_form2.txt: 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
+      // 福祉用具は月額 ÷10 が単位数 (2026-10-19 時点の最大は 58,000 円 = 5,800 単位)。
       if (d.unitPer > 9999) warnings.push(`${r.userName}: ${d.serviceCode} の単位数 ${d.unitPer} が 4 桁を超えています (月額 ${d.unitPer * 10} 円?)。伝送できません`);
-      if (d.count > 99) warnings.push(`${r.userName}: ${d.serviceCode} の日数・回数 ${d.count} が 2 桁を超えています`);
       if (d.units > 999999) warnings.push(`${r.userName}: ${d.serviceCode} のサービス単位数 ${d.units} が 6 桁を超えています`);
-      dataParts.push([
-        "7131", // 1
-        "02", // 2 レコード種別コード
-        ym, // 3
-        office, // 4
-        insurer, // 5
-        insured, // 6
-        d.serviceCode.slice(0, 2), // 7 サービス種類コード (17)
-        d.serviceCode.slice(2, 6), // 8 サービス項目コード
-        String(d.unitPer), // 9 単位数
-        String(d.count), // 10 日数・回数 (貸与個数)
-        hasKohi ? String(d.count) : "", // 11 公費1対象日数・回数
-        "", // 12 公費2対象日数・回数
-        "", // 13 公費3対象日数・回数
-        String(d.units), // 14 サービス単位数
-        hasKohi ? String(d.units) : "", // 15 公費1対象サービス単位数
-        "", // 16 公費2対象サービス単位数
-        "", // 17 公費3対象サービス単位数
-        "", // 18 摘要
-      ]);
+      if (!/^(17|67)\d{4}$/.test(d.serviceCode)) warnings.push(`${r.userName}: サービスコード ${d.serviceCode} が福祉用具貸与 (17xxxx / 67xxxx) ではありません`);
+      const days = d.days ?? daysInMonth;
+      if (days > serviceDays) serviceDays = days;
+      // 個数 n は n 行に分ける。unitPer × count と units が合わない (手入力の上書き等) ときは 1 行にまとめる
+      const split = d.count > 1 && d.unitPer * d.count === d.units;
+      const lineUnits = split ? Array.from({ length: d.count }, () => d.unitPer) : [d.units];
+      for (const u of lineUnits) {
+        dataParts.push([
+          formId, // 1
+          "02", // 2 レコード種別コード
+          ym, // 3
+          office, // 4
+          insurer, // 5
+          insured, // 6
+          kind, // 7 サービス種類コード (17 / 67。要介護度で決める)
+          d.serviceCode.slice(2, 6), // 8 サービス項目コード
+          "0", // 9 単位数 (福祉用具貸与は 0)
+          String(days), // 10 日数・回数 (当月の貸与日数)
+          hasKohi ? String(days) : "", // 11 公費1対象日数・回数
+          "", // 12 公費2対象日数・回数
+          "", // 13 公費3対象日数・回数
+          String(u), // 14 サービス単位数
+          hasKohi ? String(u) : "", // 15 公費1対象サービス単位数
+          "", // 16 公費2対象サービス単位数
+          "", // 17 公費3対象サービス単位数
+          (d.taisCode ?? "").trim(), // 18 摘要 (TAIS コード)
+        ]);
+      }
+      if (!(d.taisCode ?? "").trim()) warnings.push(`${r.userName}: ${d.serviceCode} の TAIS コード (摘要) が未登録です`);
     }
 
-    // 集計情報レコード (10) — サービス種類 (福祉用具貸与 = 17) 単位
+    // 集計情報レコード (10) — サービス種類 (17 / 67) 単位
     dataParts.push([
-      "7131", // 1
+      formId, // 1
       "10", // 2 レコード種別コード
       ym, // 3
       office, // 4
       insurer, // 5
       insured, // 6
-      "17", // 7 サービス種類コード
-      "0", // 8 サービス実日数 (福祉用具貸与は 0)
-      String(r.totalUnits), // 9 計画単位数
+      kind, // 7 サービス種類コード
+      String(serviceDays), // 8 サービス実日数 (= 明細の貸与日数の最大。ほのぼの実伝送と同じ)
+      // 9 計画単位数: ほのぼのは給付管理票の計画単位数を入れ、超過分 (項10 − 項9) は保険外になる。
+      //   order-app は計画単位数を持たないので 実績単位数 を入れる (2026-09 は 6 名で差。報告済み)
+      String(r.totalUnits),
       String(r.totalUnits), // 10 限度額管理対象単位数
       "0", // 11 限度額管理対象外単位数
       "", // 12 短期入所計画日数
@@ -406,7 +529,7 @@ export function buildFukuyoguDensou(
     ["1", String(recNo++), "0", String(dataParts.length), "711", "0", "0", office, "0", "7", shinsaYm, "1"].join(","),
   );
   for (const parts of dataParts) {
-    lines.push(["2", String(recNo++), ...parts].join(","));
+    lines.push(["2", String(recNo++), ...formatFukuyoguRecord(parts)].join(","));
   }
   lines.push(["3", String(recNo++)].join(","));
 
