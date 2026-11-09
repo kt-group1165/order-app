@@ -317,32 +317,20 @@ const fpRows = [...active.keys()].sort().map((cid) => {
   ];
 });
 const fingerprint = createHash("sha256").update(JSON.stringify(fpRows)).digest("hex").slice(0, 16);
-const today = new Date().toISOString().slice(0, 10);
+// ⚠ toISOString() は UTC なので JST の朝は前日になる。ローカル日付で組む
+const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
 
 let baseline: Baseline | null = null;
 if (existsSync(BASELINE)) baseline = JSON.parse(readFileSync(BASELINE, "utf8"));
 
 if (UPDATE || !baseline) {
   const out: Baseline = {
-    _readme: [
+    // ★ _readme は既存のものを引き継ぐ (以前はコード内の 2026-09-05 時点の文で毎回上書きしていた)。
+    //   件数が変わったら「なぜこの数か」を json 側で書き直すこと。
+    _readme: baseline?._readme ?? [
       "npm run check:benefit-rate (order-app) の基準値。",
-      "",
-      "■ 「51名で正常」ではない (2026-09-05 実測。DECISIONS_PENDING.md B-2w 参照)",
-      "  certExpired (⑦ 対象月に有効な認定が無いのに保険請求) は 51 名・貸与価格計",
-      "  ¥706,170/月 という既知の問題があり、原因が A(本当に認定切れ) か",
-      "  B(取込漏れ) かは user 判断待ち。それ以上増えたら FAIL とする。",
-      "  mismatch(①) / vsCert(⑥) も同様に 2 名・¥10,133/月 という既知の問題として",
-      "  基準値化する (clients.benefit_rate を認定から導出する設計に変えるかは別途判断)。",
-      "",
-      "■ 公費単独 (H) の 11 名は基準値の対象外 (母数から除外済み、正常なパターン)",
-      "",
-      "■ 指紋 (値のハッシュ)",
-      "  当月アクティブな利用者の給付率/負担割合/被保番/認定/貸与額から算出。",
-      "  指紋が変わっているのに件数が同じなら、たまたま入れ替わっている可能性が",
-      "  あるので中身を確認してから --update すること。",
-      "",
-      "■ 0件を目指さない",
-      "  user判断(B-2w)が決まるまでは現状件数のまま。減ったら「改善した」と出す。",
+      "■ なぜこの数か: (--update 後に json 側で書くこと)",
+      "■ 0件を目指さない: 増えたら FAIL、減ったら「改善した」と出す。",
     ],
     fingerprint,
     asOf: today,
@@ -351,9 +339,14 @@ if (UPDATE || !baseline) {
   };
   writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n", "utf8");
   console.log(`\n--update: 基準値を書きました (${BASELINE})`);
+  console.log(`  ⚠ _readme は前の基準値のものを引き継いだ。件数が変わったなら「なぜこの数か」を書き直すこと。`);
   process.exit(0);
 }
 
+if (baseline.month !== MONTH) {
+  console.log(`\n⚠ 基準値は ${baseline.month} のもの。MONTH=${MONTH} と比べても意味が無いので比較しない (exit 0・★ 合格ではない)。`);
+  process.exit(0);
+}
 const fingerprintMatch = baseline.fingerprint === fingerprint;
 console.log(`\n══ 基準値比較 ══`);
 console.log(`指紋: ${fingerprintMatch ? "一致" : "★ 不一致"}`);

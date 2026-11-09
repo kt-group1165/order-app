@@ -31,6 +31,17 @@
  *   認められているケースは実際に多い。出すのは「区別できていない件数と金額」。
  * ⚠ 直さない。測るだけ。実装は user 判断のあと。
  *
+ * ── 要介護度は「その月の認定」から取る (2026-11-09 変更) ──────────────────
+ *   以前は clients.care_level で判定していたが、clients.care_level は「今の」値であり
+ *   検査月 (MONTH) の値ではない。2026-11-09 のほのぼの福祉用具反映で clients.care_level が
+ *   9/30 時点の値に置き換わり、MONTH=2026-06 の判定が 誤検出 22 行・取りこぼし 5 行 ずれた。
+ *   → MONTH に有効な認定 (client_insurance_records) のうち effective_date 最新の 1 件の
+ *     care_level を使う (benefit-rate-check.mts の certOf と同じ選び方)。
+ *   その月に有効な認定が無い利用者は「軽度者」に数えない (= 保険で請求できない人。
+ *   そちらは check:benefit-rate の certExpired が見ている)。件数だけ参考に出す。
+ *   ★ 負のコントロール: 実行のたびに メモリ上で認定の要介護度を 1 名ぶん書き換え、
+ *     件数が動くことを確かめる (DB は触らない)。動かなければ exit 1。
+ *
  * ── 基準値方式 (2026-09-05 導入) ────────────────────────────────────────
  *   fukuyogu_exception_grants (migrations/fukuyogu_exception_grants.sql) に
  *   記録があれば「区別できた」件数から除外する。user の入力が進むほど
@@ -81,19 +92,42 @@ type OrderItemRow = {
 type OrderRow = { id: string; client_id: string; payment_type: string | null };
 type EquipRow = { product_code: string; category: string | null; rental_price: number | null; selection_reason: string | null; proposal_reason: string | null };
 type ClientRow = { id: string; name: string; care_level: string | null; benefit_rate: string | null };
+type CertRow = {
+  client_id: string; care_level: string | null; effective_date: string | null;
+  certification_start_date: string | null; certification_end_date: string | null;
+};
 
 console.log(`══ 福祉用具貸与 — 軽度者 原則対象外品目の請求規模測定 (${MONTH}・READ ONLY) ══\n`);
 
-const [orderItemsAll, ordersAll, equipAll, clientsAll] = await Promise.all([
+const [orderItemsAll, ordersAll, equipAll, clientsAll, certsAll] = await Promise.all([
   pageAll<OrderItemRow>("order_items", "id, order_id, product_code, status, rental_start_date, rental_end_date, payment_type, quantity"),
   pageAll<OrderRow>("orders", "id, client_id, payment_type"),
   pageAll<EquipRow>("equipment_master", "product_code, category, rental_price, selection_reason, proposal_reason"),
   pageAll<ClientRow>("clients", "id, name, care_level, benefit_rate"),
+  pageAll<CertRow>("client_insurance_records", "client_id, care_level, effective_date, certification_start_date, certification_end_date"),
 ]);
 
 const orderById = new Map(ordersAll.map((o) => [o.id, o]));
 const equipByCode = new Map(equipAll.map((e) => [e.product_code, e]));
 const clientById = new Map(clientsAll.map((c) => [c.id, c]));
+
+// ── 対象月に有効な認定のうち effective_date 最新の 1 件 (benefit-rate-check.mts の certOf と同じ) ──
+const MS = `${MONTH}-01`;
+const ME = `${MONTH}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+const certOf = new Map<string, CertRow>();
+for (const r of certsAll) {
+  const s = r.certification_start_date ?? r.effective_date;
+  const e = r.certification_end_date;
+  if (s != null && s > ME) continue;
+  if (e != null && e < MS) continue;
+  const cur = certOf.get(r.client_id);
+  if (!cur || (r.effective_date ?? "") > (cur.effective_date ?? "")) certOf.set(r.client_id, r);
+}
+/** その月の要介護度 (NFKC)。有効な認定が無ければ null */
+const levelOf = (cid: string): string | null => {
+  const c = certOf.get(cid);
+  return c ? (c.care_level ?? "").normalize("NFKC") : null;
+};
 
 // ── ①-2026-06 の請求対象 (fukuyogu-coverage-check.mts の activeRentals と同じ定義) ──
 const activeRentals = orderItemsAll.filter((item) => {
@@ -116,17 +150,22 @@ console.log(`【分母①】${MONTH} に福祉用具貸与を請求する候補�
 
 const careLevelDist = new Map<string, number>();
 for (const cid of clientIdsInMonth) {
-  const cl = (clientById.get(cid)?.care_level ?? "未設定").normalize("NFKC");
-  careLevelDist.set(cl, (careLevelDist.get(cl) ?? 0) + 1);
+  const cl = levelOf(cid) ?? "(当月有効な認定なし)";
+  careLevelDist.set(cl || "(認定に要介護度なし)", (careLevelDist.get(cl || "(認定に要介護度なし)") ?? 0) + 1);
 }
-console.log("要介護度の分布:");
+console.log(`要介護度の分布 (${MONTH} に有効な認定の care_level):`);
 for (const [k, v] of [...careLevelDist.entries()].sort()) console.log(`  ${k.padEnd(8)} ${v} 名`);
 
 const KEIDO_LEVELS = new Set(["要支援1", "要支援2", "要介護1"]);
-const keidoClientIds = new Set([...clientIdsInMonth].filter((cid) => {
-  const cl = (clientById.get(cid)?.care_level ?? "").normalize("NFKC");
-  return KEIDO_LEVELS.has(cl);
-}));
+const keidoClientIds = new Set([...clientIdsInMonth].filter((cid) => KEIDO_LEVELS.has(levelOf(cid) ?? "")));
+{
+  // 参考: clients.care_level (=今の値) で判定した場合との差。月を過去にすると差が出るのが正常
+  const byClients = new Set([...clientIdsInMonth].filter((cid) => KEIDO_LEVELS.has((clientById.get(cid)?.care_level ?? "").normalize("NFKC"))));
+  const onlyCert = [...keidoClientIds].filter((c) => !byClients.has(c)).length;
+  const onlyClients = [...byClients].filter((c) => !keidoClientIds.has(c)).length;
+  const noCertKeido = [...byClients].filter((c) => !certOf.has(c)).length;
+  console.log(`(参考) clients.care_level (=今の値) で判定すると軽度者 ${byClients.size} 名。認定だけ軽度 ${onlyCert} 名 / clients だけ軽度 ${onlyClients} 名 (うち当月有効な認定なし ${noCertKeido} 名)`);
+}
 console.log(`\n【分母②】うち軽度者(要支援1・2/要介護1): ${keidoClientIds.size} 名`);
 
 // ── ② 原則対象外6品目に該当する行を、軽度者クライアントに絞って集計 ──
@@ -163,11 +202,12 @@ const onDate = `${MONTH}-01`;
 const hasActiveGrant = (clientId: string, group: string) =>
   grants.some((g) => g.client_id === clientId && g.restriction_group === group && g.valid_from <= onDate && (g.valid_end == null || g.valid_end >= onDate));
 
-type Hit = { clientName: string; careLevel: string; category: string; productCode: string; units: number; amountApprox: number; hasReasonText: boolean; covered: boolean };
+type Hit = { clientId: string; clientName: string; careLevel: string; category: string; productCode: string; units: number; amountApprox: number; hasReasonText: boolean; covered: boolean };
+function collectHits(lv: (cid: string) => string | null): Hit[] {
 const hits: Hit[] = [];
 for (const item of activeRentals) {
   const clientId = orderById.get(item.order_id)?.client_id;
-  if (!clientId || !keidoClientIds.has(clientId)) continue;
+  if (!clientId || !KEIDO_LEVELS.has(lv(clientId) ?? "")) continue;
   const eq = equipByCode.get(item.product_code);
   const cat = eq?.category ?? null;
   if (!cat || !RESTRICTED_CATEGORIES.has(cat)) continue;
@@ -179,8 +219,9 @@ for (const item of activeRentals) {
   const group = RESTRICTION_GROUP_OF_CATEGORY[cat];
   const covered = grantsTableAvailable && !!group && hasActiveGrant(clientId, group);
   hits.push({
+    clientId,
     clientName: client.name,
-    careLevel: (client.care_level ?? "").normalize("NFKC"),
+    careLevel: lv(clientId) ?? "",
     category: cat,
     productCode: item.product_code,
     units: eq?.rental_price ? Math.round(eq.rental_price / 10) * item.quantity : 0,
@@ -189,7 +230,40 @@ for (const item of activeRentals) {
     covered,
   });
 }
+return hits;
+}
+const hits = collectHits(levelOf);
 const uncovered = hits.filter((h) => !h.covered);
+
+// ── ★ 負のコントロール (メモリ上だけ。DB は触らない) ──
+//   (a) 記録なしの 1 名の認定を 要介護3 に書き換えたら その人の行ぶん減るか
+//   (b) 軽度でない人で対象外品目を借りている 1 名を 要介護1 に書き換えたら増えるか
+{
+  const ucount = (lv: (cid: string) => string | null) => collectHits(lv).filter((h) => !h.covered).length;
+  const results: string[] = [];
+  let ok = true;
+  const a = uncovered[0];
+  if (a) {
+    const expect = uncovered.length - uncovered.filter((h) => h.clientId === a.clientId).length;
+    const got = ucount((cid) => (cid === a.clientId ? "要介護3" : levelOf(cid)));
+    results.push(`(a) ${a.clientName} の認定を 要介護3 に → ${uncovered.length} → ${got} 件 (期待 ${expect})`);
+    if (got !== expect) ok = false;
+  }
+  const allHeavy = collectHits(() => "要介護1").filter((h) => !h.covered && !KEIDO_LEVELS.has(levelOf(h.clientId) ?? ""));
+  const b = allHeavy.find((h) => certOf.has(h.clientId));
+  if (b) {
+    const expect = uncovered.length + allHeavy.filter((h) => h.clientId === b.clientId).length;
+    const got = ucount((cid) => (cid === b.clientId ? "要介護1" : levelOf(cid)));
+    results.push(`(b) ${b.clientName} (認定 ${levelOf(b.clientId)}) を 要介護1 に → ${uncovered.length} → ${got} 件 (期待 ${expect})`);
+    if (got !== expect) ok = false;
+  }
+  console.log(`
+【負のコントロール (メモリ上で認定の要介護度を書き換え)】`);
+  for (const r of results) console.log(`  ${r}`);
+  if (!a || !b) { console.log(`  ⚠ 書き換える対象が見つからず 一部実施できなかった`); ok = false; }
+  if (!ok) { console.log(`  ❌ 判定が認定の要介護度に反応していない`); process.exitCode = 1; }
+  else console.log(`  ✅ 認定の要介護度を変えると件数が期待どおり動く`);
+}
 
 console.log(`\n【分母③】軽度者 × 原則対象外6品目 に該当する行: ${hits.length} 件`);
 if (grantsTableAvailable) {
@@ -242,10 +316,12 @@ if (targetSet.length > 0) {
 }
 
 // ── 基準値方式 (0を目指さない。増えたら落ちる/減っても何も言わない) ──
-type Baseline = { _readme?: string[]; uncoveredCount: number; totalAmountApprox: number };
+type Baseline = { _readme?: string[]; month?: string; uncoveredCount: number; totalAmountApprox: number };
 const baselinePath = join(__dirname, "fukuyogu-keido-exception-baseline.json");
 if (!grantsTableAvailable) {
   console.log(`\n⚠ 基準値比較はスキップ (fukuyogu_exception_grants 未作成)。`);
+} else if (UPDATE && process.exitCode === 1) {
+  console.log(`\n❌ 負のコントロールが失敗しているので基準値は更新しない。`);
 } else if (UPDATE) {
   const prevReadme = existsSync(baselinePath)
     ? (JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline)._readme
@@ -255,11 +331,16 @@ if (!grantsTableAvailable) {
       "npm run check:keido-exception の基準値。詳細は初回作成時のcommitメッセージ・DECISIONS_PENDING B-6dを参照。",
       "0を目指さない: 増えたらFAIL、減っても何も言わない (user の入力が進むほど減る想定)。",
     ],
+    month: MONTH,
     uncoveredCount: uncovered.length,
     totalAmountApprox: totalAmount,
   };
   writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
   console.log(`\n★ 基準値を更新しました: ${baselinePath}`);
+  console.log(`  ⚠ _readme は前の基準値のものを引き継いだ。件数が変わったなら「なぜこの数か」を書き直すこと。`);
+} else if (existsSync(baselinePath) && ((JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline).month ?? "2026-06") !== MONTH) {
+  const bm = (JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline).month ?? "2026-06";
+  console.log(`\n⚠ 基準値は ${bm} のもの。MONTH=${MONTH} とは比較しない (★ 合格ではない)。`);
 } else if (existsSync(baselinePath)) {
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline;
   console.log(`\n══ 基準値比較 ══`);

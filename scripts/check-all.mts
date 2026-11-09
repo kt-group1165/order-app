@@ -40,12 +40,12 @@ const CHECKS: Check[] = [
   { name: "invoice-number", script: "check:invoice-number", why: "利用者請求書の保存・採番 (列の突合まで。--executeはしない)" },
   // ★ 2026-09-05 新設 (B-6d)。★ テーブル未適用の間は 基準値比較をスキップして exit 0 になる。
   //   ★ 「合格」ではなく「まだ測れていない」なので 出力本文を読むこと。
-  { name: "keido-exception", script: "check:keido-exception", why: "★ 軽度者(要支援1・2/要介護1)への原則対象外品目 — 例外給付の記録なし件数 (基準値120件)" },
+  { name: "keido-exception", script: "check:keido-exception", why: "★ 軽度者(要支援1・2/要介護1)への原則対象外品目 — 例外給付の記録なし件数 (基準値125件・MONTH=2026-06・要介護度は当月の認定で判定)" },
   // ★ 2026-09-05 新設 (B-6g)。★ 貸与期間が壊れていると 国保連 0 円 / 利用者請求書 満額 に割れる。
   //   ★ 実データは 0 件だが ★ 壊れたデータは 増えてはいけないので ★ 0 を維持する検査。
   { name: "order-items-integrity", script: "check:order-items-integrity", why: "★ order_items の壊れたデータ 5 種 (期間の逆転・開始日null・未来すぎ・価格0・数量0)" },
   { name: "benefit-rate", script: "check:benefit-rate", why: "★ 給付率/負担割合の食い違い・認定なし請求 (基準値方式。B-2w=user判断待ちのまま増減だけ見る)", slow: true,
-    kind: "baseline" }, // 件数がREADME内で複数指標(51/2/2名)に分かれるため合計には含めない
+    kind: "baseline" }, // 件数は7区分に分かれるため合計には含めない (2026-11-09 基準値: certExpired 8名・他0)
   { name: "attendance-parity", script: "check:attendance-parity", why: "★ 出勤簿計算 (attendance-calc.ts) が kaigo/payroll/order の3app間で食い違わないか (実データ。期待値は常に差0)", slow: true },
   { name: "ceiling", script: "check:ceiling", why: "上限価格超過の回帰 (実データ + 基準値)", slow: true,
     kind: "baseline" }, // 基準値=現状の超過件数。0件を目指す検査ではない (改定のたび増える構造。B-2i)
