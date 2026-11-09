@@ -257,7 +257,22 @@ export default function AttendanceTab({
     let cancelled = false;
     (async () => {
       try {
-        const list = await getAttendanceOffices(tenantId);
+        const all = await getAttendanceOffices(tenantId);
+        // 全社管理者 (master) 以外は 自分が所属する事業所 (user_offices) の出勤簿だけ見せる
+        //   (2026-11-09 user 指示: 他の事業所の出勤簿は見られないように)。判定に失敗したら何も見せない (fail closed)
+        let list = all;
+        const masterRes = await fetch("/api/master-check").then((r) => r.json()).catch(() => null);
+        if (masterRes?.is_master !== true) {
+          const { data: auth } = await supabase.auth.getUser();
+          const uid = auth?.user?.id;
+          let myOfficeIds: string[] = [];
+          if (uid) {
+            const { data: uo, error: uoErr } = await supabase.from("user_offices").select("office_id").eq("user_id", uid);
+            if (uoErr) console.error("user_offices fetch failed:", uoErr.message);
+            else myOfficeIds = ((uo ?? []) as { office_id: string }[]).map((r) => r.office_id);
+          }
+          list = all.filter((o) => myOfficeIds.includes(o.office_id));
+        }
         if (cancelled) return;
         setOfficeList(list);
         setOfficeMissing(list.length === 0);
@@ -742,6 +757,9 @@ export default function AttendanceTab({
   if (view === "summary") {
     // 直リンクで開いたときは 事業所の解決 (payrollOfficeId) がまだなので、決まるまで待つ。
     // 集計側は初期値でしか事業所を受け取らないため、空のまま開くと「職員がいません」になる
+    if (officeMissing) {
+      return <div className="p-6 text-sm text-gray-500">表示できる事業所の出勤簿がありません (所属している事業所の出勤簿だけ見られます)</div>;
+    }
     if (!payrollOfficeId || officeList.length === 0) {
       return <div className="p-6 text-sm text-gray-500">読み込み中…</div>;
     }
