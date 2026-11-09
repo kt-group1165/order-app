@@ -180,7 +180,10 @@ export async function runBenefitCertImport(cfg: ImportConfig): Promise<void> {
       _line: m.line, _name: m.name,
     };
   });
-  const toInsert = rows.filter((r) => !existing.has(certKey(r)));
+  // ★ 2026-11-09: CSV の中に完全に同じ証が繰り返し出る (484 組) ので、一意キー (uq_cbc_same_cert と同じ) で 1 件に畳む。
+  //   畳まずに送ると同じバッチ内で重複して insert が落ちる (初回 --execute で実際に 400 件書いた所で止まった)
+  const seenKey = new Set(existing);
+  const toInsert = rows.filter((r) => { const k = certKey(r); if (seenKey.has(k)) return false; seenKey.add(k); return true; });
   console.log(`\n══ 書込み予定 ══`);
   console.log(`  表 ${TABLE}: ${tableExists ? "あり" : "★ 未作成 (migrations/client_benefit_certificates.sql を先に適用。DRY RUN は既存 0 件として数えた)"}`);
   console.log(`  INSERT ${toInsert.length} 件 / 既にある ${rows.length - toInsert.length} 件 / ★ 認定行 (client_insurance_records) は書き換えない`);
