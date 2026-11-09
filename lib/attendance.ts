@@ -115,7 +115,8 @@ export function monthBounds(month: string): { start: string; end: string } | nul
   return { start: `${y}-${mm}-01`, end: `${y}-${mm}-${String(lastDay).padStart(2, "0")}` };
 }
 
-function toRecord(r: AttendanceDbRow): AttendanceRecord {
+/** DB row → calc 用 record (残業集計・Excel 反映のプレビューでも使う) */
+export function toRecord(r: AttendanceDbRow): AttendanceRecord {
   const paidLeaveType: "full" | "half" | null =
     r.paid_leave_type === "full" || r.paid_leave_type === "half"
       ? r.paid_leave_type

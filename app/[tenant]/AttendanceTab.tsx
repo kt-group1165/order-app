@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users, CheckCircle2, RotateCcw, FolderOpen } from "lucide-react";
+import { BarChart3, CalendarClock, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Download, Upload, Printer, Link2, Copy, Check, X, Users, CheckCircle2, RotateCcw, FolderOpen } from "lucide-react";
 import {
   getAttendanceOffices,
   getAttendanceEmployees,
@@ -45,32 +45,13 @@ import {
   saveToFolder,
   downloadBlob,
 } from "@/lib/attendance/save-folder";
+import {
+  MONTHLY_OVERTIME_LIMIT_HOURS,
+  overtimeConsumption,
+} from "@/lib/attendance/overtime-limit";
+import AttendanceSummaryView from "./AttendanceSummaryView";
 
-// 月間の時間外 上限 (自社基準)。36協定の法定上限 45h より手前に置いた運用ライン。
-// 「通常残業を何時間できるか」を基準にした枠。
-const MONTHLY_OVERTIME_LIMIT_HOURS = 35;
-const MONTHLY_OVERTIME_LIMIT_MIN = MONTHLY_OVERTIME_LIMIT_HOURS * 60;
-
-// 割増率 (労基法 §37)。法定休日労働・深夜も枠を消費するが、割増率が違うぶん
-// 通常残業に換算してから引く。
-//   換算係数 = その労働の割増率 ÷ 通常残業の割増率
-//   例) 法定休日 8h → 8h × (1.35 / 1.25) = 8:38 を消費
-//       深夜 4h    → 4h × (0.25 / 1.25) = 0:48 を消費 (深夜は上乗せぶんのみ)
-// このため「消費した実時間 + 残り」は 35:00 にはならない。残りは常に
-// 「あと通常残業を何時間できるか」を指す。
-const RATE_OVERTIME = 1.25;
-const RATE_HOLIDAY = 1.35;
-const RATE_MIDNIGHT_EXTRA = 0.25;
-
-/** 法定休日労働の分数を、通常残業の分数に換算 */
-function holidayToOvertimeEquiv(min: number): number {
-  return Math.round(min * (RATE_HOLIDAY / RATE_OVERTIME));
-}
-
-/** 深夜労働の分数を、上乗せぶんだけ通常残業の分数に換算 */
-function midnightToOvertimeEquiv(min: number): number {
-  return Math.round(min * (RATE_MIDNIGHT_EXTRA / RATE_OVERTIME));
-}
+// 月間残業枠 (35h) と 法定休日・深夜の換算は lib/attendance/overtime-limit.ts (残業集計と共通)
 
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -416,18 +397,17 @@ export default function AttendanceTab({
     return calcMonthlySummary(all, weekStart, month, companyHolidays);
   }, [rows, neighbors, weekStart, month, companyHolidays]);
 
-  /** 通常残業 (1日8h超 + 週40h超) の実時間 */
-  const overtimeTotal = summary.total_daily_overtime + summary.total_weekly_overtime;
-  /** 法定休日労働・深夜を通常残業に換算した消費分 */
-  const holidayEquiv = holidayToOvertimeEquiv(summary.total_holiday);
-  const midnightEquiv = midnightToOvertimeEquiv(summary.total_midnight);
-  /** 35h 枠の消費合計 (通常残業換算) */
-  const consumed = overtimeTotal + holidayEquiv + midnightEquiv;
-  /** あと何時間 通常残業できるか */
-  const remaining = MONTHLY_OVERTIME_LIMIT_MIN - consumed;
-  const overLimit = remaining < 0;
-  const ratio = Math.min(1, consumed / MONTHLY_OVERTIME_LIMIT_MIN);
-  const nearLimit = !overLimit && ratio >= 0.8;
+  // 通常残業 (1日8h超 + 週40h超)・法定休日/深夜の換算・35h 枠の消費 (残業集計と同じ関数)
+  const {
+    overtime: overtimeTotal,
+    holidayEquiv,
+    midnightEquiv,
+    consumed,
+    remaining,
+    overLimit,
+    ratio,
+    nearLimit,
+  } = overtimeConsumption(summary);
   const hasEquiv = holidayEquiv > 0 || midnightEquiv > 0;
 
   /** 本社手当 (電話当番・土日祝対応) の月集計。当月分の行のみ */
@@ -741,6 +721,32 @@ export default function AttendanceTab({
   // ─── 自己入力 URL 管理 ─────────────────────────────────────────────
   const [showUrlModal, setShowUrlModal] = useState(false);
 
+  // ─── 残業集計 (職員 × 月) ───────────────────────────────────────────
+  const [view, setView] = useState<"input" | "summary">("input");
+  if (view === "summary") {
+    return (
+      <AttendanceSummaryView
+        tenantId={tenantId}
+        offices={officeList}
+        initialPayrollOfficeId={payrollOfficeId}
+        isMaster={isMaster}
+        onBack={() => {
+          setView("input");
+          // 反映で職員が増えた・行が変わった可能性があるので読み直す
+          setAdminRefresh((n) => n + 1);
+          load();
+        }}
+        onOpenEmployee={(pid, eid, ym) => {
+          setPayrollOfficeId(pid);
+          setEmployeeId(eid);
+          setMonth(ym < FIRST_MONTH ? FIRST_MONTH : ym);
+          setView("input");
+          setAdminRefresh((n) => n + 1);
+        }}
+      />
+    );
+  }
+
   // ─── 表示 ───────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
@@ -815,6 +821,18 @@ export default function AttendanceTab({
         </select>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={() => {
+              if (!confirmIfDirty()) return;
+              setView("summary");
+            }}
+            disabled={officeList.length === 0}
+            className="text-xs px-2.5 py-1.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 inline-flex items-center gap-1 disabled:opacity-40"
+            title="職員 × 月の残業時間の一覧。Excel 出勤簿の反映もここから"
+          >
+            <BarChart3 size={14} />
+            残業集計
+          </button>
           <button
             onClick={handleExportCsv}
             disabled={!employeeId}
