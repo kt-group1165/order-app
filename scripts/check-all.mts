@@ -47,6 +47,11 @@ const CHECKS: Check[] = [
   // ★ 2026-09-05 新設 (B-6g)。★ 貸与期間が壊れていると 国保連 0 円 / 利用者請求書 満額 に割れる。
   //   ★ 実データは 0 件だが ★ 壊れたデータは 増えてはいけないので ★ 0 を維持する検査。
   { name: "order-items-integrity", script: "check:order-items-integrity", why: "★ order_items の壊れたデータ 5 種 (期間の逆転・開始日null・未来すぎ・価格0・数量0)" },
+  // ★ 2026-11-09 新設 (FY-H)。負担割合を月ごとに解決する純関数 (order/kaigo の 2 ファイル同一・固定データ・負のコントロール)。
+  { name: "cert-month-parity", script: "check:cert-month-parity", why: "★ 負担割合の月ごとの解決 (負担割合証の期間・認定行への fallback・kaigo の copay 置き換え。純関数・DB なし)" },
+  // ★ 2026-11-09 新設 (FY-H)。表が未作成の間は ほのぼの CSV をメモリ上で見込みとして数える (出どころ=csv)。
+  { name: "futan-period", script: "check:futan-period", why: "★ 負担割合証の期間と月ごとの給付率 (食い違い・証なしで請求。基準値方式)", slow: true,
+    kind: "baseline" }, // 2026-09: 証なし 426 名 / 食い違い 8 名 (区分ごとなので合計に含めない)
   { name: "benefit-rate", script: "check:benefit-rate", why: "★ 給付率/負担割合の食い違い・認定なし請求 (基準値方式。B-2w=user判断待ちのまま増減だけ見る)", slow: true,
     kind: "baseline" }, // 件数は7区分に分かれるため合計には含めない (2026-11-09 基準値: certExpired 8名・他0)
   { name: "attendance-parity", script: "check:attendance-parity", why: "★ 出勤簿計算 (attendance-calc.ts) が kaigo/payroll/order の3app間で食い違わないか (実データ。期待値は常に差0)", slow: true },

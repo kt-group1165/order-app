@@ -35,8 +35,15 @@
  *     row.totalUnits = 頭打ち後 / row.limitTargetUnits = 実績 / row.planUnits = CM の単位数 で渡す
  *     (金額は lib/kokuho-densou/fukuyogu-amounts.ts の computeFukuyoguAmounts で頭打ち後に計算済み)。
  *
+ *   - ★ 月途中の公費 (生保) と本人支払額 (2026-11-09): 公費が月の一部だけのとき、請求画面で選んだ扱い
+ *     (none / daily / half) で fukuyogu-amounts.ts が公費対象を決める。row.kohiUnits / kohiTargetCost /
+ *     kohiHonninFutan と 明細ごとの detail.kohiPieces で渡す。出す所: 02 項11・15 / 01 項39-41 / 10 項18-20 /
+ *     7111 公費分 項8・9。本人支払額は 01 項41 / 10 項20 に出し 01 項35 / 10 項17 から除く (kaigo-app build.ts と同じ)。
+ *     ⚠ 月途中の公費 (02 項11 ≠ 項10) は ほのぼの実伝送 KK261004 に例が無く、IF 仕様と kaigo-app 由来。
+ *
  * Shift_JIS への変換は呼出側 (UI) で行う。
  */
+import { fukuyoguLinePieces, type KohiPiece } from "./fukuyogu-amounts";
 
 // ─── コード値 ────────────────────────────────────────────────────────────────
 // 要介護状態区分コード (被保険者証記載の標準コード)
@@ -146,6 +153,12 @@ export interface FukuyoguDetailLine {
   days?: number;
   /** TAIS コード (明細 項18 摘要)。ほのぼのは用具ごとに "00170-000527" 形式で出す */
   taisCode?: string | null;
+  /**
+   * 月途中の公費 (日割り/半月) のときの 明細 02 項11 公費1対象日数・項15 公費1対象サービス単位数。
+   * fukuyoguLinePieces の行ごと (computeFukuyoguAmounts の kohiPieces[i])。
+   * 省略時 = 公費が月の全期間 → 項11 = 貸与日数 / 項15 = その行の単位 (従来どおり)
+   */
+  kohiPieces?: KohiPiece[] | null;
 }
 
 export interface FukuyoguSeikyuRow {
@@ -186,8 +199,17 @@ export interface FukuyoguSeikyuRow {
   kohiFutansha?: string | null;
   /** 公費 受給者番号 (7桁) */
   kohiJukyusha?: string | null;
-  /** 公費請求額 (円)。生保は本人負担分(1割)を公費へ振替。公費単独は費用総額の全額 */
+  /** 公費請求額 (円)。生保は本人負担分(1割)を公費へ振替 (本人支払額を除く)。公費単独は費用総額 − 本人支払額 */
   kohiAmount?: number | null;
+  /** 公費対象単位数 (01 項39 / 10 項18 / 7111 公費分 単位数)。省略時は totalUnits (公費が月の全期間) */
+  kohiUnits?: number | null;
+  /** 公費対象費用 (7111 公費分 費用合計)。省略時は totalCost */
+  kohiTargetCost?: number | null;
+  /**
+   * 公費分本人負担額 (生保の本人支払額の適用分。01 項41 / 10 項20)。省略時 0。
+   * userAmount はこれを含む合計で、01 項35 / 10 項17 には userAmount − これ を出す (kaigo-app build.ts hokenUserAmountOf と同じ)
+   */
+  kohiHonninFutan?: number | null;
   /**
    * 公費単独 (被保険者番号 H = 介護保険未加入の生保受給者。保険給付 0・公費 10 割)。
    * 請求書 7111 の保険請求分には含めず、公費請求分 (法別12) にだけ載せる。明細の保険給付率は空欄。
@@ -339,8 +361,9 @@ export function buildFukuyoguDensou(
       hobetsu, // 5 法別番号 (12=生活保護 等)
       SEIKYU_JOHO_KUBUN, // 6 請求情報区分コード
       String(hRows.length), // 7 件数
-      String(hRows.reduce((s, r) => s + r.totalUnits, 0)), // 8 単位数
-      String(hRows.reduce((s, r) => s + r.totalCost, 0)), // 9 費用合計
+      // 8/9 単位数・費用合計 = 公費対象分 (月途中の公費は公費の期間の分だけ。kaigo-app build.ts の kohiEntries と同じ)
+      String(hRows.reduce((s, r) => s + (r.kohiUnits ?? r.totalUnits), 0)), // 8 単位数
+      String(hRows.reduce((s, r) => s + (r.kohiTargetCost ?? r.totalCost), 0)), // 9 費用合計
       // 2026-08-31 監査: ここに保険請求額を再掲していたため、生保利用者が居る月は
       //   国保連の取込で**保険請求が公費件数分だけ二重計上**されていた。
       //   kaigo-app 側 (src/lib/kokuho-densou/build.ts:233) は明示的に "0" にしており、
@@ -392,6 +415,13 @@ export function buildFukuyoguDensou(
     } else if (hasKohi && !r.kohiFutansha) {
       warnings.push(`${r.userName}: 公費 (法別${r.kohiHobetsu}) の負担者番号が未登録です`);
     }
+    // 公費対象単位数 / 公費分本人負担 (生保の本人支払額)。保険分の利用者負担 (01 項35 / 10 項17) から本人支払額を除く
+    const kohiUnits = r.kohiUnits ?? r.totalUnits;
+    const kohiHonnin = hasKohi ? Math.max(0, r.kohiHonninFutan ?? 0) : 0;
+    const hokenUserAmount = Math.max(0, r.userAmount - kohiHonnin);
+    if (hasKohi && kohiUnits > r.totalUnits) {
+      warnings.push(`${r.userName}: 公費対象単位数 (${kohiUnits}) が保険の単位数 (${r.totalUnits}) を超えています — 呼出側の計算を確認してください`);
+    }
 
     // 基本情報レコード (01) — 福祉用具。施設系項目は空欄、公費は生保等のとき充填
     dataParts.push([
@@ -435,14 +465,14 @@ export function buildFukuyoguDensou(
       "", // 32 公費3給付率
       String(r.totalUnits), // 33 合計 保険 サービス単位数
       String(r.insuranceAmount), // 34 同 請求額
-      String(r.userAmount), // 35 同 利用者負担額
+      String(hokenUserAmount), // 35 同 利用者負担額 (保険分のみ。公費分本人負担は項41)
       "", // 36 緊急時施設療養費請求額
       "", // 37 特定診療費請求額
       "", // 38 特定入所者介護サービス費等請求額
       // 39-44 公費1 合計情報 (サービス単位数 / 請求額 / 本人負担額 / 緊急時 / 特定診療 / 特定入所者)
-      hasKohi ? String(r.totalUnits) : "",
-      hasKohi ? String(r.kohiAmount ?? 0) : "",
-      hasKohi ? "0" : "",
+      hasKohi ? String(kohiUnits) : "", // 39 公費1対象サービス単位数 (月途中は公費の期間の分)
+      hasKohi ? String(r.kohiAmount ?? 0) : "", // 40 公費1請求額
+      hasKohi ? String(kohiHonnin) : "", // 41 公費1本人負担額 (生保の本人支払額。ほのぼの KK261004 中島 紀久子 1,200)
       "", "", "",
       "", "", "", "", "", "", // 45-50 公費2 合計情報
       "", "", "", "", "", "", // 51-56 公費3 合計情報
@@ -469,6 +499,7 @@ export function buildFukuyoguDensou(
       warnings.push(`${r.userName}: 保険請求の単位数 (${r.totalUnits}) が計画単位数 (${planUnits}) を超えています — 国保連で査定されます`);
     }
     let serviceDays = 0;
+    let kohiDetailSum = 0;
     for (const d of r.details) {
       // 桁あふれは返戻になる (_if_form2.txt: 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
       // 福祉用具は月額 ÷10 が単位数 (2026-10-19 時点の最大は 58,000 円 = 5,800 単位)。
@@ -478,9 +509,16 @@ export function buildFukuyoguDensou(
       const days = d.days ?? daysInMonth;
       if (days > serviceDays) serviceDays = days;
       // 個数 n は n 行に分ける。unitPer × count と units が合わない (手入力の上書き等) ときは 1 行にまとめる
-      const split = d.count > 1 && d.unitPer * d.count === d.units;
-      const lineUnits = split ? Array.from({ length: d.count }, () => d.unitPer) : [d.units];
-      for (const u of lineUnits) {
+      //   (fukuyoguLinePieces。月途中の公費の kohiPieces も同じ分け方で計算している)
+      const lineUnits = fukuyoguLinePieces(d);
+      if (d.kohiPieces && d.kohiPieces.length !== lineUnits.length) {
+        warnings.push(`${r.userName}: ${d.serviceCode} の公費対象の行数 (${d.kohiPieces.length}) が明細の行数 (${lineUnits.length}) と違います — 公費対象は貸与日数・単位で出しました`);
+      }
+      const pieces = d.kohiPieces && d.kohiPieces.length === lineUnits.length ? d.kohiPieces : null;
+      for (const [pi, u] of lineUnits.entries()) {
+        // 月途中の公費 (日割り/半月) は その行の公費対象日数・単位。それ以外は貸与日数・その行の単位 (従来どおり)
+        const kp = pieces ? pieces[pi] : { days, units: u };
+        if (hasKohi) kohiDetailSum += kp.units;
         dataParts.push([
           formId, // 1
           "02", // 2 レコード種別コード
@@ -492,17 +530,21 @@ export function buildFukuyoguDensou(
           d.serviceCode.slice(2, 6), // 8 サービス項目コード
           "0", // 9 単位数 (福祉用具貸与は 0)
           String(days), // 10 日数・回数 (当月の貸与日数)
-          hasKohi ? String(days) : "", // 11 公費1対象日数・回数
+          hasKohi ? String(kp.days) : "", // 11 公費1対象日数・回数 (月途中は公費の日数 / 半月は公費の半月の貸与日数)
           "", // 12 公費2対象日数・回数
           "", // 13 公費3対象日数・回数
           String(u), // 14 サービス単位数
-          hasKohi ? String(u) : "", // 15 公費1対象サービス単位数
+          hasKohi ? String(kp.units) : "", // 15 公費1対象サービス単位数
           "", // 16 公費2対象サービス単位数
           "", // 17 公費3対象サービス単位数
           (d.taisCode ?? "").trim(), // 18 摘要 (TAIS コード)
         ]);
       }
       if (!(d.taisCode ?? "").trim()) warnings.push(`${r.userName}: ${d.serviceCode} の TAIS コード (摘要) が未登録です`);
+    }
+    // 国保連の突合: 明細 02 項15 の合計 = 01 項39 / 10 項18 (CM 指示単位数で頭打ちしたときは明細が実績のままなので差が出うる)
+    if (hasKohi && kohiDetailSum !== kohiUnits && limitTargetUnits === r.totalUnits) {
+      warnings.push(`${r.userName}: 明細の公費対象単位数の合計 (${kohiDetailSum}) と 公費対象単位数 (${kohiUnits}) が違います — 伝送前にレセプトを確認してください`);
     }
 
     // 集計情報レコード (10) — サービス種類 (17 / 67) 単位
@@ -525,11 +567,11 @@ export function buildFukuyoguDensou(
       String(r.totalUnits), // 14 保険 単位数合計
       String(FUKUYOGU_UNIT_PRICE * 100), // 15 単位数単価 (10.00円 → 1000)
       String(r.insuranceAmount), // 16 保険 請求額
-      String(r.userAmount), // 17 利用者負担額
+      String(hokenUserAmount), // 17 利用者負担額 (保険分のみ。公費分本人負担は項20)
       // 18-20 公費1 (単位数合計 / 請求額 / 本人負担額)
-      hasKohi ? String(r.totalUnits) : "",
-      hasKohi ? String(r.kohiAmount ?? 0) : "",
-      hasKohi ? "0" : "",
+      hasKohi ? String(kohiUnits) : "", // 18 公費1対象単位数
+      hasKohi ? String(r.kohiAmount ?? 0) : "", // 19 公費1請求額
+      hasKohi ? String(kohiHonnin) : "", // 20 公費分本人負担額
       "", "", "", // 21-23 公費2
       "", "", "", // 24-26 公費3
       "", "", "", // 27-29 保険分出来高医療費

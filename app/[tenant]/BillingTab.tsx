@@ -26,12 +26,14 @@ import {
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
-import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits } from "@/lib/kokuho-densou/fukuyogu-amounts";
+import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits, kohiCoverageInMonth, isKohiMonthMode, KOHI_MONTH_MODES, KOHI_MONTH_MODE_LABEL, KOHI_MONTH_MODE_DEFAULT, type FukuyoguKohi, type FukuyoguLineInput, type KohiMonthMode } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { getCmUnits, saveCmUnits } from "@/lib/fukuyoguCmUnits";
+import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fukuyoguKohiMonth";
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
+import { resolveBenefitForMonth } from "@/lib/insurance/cert-month";
+import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
-import { selectInChunks } from "@/lib/inChunks";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
 
@@ -399,6 +401,36 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       }
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId, currentOfficeId]);
+  // ★ 負担割合証 (期間ごと。2026-11-09 FY-H): 給付率は「提供月に掛かる負担割合証」→ 無ければ認定行の値 (+ 警告)。
+  //   規則は lib/insurance/cert-month.ts (kaigo-app と同じ中身の純関数)。
+  //   表が未適用・読めないときは従来どおり clients.benefit_rate で計算し、理由を 1 行だけ警告に出す。
+  const [benefitCerts, setBenefitCerts] = useState<BenefitCertsLoad | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadBenefitCertificates(tenantId).then((r) => { if (!cancelled) setBenefitCerts(r); });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+  /** その月の給付率 (computeFukuyoguAmounts の benefitRateRaw に渡す文字列)。警告は onWarn、負担割合証なしは noCert に名前を足す */
+  const benefitRawForMonth = (client: Client, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
+    if (!benefitCerts?.available) return client.benefit_rate;
+    const r = resolveBenefitForMonth(
+      insuranceRecords.filter((x) => x.client_id === client.id),
+      benefitCerts.byClient.get(client.id) ?? [],
+      monthStart, monthEnd,
+    );
+    if (r.source === "certificate") for (const w of r.warnings) onWarn(w);
+    else {
+      noCert.push(client.name);
+      for (const w of r.warnings) if (!w.startsWith("その月の負担割合証")) onWarn(w); // 「負担割合証なし」は 1 行にまとめる
+    }
+    return r.benefitRate != null ? String(r.benefitRate) : client.benefit_rate;
+  };
+  /** 「負担割合証なし」をまとめた 1 行 (表が未適用ならその理由) */
+  const benefitNoCertSummary = (noCert: string[]): string | null => {
+    if (!benefitCerts?.available) return benefitCerts?.notice ?? null;
+    if (noCert.length === 0) return null;
+    return `その月の負担割合証が無く、認定行の給付率で計算した利用者 ${noCert.length} 名: ${noCert.slice(0, 20).join("、")}${noCert.length > 20 ? " …" : ""} — 負担割合証を確認してください`;
+  };
   const [billingMonth, setBillingMonth] = useState(() => {
     // デフォルトは今月
     const d = new Date();
@@ -422,6 +454,15 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [cmUnitsNotice, setCmUnitsNotice] = useState<string | null>(null);
   const [cmUnitsAvailable, setCmUnitsAvailable] = useState(true);
   const [cmSavingId, setCmSavingId] = useState<string | null>(null);
+  // ★ 月途中の公費 (生保) の扱い (2026-11-09): 公費が月の途中で始まる/終わる利用者の行に
+  //   「全部利用者負担 / 日割り / 半月」の選択を出す (ケアマネの方針で 利用者ごと・月ごと)。未選択は既定 + 警告。
+  //   保存は選んだとき即時 (upsert)。表が未適用なら選択欄を無効にし、理由を画面に出す。
+  const [kohiModes, setKohiModes] = useState<Map<string, KohiMonthMode>>(new Map()); // key: client_id
+  const [kohiModesAvailable, setKohiModesAvailable] = useState(true);
+  const [kohiModesNotice, setKohiModesNotice] = useState<string | null>(null);
+  const [kohiModeSavingId, setKohiModeSavingId] = useState<string | null>(null);
+  const [screenKohi, setScreenKohi] = useState<{ month: string; byClient: Map<string, FukuyoguKohi> } | null>(null);
+  const [screenKohiNotice, setScreenKohiNotice] = useState<string | null>(null);
   // ★ 軽度者 例外給付の印 (2026-11-09): 利用者行に 記録なし/切れ = 赤・30日以内に期限/期間要なのに終了日空 = 橙。
   //   押すと利用者タブの例外給付タブを その品目区分の新規入力で開く。基準日は請求月の 1 日 (伝送の警告と同じ)。
   //   表が読めなければ印は出さず、理由を画面下の集計欄に出す (伝送の警告は従来どおり別経路)。
@@ -604,6 +645,81 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       alert(`保存失敗: ${msg}`);
     } finally {
       setCmSavingId(null);
+    }
+  };
+
+  // 月途中の公費の扱いを読む (事業所を選んでいればその事業所の値)
+  useEffect(() => {
+    let cancelled = false;
+    getKohiMonthModes(tenantId, billingMonth, currentOfficeId).then((r) => {
+      if (cancelled) return;
+      setKohiModes(r.byClient);
+      setKohiModesAvailable(r.available);
+      setKohiModesNotice(r.message);
+    });
+    return () => { cancelled = true; };
+  }, [tenantId, billingMonth, currentOfficeId]);
+
+  // 画面表示用に 当月の公費を読む (月途中の判定だけに使う。伝送は出力時に読み直す)
+  const screenClientIdsKey = useMemo(() => clientGroups.map((g) => g.client.id).sort().join(","), [clientGroups]);
+  useEffect(() => {
+    let cancelled = false;
+    const ids = screenClientIdsKey ? screenClientIdsKey.split(",") : [];
+    if (ids.length === 0) return;
+    const [yy, mm] = billingMonth.split("-").map(Number);
+    loadKohiForMonth(tenantId, ids, `${billingMonth}-01`, monthEndYmd(yy, mm))
+      .then((r) => {
+        if (cancelled) return;
+        setScreenKohi({ month: billingMonth, byClient: r.byClient });
+        setScreenKohiNotice(r.notices.length ? r.notices.join(" / ") : null);
+      })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+        console.error("公費の取得失敗 (画面表示用):", msg);
+        if (!cancelled) {
+          setScreenKohi(null);
+          setScreenKohiNotice(`公費を読めなかったため、月途中の公費の判定を画面に出していません (${msg})。伝送の出力時にもう一度読みます`);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [tenantId, billingMonth, screenClientIdsKey]);
+
+  // 公費が当月の貸与期間の一部だけの利用者 (= 「公費の扱い」を選ぶ必要がある人)
+  const kohiPartialByClient = useMemo(() => {
+    const out = new Map<string, { kohi: FukuyoguKohi; firstDay: string | null; lastDay: string | null }>();
+    if (!screenKohi || screenKohi.month !== billingMonth) return out;
+    for (const { client, items } of clientGroups) {
+      const kohi = screenKohi.byClient.get(client.id);
+      if (!kohi || /^[Hh]/.test((client.insured_number ?? "").trim())) continue;
+      const lines: FukuyoguLineInput[] = items.map((it) => ({ unitPer: 1, count: 1, units: 1, rentalStart: it.rental_start_date, rentalEnd: it.rental_end_date }));
+      const cov = kohiCoverageInMonth(kohi.periods, lines, billingMonth);
+      if (cov.partial) out.set(client.id, { kohi, firstDay: cov.firstDay, lastDay: cov.lastDay });
+    }
+    return out;
+  }, [screenKohi, clientGroups, billingMonth]);
+
+  // 公費の扱いを保存 (空 = 削除 = 未選択に戻す)。失敗は必ず画面に出す
+  const handleKohiModeChange = async (clientId: string, raw: string) => {
+    const mode = raw === "" ? null : isKohiMonthMode(raw) ? raw : undefined;
+    if (mode === undefined) { alert(`公費の扱い「${raw}」を読めません`); return; }
+    if (!currentOfficeId) {
+      alert("公費の扱いは事業所ごとに保存します。事業所を選んでから選択してください。");
+      return;
+    }
+    setKohiModeSavingId(clientId);
+    try {
+      await saveKohiMonthMode({ tenantId, officeId: currentOfficeId, clientId, month: billingMonth, mode });
+      setKohiModes((prev) => {
+        const next = new Map(prev);
+        if (mode == null) next.delete(clientId); else next.set(clientId, mode);
+        return next;
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("公費の扱いの保存失敗:", msg);
+      alert(`保存失敗: ${msg}`);
+    } finally {
+      setKohiModeSavingId(null);
     }
   };
 
@@ -792,36 +908,21 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     ]);
     const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
 
-    // 公費 (生保 等) 情報を当月分だけ取得。生保(法別12)は本人負担を公費が全額負担する前提 (v1)。
+    // 公費 (生保 等) 情報を当月分だけ取得 (期間と本人支払額つき。lib/fukuyoguKohiMonth.ts)。
+    //   月途中の公費は「公費の扱い」(kohiModes) で、本人支払額は介護券の額までを本人負担に (fukuyogu-amounts.ts)。
     const monthStart = `${billingMonth}-01`;
     const monthEnd = monthEndYmd(y, m);
-    const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
-    {
-      const clientIds = billingGroups.map((g) => g.client.id);
+    let kohiLoad: Awaited<ReturnType<typeof loadKohiForMonth>>;
+    try {
       // 1,000 人分を 1 回の .in() に渡すと URL が長すぎて 400 になる → 150 人ずつ (lib/inChunks.ts)
-      type KohiRow = { client_id: string; hohei_code: string | null; futan_sha_number: string | null; jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null };
-      let kohiData: KohiRow[];
-      try {
-        kohiData = await selectInChunks<KohiRow>(clientIds, (chunk) => supabase
-          .from("client_public_expenses")
-          .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
-          .eq("tenant_id", tenantId)
-          .in("client_id", chunk));
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
-        console.error("公費取得失敗:", msg);
-        alert(`公費情報の取得に失敗しました: ${msg}`);
-        return;
-      }
-      for (const k of kohiData ?? []) {
-        if (!k.hohei_code) continue;
-        if (k.valid_start && k.valid_start > monthEnd) continue;
-        if (k.valid_end && k.valid_end < monthStart) continue;
-        if (!kohiByClient.has(k.client_id)) {
-          kohiByClient.set(k.client_id, { hobetsu: k.hohei_code, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number });
-        }
-      }
+      kohiLoad = await loadKohiForMonth(tenantId, billingGroups.map((g) => g.client.id), monthStart, monthEnd);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      console.error("公費取得失敗:", msg);
+      alert(`公費情報の取得に失敗しました: ${msg}`);
+      return;
     }
+    const kohiByClient = kohiLoad.byClient;
 
     // 軽度者(要支援1・2/要介護1) 原則対象外品目の例外給付記録を取得 (B-6d・2026-09-05)
     // ⚠ migrations/fukuyogu_exception_grants.sql が未適用の間はテーブルが無いので、
@@ -844,6 +945,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     //   判定は lib/ceilingCheck.ts (check:ceiling-rental と同じ関数)。読めなくても伝送は止めない。
     let ceilingIndex: ReturnType<typeof indexCeilings> | null = null;
     const preWarnings: string[] = [];
+    const benefitNoCert: string[] = []; // 負担割合証なしで認定行の給付率を使った利用者 (FY-H)
     try {
       ceilingIndex = indexCeilings(await getCeilingPrices(tenantId));
     } catch (e) {
@@ -852,8 +954,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
     // 明細行 → 利用者ごとの請求行を組む
     const rows: FukuyoguSeikyuRow[] = [];
+    for (const n of kohiLoad.notices) preWarnings.push(n);
+    if (kohiModesNotice) preWarnings.push(kohiModesNotice);
     for (const { client, items } of billingGroups) {
       const details: FukuyoguDetailLine[] = [];
+      // 明細と同じ並びの貸与期間 (月途中の公費の判定・明細の公費対象に使う)
+      const lineDates: { rentalStart: string | null; rentalEnd: string | null }[] = [];
       const ceilingLines: (CeilingRentalLine & { name: string })[] = [];
       let totalUnits = 0;
       for (const item of items) {
@@ -890,6 +996,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           days: fukuyoguRentalDaysInMonth(item.rental_start_date, item.rental_end_date, billingMonth),
           taisCode: eq?.tais_code ?? null,
         });
+        lineDates.push({ rentalStart: item.rental_start_date ?? null, rentalEnd: item.rental_end_date ?? null });
         totalUnits += units;
         ceilingLines.push({
           id: item.id,
@@ -926,14 +1033,21 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       //   (lib/kokuho-densou/fukuyogu-amounts.ts。返戻・過誤の再請求と同じ式を使う)。
       const kohi = kohiByClient.get(client.id) ?? null;
       const amt = computeFukuyoguAmounts({
-        benefitRateRaw: client.benefit_rate,
+        // ★ 給付率は 提供月に掛かる負担割合証 (無ければ認定行) で (FY-H。表が未適用なら clients.benefit_rate のまま)
+        benefitRateRaw: benefitRawForMonth(client, monthStart, monthEnd, (w) => preWarnings.push(`${client.name}: ${w}`), benefitNoCert),
         insuredNumber: client.insured_number,
         totalUnits,
         kohi,
         // ★ CM 指示単位数で頭打ち (入力が無ければ実績で請求)
         cmUnits: cmUnits.get(client.id) ?? null,
+        // ★ 月途中の公費: 用具ごとの貸与期間と「公費の扱い」(未選択は既定 + 警告)
+        month: billingMonth,
+        lines: details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })),
+        kohiMode: kohiModes.get(client.id) ?? null,
       });
+      for (const w of kohiLoad.clientWarnings.get(client.id) ?? []) preWarnings.push(`${client.name}: ${w}`);
       for (const w of amt.warnings) preWarnings.push(`${client.name}: ${w}`);
+      if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
       const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
       const careOffice = client.care_office_id
         ? careOffices.find((co) => co.id === client.care_office_id) ?? null
@@ -967,6 +1081,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         kohiJukyusha: kohi?.jukyusha ?? null,
         kohiAmount,
         kohiTandoku: amt.kohiTandoku,
+        kohiUnits: amt.kohiUnits,
+        kohiTargetCost: amt.kohiTargetCost,
+        kohiHonninFutan: amt.kohiHonninFutan,
         // 開始年月日・中止年月日 (7131/7132-01 項21/22) は渡さない — order_items.rental_start_date が
         //   移行時の仮の日付 (2026-04-01 / 09-01) のため。build.ts の serviceStartDate の注記を参照
       });
@@ -977,6 +1094,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       return;
     }
     if (cmUnitsNotice) preWarnings.unshift(cmUnitsNotice);
+    { const s = benefitNoCertSummary(benefitNoCert); if (s) preWarnings.unshift(s); }
 
     const result = buildFukuyoguDensou(rows, { officeNumber, year: y, month: m });
     const allWarnings = [...preWarnings, ...result.warnings];
@@ -1190,36 +1308,29 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       const monthStart = `${ym}-01`;
       const monthEnd = monthEndYmd(yy, mm);
       const clientIds = entries.map((e) => e.client.id);
-      // 1,000 人分を 1 回の .in() に渡すと URL が長すぎて 400 になる → 150 人ずつ (lib/inChunks.ts)
-      type KohiRow = { client_id: string; hohei_code: string | null; futan_sha_number: string | null; jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null };
-      let kohiData: KohiRow[];
+      // 期間・本人支払額つき (lib/fukuyoguKohiMonth.ts。150 人ずつ読む)
+      let kohiLoad: Awaited<ReturnType<typeof loadKohiForMonth>>;
       try {
-        kohiData = await selectInChunks<KohiRow>(clientIds, (chunk) => supabase
-          .from("client_public_expenses")
-          .select("client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end")
-          .eq("tenant_id", tenantId)
-          .in("client_id", chunk));
+        kohiLoad = await loadKohiForMonth(tenantId, clientIds, monthStart, monthEnd);
       } catch (e) {
         const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
         console.error("公費取得失敗:", msg);
         alert(`公費情報の取得に失敗しました: ${msg}`);
         return;
       }
-      const kohiByClient = new Map<string, { hobetsu: string; futansha: string | null; jukyusha: string | null }>();
-      for (const k of kohiData ?? []) {
-        if (!k.hohei_code) continue;
-        if (k.valid_start && k.valid_start > monthEnd) continue;
-        if (k.valid_end && k.valid_end < monthStart) continue;
-        if (!kohiByClient.has(k.client_id)) {
-          kohiByClient.set(k.client_id, { hobetsu: k.hohei_code, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number });
-        }
-      }
+      const kohiByClient = kohiLoad.byClient;
+      for (const n of kohiLoad.notices) allWarnings.push(`[${ym}] ${n}`);
+      // ★ 月途中の公費の扱い (その月の値)。読めなければ全員 既定の扱いで請求し、その旨を警告に出す
+      const modeLoad = await getKohiMonthModes(tenantId, ym, currentOfficeId);
+      if (modeLoad.message) allWarnings.push(`[${ym}] ${modeLoad.message}`);
       // ★ CM 指示単位数 (その月の値)。読めなければ全員 実績で請求し、その旨を警告に出す
       const cmLoad = await getCmUnits(tenantId, ym, currentOfficeId);
       if (cmLoad.message) allWarnings.push(`[${ym}] ${cmLoad.message}`);
+      const benefitNoCert: string[] = []; // 負担割合証なしで認定行の給付率を使った利用者 (FY-H)
       const rows: FukuyoguSeikyuRow[] = [];
       for (const { client, items } of entries) {
         const details: FukuyoguDetailLine[] = [];
+        const lineDates: { rentalStart: string | null; rentalEnd: string | null }[] = [];
         let totalUnits = 0;
         for (const item of items) {
           const eq = equipment.find((e) => e.product_code === item.product_code);
@@ -1245,6 +1356,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             days: fukuyoguRentalDaysInMonth(item.rental_start_date, item.rental_end_date, ym),
             taisCode: eq?.tais_code ?? null,
           });
+          lineDates.push({ rentalStart: item.rental_start_date ?? null, rentalEnd: item.rental_end_date ?? null });
           totalUnits += units;
         }
         if (details.length === 0) continue;
@@ -1263,13 +1375,19 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         // ★ 2026-10-15: 公費単独 (H) を含め、通常請求と同じ純関数で計算する
         const kohi = kohiByClient.get(client.id) ?? null;
         const amt = computeFukuyoguAmounts({
-          benefitRateRaw: client.benefit_rate,
+          // ★ 給付率は 提供月 (ym) に掛かる負担割合証 (無ければ認定行) で (FY-H)
+          benefitRateRaw: benefitRawForMonth(client, monthStart, monthEnd, (w) => allWarnings.push(`[${ym}] ${client.name}: ${w}`), benefitNoCert),
           insuredNumber: client.insured_number,
           totalUnits,
           kohi,
           cmUnits: cmLoad.byClient.get(client.id) ?? null,
+          month: ym,
+          lines: details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })),
+          kohiMode: modeLoad.byClient.get(client.id) ?? null,
         });
+        for (const w of kohiLoad.clientWarnings.get(client.id) ?? []) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
         for (const w of amt.warnings) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
+        if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
         const { copayRate, totalCost, insuranceAmount } = amt;
         const careOffice = client.care_office_id
           ? careOffices.find((co) => co.id === client.care_office_id) ?? null
@@ -1302,9 +1420,13 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           kohiJukyusha: kohi?.jukyusha ?? null,
           kohiAmount: amt.kohiAmount,
           kohiTandoku: amt.kohiTandoku,
+          kohiUnits: amt.kohiUnits,
+          kohiTargetCost: amt.kohiTargetCost,
+          kohiHonninFutan: amt.kohiHonninFutan,
         });
       }
       if (rows.length === 0) continue;
+      { const s = benefitNoCertSummary(benefitNoCert); if (s) allWarnings.push(`[${ym}] ${s}`); }
       const result = buildFukuyoguDensou(rows, { officeNumber, year: yy, month: mm });
       allWarnings.push(...result.warnings.map((w) => `[${ym}] ${w}`));
       const sjis = Encoding.convert(Encoding.stringToCode(result.content), { to: "SJIS", from: "UNICODE" });
@@ -1715,6 +1837,28 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                           >例外給付{ex.level === "danger" ? (ex.items.some((i) => i.kind === "missing") ? "なし" : "切れ") : "期限"}</button>
                         );
                       })()}
+                      {(() => {
+                        // ★ 月途中の公費 (生保): ケアマネの方針で 全部利用者負担 / 日割り / 半月 を選ぶ。未選択 = 既定 (赤)
+                        const kp = kohiPartialByClient.get(client.id);
+                        if (!kp) return null;
+                        const mode = kohiModes.get(client.id) ?? null;
+                        const range = `${kp.firstDay ?? "?"}〜${kp.lastDay ?? "?"}`;
+                        return (
+                          <select
+                            value={mode ?? ""}
+                            disabled={!kohiModesAvailable || kohiModeSavingId === client.id}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => handleKohiModeChange(client.id, e.target.value)}
+                            title={!kohiModesAvailable
+                              ? (kohiModesNotice ?? "")
+                              : `公費 (法別${kp.kohi.hobetsu}) の期間が月の一部です (${range})。ケアマネの方針で選んでください。\n未選択のときは「${KOHI_MONTH_MODE_LABEL[KOHI_MONTH_MODE_DEFAULT]}」で請求します`}
+                            className={`shrink-0 text-[10px] border rounded px-1 py-0.5 font-semibold bg-white disabled:bg-gray-100 ${mode ? "border-sky-400 text-sky-700" : "border-red-400 text-red-700 bg-red-50"}`}
+                          >
+                            <option value="">公費 月途中: 未選択</option>
+                            {KOHI_MONTH_MODES.map((md) => <option key={md} value={md}>公費 {KOHI_MONTH_MODE_LABEL[md]}</option>)}
+                          </select>
+                        );
+                      })()}
                       <button
                         onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
                         className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -1836,6 +1980,18 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                     <span>利用者負担額 <strong className="font-mono text-red-600">{copayClaim.toLocaleString()}</strong></span>
                     <span>公費分本人負担 <strong className="font-mono">—</strong></span>
                   </div>
+                  {(kohiPartialByClient.size > 0 || kohiModesNotice || screenKohiNotice) && (() => {
+                    const unselected = [...kohiPartialByClient.keys()].filter((cid) => !kohiModes.has(cid)).length;
+                    return (
+                      <div className="mt-1.5 text-[11px] text-red-700">
+                        {kohiPartialByClient.size > 0 && (
+                          <span>⚠ 公費が月の途中で始まる/終わる利用者 {kohiPartialByClient.size} 名 (公費の扱い 未選択 {unselected} 名 = 「{KOHI_MONTH_MODE_LABEL[KOHI_MONTH_MODE_DEFAULT]}」で請求) — 利用者名の横で ケアマネの方針 (全部利用者負担 / 日割り / 半月) を選んでください</span>
+                        )}
+                        {kohiModesNotice && <span className="block">⚠ {kohiModesNotice}</span>}
+                        {screenKohiNotice && <span className="block">⚠ {screenKohiNotice}</span>}
+                      </div>
+                    );
+                  })()}
                   {(exceptionByClient.size > 0 || exNotice) && (
                     <div className="mt-1.5 text-[11px] text-red-700">
                       {exceptionByClient.size > 0 && <span>⚠ 軽度者 例外給付 要確認 {exceptionByClient.size} 名 (記録なし/期限切れ {[...exceptionByClient.values()].filter((v) => v.level === "danger").length} 名) — 利用者名の横の印を押すと入力を開きます。記録が無いだけの可能性があります</span>}

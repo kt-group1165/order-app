@@ -133,6 +133,7 @@ for (const i of items) {
 console.log(`══ 分母 (${MONTH}) ══`);
 console.log(`  clients ${clients.length} 名 / うち **その月に介護レンタルがある** ${active.size} 名`);
 
+const clientById0 = new Map(clients.map((c) => [c.id, c]));
 const isTandoku = (c: Client) => /^[Hh]/.test((c.insured_number ?? "").trim());
 /** `clients.copay_rate` は **percent 表記** ("10"/"20"/"30")。0.1 のような比率も受ける */
 const pct = (v: string | null) => {
@@ -264,6 +265,36 @@ if (buckets.certExpired.length) {
   if (buckets.certExpired.length > 15) console.log(`   … 他 ${buckets.certExpired.length - 15} 名`);
 }
 console.log(`   (公費単独 ${buckets.tandokuOk} 名は認定が無くても正常なので ⑦ から除外)`);
+
+// ⑧ (参考・基準値には入れない) 2026-11-09 FY-H: 請求 (BillingTab) は表 client_benefit_certificates があれば
+//   「提供月に掛かる負担割合証 → 無ければ認定行」(lib/insurance/cert-month.ts resolveBenefitForMonth) の給付率で出す。
+//   その値と clients.benefit_rate が違う人数 = 表を入れると金額が変わる人数。表が未作成なら CSV の見込みで数える。
+//   件数の増減の見張りは check:futan-period (基準値方式) が持つ。ここは同じ関数で中身を並べるだけ。
+{
+  const { resolveBenefitForMonth } = await import("../lib/insurance/cert-month");
+  const { loadBenefitCertsDbOrCsv, loadCertRows } = await import("./_futan-period-core.mjs");
+  const ids = [...active.keys()];
+  const K = "../kaigo-app";
+  const b = await loadBenefitCertsDbOrCsv(sb, ids, [
+    { label: "ケアサポ 20261109", futan: `${K}/伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/負担割合証等_全件.CSV`, ins: [`${K}/伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/介護保険_全件_保険と認定.CSV`] },
+    { label: "全社 20260830", futan: `${K}/利用者データ/全社_R8-08/負担割合証等1.CSV`, ins: [`${K}/利用者データ/全社_R8-08/介護保険1.CSV`] },
+  ]);
+  const rowsBy = await loadCertRows(sb, ids);
+  const bySource: Record<string, number> = {};
+  const diff: string[] = [];
+  for (const cid of ids) {
+    const c = clientById0.get(cid);
+    const r = resolveBenefitForMonth(rowsBy.get(cid) ?? [], b.byClient.get(cid) ?? [], MS, ME);
+    bySource[r.source] = (bySource[r.source] ?? 0) + 1;
+    const mine = c?.benefit_rate == null ? null : parseInt(c.benefit_rate, 10);
+    if (r.benefitRate != null && mine !== r.benefitRate) diff.push(`${c?.name ?? cid}: clients=${mine ?? "未設定"} / 請求に使う給付率=${r.benefitRate} (${r.source === "certificate" ? `負担割合証 ${r.periodFrom}〜${r.periodTo ?? ""}` : "認定行"})`);
+  }
+  console.log(`\n(参考) ⑧ 請求に使う給付率 (負担割合証 → 認定行) — 出どころ ${b.source}: ${b.note}`);
+  console.log(`   出どころ別: 負担割合証 ${bySource.certificate ?? 0} 名 / 認定行 ${bySource.cert_row ?? 0} 名 / なし ${bySource.none ?? 0} 名`);
+  console.log(`   clients.benefit_rate と違う ${diff.length} 名 (表の適用後はこの人たちの給付率が変わる)`);
+  for (const l of diff.slice(0, 15)) console.log(`   ${l}`);
+  if (diff.length > 15) console.log(`   … 他 ${diff.length - 15} 名`);
+}
 
 console.log(`\n✅ 公費単独 (H) で 給付率 0 — ${buckets.tandokuOk} 名 (**これは正常**)`);
 console.log(`   ⚠ ここを分けないと「給付率 0 = 異常」で ${buckets.tandokuOk} 件の誤報になる`);

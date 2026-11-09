@@ -28,7 +28,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
-import { computeFukuyoguAmounts, normalizeCmUnits, type FukuyoguAmounts } from "../lib/kokuho-densou/fukuyogu-amounts";
+import { computeFukuyoguAmounts, normalizeCmUnits, normalizeSelfPay, KOHI_MONTH_MODE_DEFAULT, type FukuyoguAmounts, type KohiMonthMode } from "../lib/kokuho-densou/fukuyogu-amounts";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
 
 const BASELINE = "scripts/fukuyogu-densou-check-baseline.json";
@@ -332,6 +332,150 @@ console.log("\n══ ★ CM 指示単位数で頭打ち (2026-11-09・ほのぼ
   eq("入力値の読み (\"１,２００\"→1200 / 空・負・小数・文字 → 入力なし)",
     [normalizeCmUnits("１,２００"), normalizeCmUnits(""), normalizeCmUnits("-1"), normalizeCmUnits("1.5"), normalizeCmUnits("abc"), normalizeCmUnits(null), normalizeCmUnits(0)],
     [1200, null, null, null, null, null, 0]);
+}
+
+// ══ ★ 月途中の公費 (生保) の扱い none / daily / half (2026-11-09 user 要件) ══════════════
+//   ⚠ 期待値は手計算 (ほのぼのの実伝送 KK261004 に月途中の公費の例は無い。IF 仕様と kaigo-app の式由来)。
+//   2026-09 (30 日) / 給付率 90 / 用具 2 品目 (300 単位 × 1・101 単位 × 2 = 計 502 単位・費用 5,020・保険 4,518・本人 502)
+//   101 は奇数で四捨五入の向きを見るため。
+{
+  console.log("\n══ ★ 月途中の公費 (生保) の扱い none / daily / half (手計算) ══");
+  const YM = "2026-09";
+  const KOHI = { hobetsu: "12", futansha: "12124517", jukyusha: "0024935" };
+  const LINES = [
+    { unitPer: 300, count: 1, units: 300, rentalStart: "2026-04-01", rentalEnd: null },
+    { unitPer: 101, count: 2, units: 202, rentalStart: "2026-04-01", rentalEnd: null },
+  ];
+  const calc = (periods: { start: string | null; end: string | null }[] | undefined, mode: KohiMonthMode | null, extra: Partial<Parameters<typeof computeFukuyoguAmounts>[0]> = {}) =>
+    computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1001328079", totalUnits: 502, kohi: { ...KOHI, periods, ...(extra.kohi ?? {}) }, month: YM, lines: LINES, kohiMode: mode, ...extra, ...(extra.kohi ? { kohi: { ...KOHI, periods, ...extra.kohi } } : {}) });
+  const pieces = (a: FukuyoguAmounts) => (a.kohiPieces ?? []).map((ps) => ps.map((p) => `${p.days}/${p.units}`).join("+")).join(" | ");
+  const sum = (a: FukuyoguAmounts) => [a.kohiPartial, a.kohiMode, a.kohiModeDefaulted, a.kohiUnits, a.kohiAmount, a.userAmount, a.insuranceAmount];
+
+  // ── 開始 9/28 (飯村 昭 の実例と同じ形) ──
+  const start28 = [{ start: "2026-09-28", end: "2026-09-30" }];
+  const d0 = calc(start28, null);
+  eq("開始9/28 未選択 = 既定 none (公費なし・本人 502・警告「未選択」)", [...sum(d0), d0.warnings.some((w) => w.includes("未選択"))], [true, KOHI_MONTH_MODE_DEFAULT, true, null, null, 502, 4518, true]);
+  const dn = calc(start28, "none");
+  eq("開始9/28 none = 公費なし (未選択の警告は出ない)", [...sum(dn), dn.warnings.some((w) => w.includes("未選択"))], [true, "none", false, null, null, 502, 4518, false]);
+  const dd = calc(start28, "daily");
+  // 300×3/30=30 / 101×3/30=10.1→10 ×2 = 50 単位 → 500 円 → 保険 450 → 公費 50 / 本人 5,020−4,518−50 = 452
+  eq("開始9/28 daily = 公費対象 50 (30+10+10)・公費 50・本人 452", [...sum(dd), pieces(dd)], [true, "daily", false, 50, 50, 452, 4518, "3/30 | 3/10+3/10"]);
+  const dh = calc(start28, "half");
+  // 後半を公費: round(300/2)=150 / round(101/2)=51 ×2 = 252 → 2,520 円 → 保険 2,268 → 公費 252 / 本人 250。日数 = 16〜30 日 = 15
+  eq("開始9/28 half = 後半を公費 252 (150+51+51)・公費 252・本人 250", [...sum(dh), pieces(dh)], [true, "half", false, 252, 252, 250, 4518, "15/150 | 15/51+15/51"]);
+
+  // ── 終了 9/10 (生保が月の途中で終わる) ──
+  const end10 = [{ start: "2026-08-01", end: "2026-09-10" }];
+  const ed = calc(end10, "daily");
+  // 300×10/30=100 / 101×10/30=33.67→34 ×2 = 168
+  eq("終了9/10 daily = 公費対象 168 (100+34+34)・日数 10", [ed.kohiUnits, ed.kohiAmount, pieces(ed)], [168, 168, "10/100 | 10/34+10/34"]);
+  const eh = calc(end10, "half");
+  eq("終了9/10 half = 前半を公費 252・日数 15 (1〜15 日)", [eh.kohiUnits, pieces(eh)], [252, "15/150 | 15/51+15/51"]);
+
+  // ── 境界: 1 日だけ / 15・16 日 ──
+  const one = calc([{ start: "2026-09-30", end: "2026-09-30" }], "daily");
+  eq("境界 1 日だけ (9/30) daily = 10+3+3 = 16・日数 1", [one.kohiUnits, pieces(one)], [16, "1/10 | 1/3+1/3"]);
+  const oneH = calc([{ start: "2026-09-30", end: "2026-09-30" }], "half");
+  eq("境界 1 日だけ (9/30) half = 後半 252 (CM の方針どおり半月)", [oneH.kohiUnits], [252]);
+  const s16 = calc([{ start: "2026-09-16", end: null }], "daily");
+  eq("境界 開始9/16 daily = 半分ちょうど 150+51+51 = 252・日数 15", [s16.kohiUnits, pieces(s16)], [252, "15/150 | 15/51+15/51"]);
+  const s15 = calc([{ start: "2026-09-15", end: null }], "daily");
+  eq("境界 開始9/15 daily = 160+54+54 = 268・日数 16", [s15.kohiUnits, pieces(s15)], [268, "16/160 | 16/54+16/54"]);
+  const s15h = calc([{ start: "2026-09-15", end: null }], "half");
+  eq("境界 開始9/15 half = 公費の日が多い後半 (15 対 1)・252・日数 15", [s15h.kohiUnits, pieces(s15h)], [252, "15/150 | 15/51+15/51"]);
+  const e15h = calc([{ start: null, end: "2026-09-15" }], "half");
+  const e16h = calc([{ start: null, end: "2026-09-16" }], "half");
+  eq("境界 終了9/15・9/16 half = どちらも前半を公費 252・日数 15", [e15h.kohiUnits, pieces(e15h), e16h.kohiUnits, pieces(e16h)], [252, "15/150 | 15/51+15/51", 252, "15/150 | 15/51+15/51"]);
+
+  // ── 公費が月の全期間 / 重ならない / 貸与が後半だけ ──
+  const full = calc([{ start: "2026-09-01", end: "2026-09-30" }], "half");
+  eq("全期間の公費 = 月途中ではない (扱いは無視・公費 502・pieces なし)", [full.kohiPartial, full.kohiMode, full.kohiUnits, full.kohiAmount, full.userAmount, full.kohiPieces], [false, null, 502, 502, 0, null]);
+  const noOverlap = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 300, kohi: { ...KOHI, periods: start28 }, month: YM,
+    lines: [{ unitPer: 300, count: 1, units: 300, rentalStart: "2026-04-01", rentalEnd: "2026-09-10" }], kohiMode: "daily" });
+  eq("公費の期間に貸与日が無い (9/10 撤去・9/28 生保) = 公費なし + 警告", [noOverlap.kohiAmount, noOverlap.userAmount, noOverlap.warnings.some((w) => w.includes("貸与日がありません"))], [null, 300, true]);
+  const lateRent = (mode: KohiMonthMode) => computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 150, kohi: { ...KOHI, periods: [{ start: "2026-09-25", end: null }] }, month: YM,
+    lines: [{ unitPer: 150, count: 1, units: 150, rentalStart: "2026-09-20", rentalEnd: null }], kohiMode: mode });
+  // 貸与 9/20〜 (11 日・後半だけ = 半月按分済み 150)、生保 9/25〜 (6 日): daily = 150×6/11 = 81.8→82 / half = 公費の半月 (後半) に貸与が全部 → 150
+  eq("貸与が後半だけ (9/20〜)・生保 9/25〜: daily 82・日数 6 / half 150 (全部)", [lateRent("daily").kohiUnits, pieces(lateRent("daily")), lateRent("half").kohiUnits], [82, "6/82", 150]);
+
+  // ── 伝送: daily (開始9/28) の 02 項10・11・15 / 01 項35・39-41 / 10 項17-20 / 7111 公費分 ──
+  const mkDetail = (a: FukuyoguAmounts | null) => [
+    { serviceCode: "171001", unitPer: 300, count: 1, units: 300, days: 30, taisCode: "00066-000352", kohiPieces: a?.kohiPieces?.[0] },
+    { serviceCode: "171007", unitPer: 101, count: 2, units: 202, days: 30, taisCode: "00254-000133", kohiPieces: a?.kohiPieces?.[1] },
+  ];
+  const mkKohiRow = (a: FukuyoguAmounts, withPieces = true): FukuyoguSeikyuRow => ({
+    ...base, userName: "飯村 見本", insuredNumber: "1001328079", careLevel: "要介護2", details: mkDetail(withPieces ? a : null),
+    copayRate: a.copayRate, totalUnits: a.billedUnits, totalCost: a.totalCost, insuranceAmount: a.insuranceAmount, userAmount: a.userAmount,
+    kohiHobetsu: a.kohiHobetsu, kohiFutansha: a.kohiHobetsu ? KOHI.futansha : null, kohiJukyusha: a.kohiHobetsu ? KOHI.jukyusha : null,
+    kohiAmount: a.kohiAmount, kohiUnits: a.kohiUnits, kohiTargetCost: a.kohiTargetCost, kohiHonninFutan: a.kohiHonninFutan,
+  });
+  const bd = buildFukuyoguDensou([mkKohiRow(dd)], { officeNumber: "1272400050", year: 2026, month: 9 });
+  const bl = bd.content.split("\r\n").filter(Boolean).map(cols);
+  const h01 = bl.find((x) => x[2] === "7131" && x[3] === "01")!;
+  const t10 = bl.find((x) => x[2] === "7131" && x[3] === "10")!;
+  const d02 = bl.filter((x) => x[2] === "7131" && x[3] === "02");
+  const k7111 = bl.find((x) => x[2] === "7111" && x[5] === "2")!;
+  eq("伝送 daily: 02 項10 日数 / 項11 公費日数 / 項14 / 項15 公費単位 (1 用具 1 行)", d02.map((d) => [d[11], d[12], d[15], d[16]].join("/")), ["30/3/300/30", "30/3/101/10", "30/3/101/10"]);
+  eq("伝送 daily: 01 項33-35 / 39-41 = 502・4518・452 / 50・50・0", [h01[34], h01[35], h01[36], h01[40], h01[41], h01[42]], ["502", "4518", "452", "50", "50", "0"]);
+  eq("伝送 daily: 10 項14・16・17 / 18-20 = 502・4518・452 / 50・50・0", [t10[15], t10[17], t10[18], t10[19], t10[20], t10[21]], ["502", "4518", "452", "50", "50", "0"]);
+  eq("伝送 daily: 7111 公費分 件数・単位・費用・保険・公費・本人 = 1・50・500・0・50・0", [k7111[8], k7111[9], k7111[10], k7111[11], k7111[12], k7111[13]], ["1", "50", "500", "0", "50", "0"]);
+  eq("伝送 daily: 突合の警告なし (Σ02 項15 = 01 項39)", bd.warnings.filter((w) => w.includes("公費対象")), []);
+  const bn = buildFukuyoguDensou([mkKohiRow(d0)], { officeNumber: "1272400050", year: 2026, month: 9 });
+  const bnl = bn.content.split("\r\n").filter(Boolean).map(cols);
+  const n01 = bnl.find((x) => x[2] === "7131" && x[3] === "01")!;
+  eq("伝送 none (未選択の既定): 公費欄なし (01 項7・30 空・39 0) / 7111 公費分なし", [n01[8], n01[31], n01[40], bnl.some((x) => x[2] === "7111" && x[5] === "2")], ["", "", "0", false]);
+  // 負のコントロール (1): 明細に kohiPieces を付け忘れると 02 項15 が満額 (502) になり、突合の警告が鳴る
+  const bneg = buildFukuyoguDensou([mkKohiRow(dd, false)], { officeNumber: "1272400050", year: 2026, month: 9 });
+  eq("★ 負のコントロール: 明細の公費対象を付け忘れる → 警告「明細の公費対象単位数の合計 (502)」", bneg.warnings.some((w) => w.includes("明細の公費対象単位数の合計 (502)")), true);
+  // 負のコントロール (2): 公費の期間を渡さないと月途中と判定されず 月全体を公費 (= 2026-11-09 以前の当方の挙動)
+  const noPeriods = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 502, kohi: KOHI, month: YM, lines: LINES, kohiMode: "daily" });
+  eq("★ 負のコントロール: periods 無し → 月途中にならず公費 502 (旧挙動)", [noPeriods.kohiPartial, noPeriods.kohiUnits, noPeriods.kohiAmount], [false, 502, 502]);
+
+  // ── 本人支払額 (中島 紀久子 KK261004 7132 と同じ値) ──
+  console.log("\n══ ★ 生保の本人支払額 (ほのぼの KK261004 中島 紀久子 と同じ値) ══");
+  const NAKA_LINES = [200, 100, 300, 300, 300].map((u) => ({ unitPer: u, count: 1, units: u, rentalStart: "2026-01-01", rentalEnd: null }));
+  const naka = (selfPay: number | null) => computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1000063779", totalUnits: 1200,
+    kohi: { hobetsu: "12", futansha: "12123519", jukyusha: "0197731", selfPay, periods: [{ start: "2026-09-01", end: "2026-09-30" }] }, month: YM, lines: NAKA_LINES });
+  const nk = naka(1200);
+  eq("本人支払額 1,200: 保険 10,800 / 公費 0 / 本人 1,200 (= 公費分本人負担)", [nk.insuranceAmount, nk.kohiAmount, nk.userAmount, nk.kohiHonninFutan, nk.kohiUnits], [10800, 0, 1200, 1200, 1200]);
+  const mkNakaRow = (a: FukuyoguAmounts): FukuyoguSeikyuRow => ({
+    ...base, userName: "中島 見本", insurerNumber: "122192", insuredNumber: "1000063779", careLevel: "要支援2", careOfficeNumber: "1202400014", carePlanKubun: "3",
+    birthDate: "1942-02-15", gender: "女", certStart: "2023-06-01", certEnd: "2027-05-31",
+    details: NAKA_LINES.map((l, i) => ({ serviceCode: i === 4 ? "171009" : "171007", unitPer: l.unitPer, count: 1, units: l.units, days: 30, taisCode: "x" })),
+    copayRate: a.copayRate, totalUnits: a.billedUnits, totalCost: a.totalCost, insuranceAmount: a.insuranceAmount, userAmount: a.userAmount,
+    kohiHobetsu: "12", kohiFutansha: "12123519", kohiJukyusha: "0197731", kohiAmount: a.kohiAmount, kohiUnits: a.kohiUnits, kohiTargetCost: a.kohiTargetCost, kohiHonninFutan: a.kohiHonninFutan,
+  });
+  // KK261004 の実レコード (01 項29-41 / 10 項14-20)
+  //   01: …,90,100,,,1200,10800,0,0,0,0,1200,0,1200,…   10: …,1200,1000,10800,0,1200,0,1200,…
+  const KK_01 = ["90", "100", "", "", "1200", "10800", "0", "0", "0", "0", "1200", "0", "1200"];
+  const KK_10 = ["1200", "1000", "10800", "0", "1200", "0", "1200"];
+  const nkB = (a: FukuyoguAmounts) => {
+    const r = buildFukuyoguDensou([mkNakaRow(a)], { officeNumber: "1272400050", year: 2026, month: 9 });
+    const ls = r.content.split("\r\n").filter(Boolean).map(cols);
+    const h = ls.find((x) => x[2] === "7132" && x[3] === "01")!;
+    const t = ls.find((x) => x[2] === "7132" && x[3] === "10")!;
+    const k = ls.find((x) => x[2] === "7111" && x[5] === "2")!;
+    const hk = ls.find((x) => x[2] === "7111" && x[5] === "1")!;
+    return { h01: h.slice(30, 43), t10: t.slice(15, 22), k7111: [k[9], k[10], k[12], k[13]], hoken12: hk[13] };
+  };
+  const nb = nkB(nk);
+  eq("★ 本人支払額: 7132-01 項29-41 = ほのぼの KK261004 と同じ", nb.h01, KK_01);
+  eq("★ 本人支払額: 7132-10 項14-20 = ほのぼの KK261004 と同じ", nb.t10, KK_10);
+  eq("本人支払額: 7111 公費分 単位・費用・公費・本人 = 1200・12000・0・0 / 保険分 利用者負担に 1,200 を含む", [...nb.k7111, nb.hoken12], ["1200", "12000", "0", "0", "1200"]);
+  const nk500 = naka(500);
+  eq("本人支払額 500 (< 本人分 1,200): 公費 700 / 本人 500 / 01 項35 0", [nk500.kohiAmount, nk500.userAmount, nk500.kohiHonninFutan, nkB(nk500).h01[6]], [700, 500, 500, "0"]);
+  const nk9 = naka(5000);
+  eq("本人支払額 5,000 (> 本人分): 本人は 1,200 で頭打ち・公費 0", [nk9.kohiAmount, nk9.userAmount, nk9.kohiHonninFutan], [0, 1200, 1200]);
+  const ddSelf = calc(start28, "daily", { kohi: { ...KOHI, selfPay: 30 } });
+  // daily 開始9/28: 公費対象の本人分 50 のうち 30 を本人 → 公費 20 / 本人 5,020−4,518−20 = 482 (01 項35 = 482−30 = 452)
+  eq("月途中 daily + 本人支払額 30: 公費 20 / 本人 482 (うち公費分本人 30)", [ddSelf.kohiAmount, ddSelf.userAmount, ddSelf.kohiHonninFutan], [20, 482, 30]);
+  const tandoku = computeFukuyoguAmounts({ benefitRateRaw: "0", insuredNumber: "H000000001", totalUnits: 1000, kohi: { ...KOHI, selfPay: 1500 } });
+  eq("公費単独 (H) + 本人支払額 1,500: 保険 0 / 公費 8,500 / 本人 1,500", [tandoku.insuranceAmount, tandoku.kohiAmount, tandoku.userAmount, tandoku.kohiHonninFutan], [0, 8500, 1500, 1500]);
+  eq("本人支払額の読み (\"１,２００円\"→1200 / 空・負・小数 → 0)", [normalizeSelfPay("１,２００円"), normalizeSelfPay(""), normalizeSelfPay(-5), normalizeSelfPay("1.5"), normalizeSelfPay(null)], [1200, 0, 0, 0, 0]);
+  // 負のコントロール: 本人支払額を渡さないと ほのぼのと合わない (公費 1,200 / 項41 0 = 2026-11-09 以前の当方)
+  const nk0 = naka(null);
+  const nb0 = nkB(nk0);
+  eq("★ 負のコントロール: 本人支払額なし → 01・10 とも KK261004 と不一致 (公費 1,200 / 項41 0)", [JSON.stringify(nb0.h01) === JSON.stringify(KK_01), JSON.stringify(nb0.t10) === JSON.stringify(KK_10), nk0.kohiAmount, nb0.h01[12]], [false, false, 1200, "0"]);
 }
 
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);

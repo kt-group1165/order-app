@@ -26,6 +26,8 @@
     "check:exception-rules": "tsx scripts/fukuyogu-exception-rules-test.mts",
     "check:order-items-integrity": "tsx scripts/order-items-integrity-check.mts",
     "check:all": "tsx scripts/check-all.mts",
+    "check:cert-month-parity": "tsx scripts/cert-month-parity.mts",
+    "check:futan-period": "tsx scripts/futan-period-check.mts",
     "check:renovation-docs": "tsx scripts/renovation-estimate-verify.mts",
     "check:doc-checklist": "tsx scripts/doc-checklist-verify.mts",
     "check:rental-report": "tsx scripts/rental-report-verify.mts",

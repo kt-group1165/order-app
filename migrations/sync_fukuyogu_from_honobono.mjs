@@ -297,6 +297,8 @@ async function main() {
         hob, fut: fut6.length === 6 ? hob + fut6 : fut6, jyu: sOrNull(r[q("受給者番号")]), confirmed: dOrNull(r[q("確認日")]),
         start: dOrNull(r[q("有効期限－開始日")]), end: dOrNull(r[q("有効期限－終了日")]), kubun: nfkc(r[q("介護医療区分")]), seiho: nfkc(r[q("生活保護区分")]),
         appType: sOrNull(r[q("申請区分")]), special: sOrNull(r[q("特別区分")]), outpatient: iOrNull(r[q("外来負担金")]), inpatient: iOrNull(r[q("入院負担金")]),
+        // 本人支払額 (介護券の月額。2026-11-09 追加 = client_public_expenses.self_pay_amount)。空欄 = null (0 円扱い)
+        selfPay: iOrNull(r[q("本人支払額")]),
         raw: Object.fromEntries(["法制コード", "負担者番号", "受給者番号", "確認日", "有効期限－開始日", "有効期限－終了日", "生活保護区分", "介護医療区分"].map((n) => [n, r[q(n)]])),
       });
     }
@@ -750,6 +752,17 @@ async function main() {
 
   // ════ 4. kohi ═══════════════════════════════════════════════════════
   {
+    // 本人支払額の列 (migrations/fukuyogu_kohi_month_mode.sql) があるか。無い DB では本人支払額を書かない
+    //   (SELECT 1 件で見る。わざとエラーを起こして調べるのではない)
+    const { error: spErr } = await sb.from("client_public_expenses").select("id, self_pay_amount").limit(1);
+    const selfPayCol = !spErr;
+    const selfPayById = new Map();
+    if (!selfPayCol) {
+      console.log(`  ⚠ client_public_expenses.self_pay_amount が無い (${spErr.message}) — 本人支払額は書かない (migrations/fukuyogu_kohi_month_mode.sql 未適用)`);
+    } else {
+      const ids = sim.kohi.map((k) => k.id).filter((id) => !isNew(id));
+      for (const r of await selectIn(sb, "client_public_expenses", "id, self_pay_amount", "id", ids)) selfPayById.set(r.id, r.self_pay_amount ?? null);
+    }
     const m2 = buildBillingModel(sim, MONTH, OFFICE, libs);
     for (const s of subjects) {
       const cid = resolvedS.get(s.sid);
@@ -763,10 +776,24 @@ async function main() {
         if (k.kubun && k.kubun !== "介護") { R.kohi.add("介護医療区分が 介護 でない (入れない)", { ...s.ex, ...k.raw }); continue; }
         if (!/^\d{8}$/.test(k.fut)) { R.kohi.add("負担者番号が 8 桁にならない (入れない)", { ...s.ex, 負担者: k.fut }); continue; }
         const hit = mine.find((e) => !used.has(e.id) && nfkc(e.futan_sha_number) === k.fut && (nfkc(e.jukyu_sha_number) || null) === k.jyu && (e.valid_start ?? null) === k.start && (e.valid_end ?? null) === k.end);
-        if (hit) { used.add(hit.id); continue; }
+        if (hit) {
+          used.add(hit.id);
+          // 本人支払額: 既存行と違えば直す (共有の人は書かず控えるだけ)。列が無い DB では何もしない
+          const want = k.selfPay ?? null;
+          const have = selfPayById.has(hit.id) ? selfPayById.get(hit.id) : null;
+          if (selfPayCol && want !== have && !(want == null && have == null)) {
+            const op = { table: "client_public_expenses", id: hit.id, before: { self_pay_amount: have }, patch: { self_pay_amount: want }, src,
+              ref: { ...s.ex, 期間: `${k.start}〜${k.end}`, 本人支払額: `${have ?? "空"} → ${want ?? "空"}` } };
+            if (shared) applyOp("kohi", { ...op, action: "observe", why: "共有のため本人支払額を上書きしない (控えのみ)" });
+            else applyOp("kohi", { ...op, action: "update", why: "ほのぼのの本人支払額と違う" });
+          }
+          continue;
+        }
         applyOp("kohi", { table: "client_public_expenses", action: "insert", id: newId("kohi"), why: s.person ? "ほのぼのの公費 (全件) で DB に無い行" : "KDS の公費で DB に無い", ref: { ...s.ex, 期間: `${k.start}〜${k.end}` }, src,
           row: { tenant_id: TENANT, client_id: cid, hohei_code: k.hob, futan_sha_number: k.fut, jukyu_sha_number: k.jyu, valid_start: k.start, valid_end: k.end,
-            confirmed_date: k.confirmed ?? null, application_type: k.appType ?? null, special_type: k.special ?? null, outpatient_copay: k.outpatient ?? null, inpatient_copay: k.inpatient ?? null } });
+            confirmed_date: k.confirmed ?? null, application_type: k.appType ?? null, special_type: k.special ?? null, outpatient_copay: k.outpatient ?? null, inpatient_copay: k.inpatient ?? null,
+            // 本人支払額は列がある DB で値があるときだけ書く (列が無い DB に送ると insert が落ちる)
+            ...(selfPayCol && k.selfPay != null ? { self_pay_amount: k.selfPay } : {}) } });
       }
       if (s.person) for (const e of mine) {
         if (used.has(e.id)) continue;

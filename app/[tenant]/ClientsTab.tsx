@@ -14,6 +14,8 @@ import { KANA_ROWS } from "./kana-rows";
 import { STATUS_LABEL, STATUS_COLOR, NEXT_STATUSES, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
 import { getAllExceptionGrants, getExceptionInsurerRules, isTableMissingError, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, proposeValidEnd, diffDaysYmd, EXCEPTION_EXPIRY_WARN_DAYS, type ExceptionInsurerRule, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
+import { judgeBenefitCertAlert, BENEFIT_CERT_EXPIRY_WARN_DAYS, type BenefitCertAlert } from "@/lib/insurance/cert-month";
+import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import CarePlanModal from "./CarePlanModal";
 import ProposalModal from "./ProposalModal";
 import ContractDocumentsModal from "./ContractDocumentsModal";
@@ -326,6 +328,40 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
     return m;
   }, [exceptionGrantsAll, exceptionRules, orderItems, orderById, clientById, equipmentByCode]);
 
+  // ── 負担割合証の印 (2026-11-09 FY-H) ─────────────────────────────────
+  //   介護保険の貸与を (取消・終了以外で) 借りている利用者 (公費単独 H を除く) について、今日時点で
+  //   負担割合証なし / 期限切れ = 赤、30 日以内に期限で次の証が未登録 = 橙。8/1 の更新前にもらいに行けるように。
+  //   判定は lib/insurance/cert-month.ts の judgeBenefitCertAlert (kaigo-app の利用者一覧と同じ関数)。
+  //   ⚠ 表 client_benefit_certificates が読めないときは印を出さない (全員「なし」に見えるため)。理由はボタンの title に出す。
+  const [benefitCertsLoad, setBenefitCertsLoad] = useState<BenefitCertsLoad | null>(null);
+  const [futanFilter, setFutanFilter] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    loadBenefitCertificates(tenantId).then((r) => { if (!cancelled) setBenefitCertsLoad(r); });
+    return () => { cancelled = true; };
+  // 詳細から一覧に戻ったときにも読み直す
+  }, [tenantId, exceptionListVisible]);
+  const futanAlertByClient = useMemo(() => {
+    const m = new Map<string, BenefitCertAlert>();
+    if (!benefitCertsLoad?.available) return m;
+    const today = todayYmd();
+    const kaigoClients = new Set<string>();
+    for (const item of orderItems) {
+      if (item.status === "cancelled" || item.status === "terminated") continue;
+      const order = orderById.get(item.order_id);
+      if (!order?.client_id) continue;
+      if ((item.payment_type ?? order.payment_type) !== "介護") continue;
+      kaigoClients.add(order.client_id);
+    }
+    for (const cid of kaigoClients) {
+      const c = clientById.get(cid);
+      if (!c || /^[Hh]/.test((c.insured_number ?? "").trim())) continue; // 公費単独は負担割合証が要らない
+      const a = judgeBenefitCertAlert(benefitCertsLoad.byClient.get(cid) ?? [], today);
+      if (a.level !== "ok") m.set(cid, a);
+    }
+    return m;
+  }, [benefitCertsLoad, orderItems, orderById, clientById]);
+
   // 入院フィルター用
   const hospFilteredIds = useMemo(() => {
     if (!hospFilter) return null;
@@ -346,6 +382,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       // 仮登録のみ表示
       if (provisionalFilter && !c.is_provisional) return false;
       if (exceptionFilter && !exceptionStatusByClient.has(c.id)) return false;
+      if (futanFilter && !futanAlertByClient.has(c.id)) return false;
       if (hospFilter) return hospFilteredIds!.has(c.id);
       if (kanaFilter) {
         const row = KANA_ROWS.find((r) => r.label === kanaFilter);
@@ -367,7 +404,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       if (fa !== fb) return fa - fb;
       return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
     }),
-    [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, exceptionFilter, exceptionStatusByClient, hospFilter, hospFilteredIds, kanaFilter, search]);
+    [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, exceptionFilter, exceptionStatusByClient, futanFilter, futanAlertByClient, hospFilter, hospFilteredIds, kanaFilter, search]);
 
   // 変更履歴を生成（Mapルックアップで O(N²) → O(N) に、useMemoで再描画時再実行しない）
   // 注意: 早期 return より前に置くこと（フックの順序を保つ）
@@ -2196,8 +2233,8 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         ) : (
           <>
             <button
-              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); setExceptionFilter(false); }}
-              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter && !trashFilter && !exceptionFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); setExceptionFilter(false); setFutanFilter(false); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter && !trashFilter && !exceptionFilter && !futanFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
             >すべて</button>
             {KANA_ROWS.map((row) => (
               <button
@@ -2219,6 +2256,13 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
               title={exceptionNotice ?? "軽度者 × 原則対象外品目の例外給付が 記録なし・期限切れ (赤) / 30日以内に期限・終了日が必要 (橙) の利用者だけを表示"}
               className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${exceptionFilter ? "bg-red-500 text-white" : "bg-red-50 text-red-700 hover:bg-red-100"}`}
             >⚠ 例外給付{exceptionGrantsAll ? ` ${exceptionStatusByClient.size}` : " (未取得)"}</button>
+            <button
+              onClick={() => { setFutanFilter(!futanFilter); setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); }}
+              title={benefitCertsLoad && !benefitCertsLoad.available
+                ? `${benefitCertsLoad.notice ?? "負担割合証を読めませんでした"} — 負担割合証の印は出していません`
+                : `介護保険の貸与がある利用者のうち 負担割合証なし・期限切れ (赤) / ${BENEFIT_CERT_EXPIRY_WARN_DAYS}日以内に期限で次の証が未登録 (橙) だけを表示`}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${futanFilter ? "bg-red-500 text-white" : "bg-red-50 text-red-700 hover:bg-red-100"}`}
+            >⚠ 負担割合証{benefitCertsLoad?.available ? ` ${futanAlertByClient.size}` : " (未取得)"}</button>
           </>
         )}
       </div>
@@ -2280,6 +2324,16 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
                           <span title={ex.lines.join("\n")}
                             className={`text-xs px-1 py-0.5 rounded font-medium shrink-0 ${ex.level === "danger" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"}`}>
                             例外給付{ex.level === "danger" ? "要" : "期限"}
+                          </span>
+                        );
+                      })()}
+                      {(() => {
+                        const fa = futanAlertByClient.get(client.id);
+                        if (!fa) return null;
+                        return (
+                          <span title={fa.detail}
+                            className={`text-xs px-1 py-0.5 rounded font-medium shrink-0 ${fa.level === "expiring" ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"}`}>
+                            {fa.level === "missing" ? "割合証なし" : fa.level === "expired" ? "割合証切れ" : `割合証 残${fa.daysLeft}日`}
                           </span>
                         );
                       })()}
@@ -3018,6 +3072,7 @@ function ClientDetail({
     hohei_code: null, futan_sha_number: null, jukyu_sha_number: null,
     valid_start: null, valid_end: null, confirmed_date: null,
     application_type: null, outpatient_copay: null, special_type: null, inpatient_copay: null,
+    self_pay_amount: null,
   });
 
   // 福祉用具 軽度者 例外給付記録 (B-6d・2026-09-05)
@@ -4830,14 +4885,23 @@ function ClientDetail({
           const pfv = (k: string) => pf ? (String((pf as Record<string,unknown>)[k] ?? "")) : "";
           const spf = (k: string, v: string | number | null) => setPeForm(f => f ? { ...f, [k]: v === "" ? null : v } : f);
 
+          // 本人支払額 (self_pay_amount) は列が未適用の DB があるので、空欄なら送らない。
+          //   入力したのに列が無いときは理由を出す (migrations/fukuyogu_kohi_month_mode.sql)
+          const pePayload = (f: NonNullable<typeof pf>) => {
+            const { self_pay_amount, ...rest } = f;
+            return self_pay_amount == null ? rest : { ...rest, self_pay_amount };
+          };
+          const peErrorText = (msg: string) =>
+            /self_pay_amount/.test(msg) ? `${msg}\n\n本人支払額の列が未適用です (migrations/fukuyogu_kohi_month_mode.sql)。本人支払額を空欄にすれば保存できます` : msg;
           const saveNew = async () => {
             if (!pf) return;
             setPeSaving(true);
             const { data, error } = await supabase.from("client_public_expenses").insert({
-              tenant_id: tenantId, client_id: client.id, ...pf,
+              tenant_id: tenantId, client_id: client.id, ...pePayload(pf),
             }).select().single();
             setPeSaving(false);
-            if (!error && data) {
+            if (error) { console.error("公費情報の登録失敗:", error.message); alert(`公費情報の登録に失敗しました: ${peErrorText(error.message)}`); return; }
+            if (data) {
               setPublicExpenses(prev => [data as import("@/lib/supabase").ClientPublicExpense, ...prev]);
               setSelectedPeId(data.id);
               setPeForm(null);
@@ -4847,9 +4911,12 @@ function ClientDetail({
           const saveEdit = async () => {
             if (!pf || !editingPeId) return;
             setPeSaving(true);
-            const { error } = await supabase.from("client_public_expenses").update(pf).eq("id", editingPeId);
+            // 既存行の本人支払額を空欄に戻すときは null を送る (列がある DB = 読んだ行にキーがある)
+            const before = publicExpenses.find(r => r.id === editingPeId);
+            const payload = before && "self_pay_amount" in before ? pf : pePayload(pf);
+            const { error } = await supabase.from("client_public_expenses").update(payload).eq("id", editingPeId);
             setPeSaving(false);
-            if (error) { alert(`公費情報の保存に失敗しました: ${error.message}`); return; }
+            if (error) { alert(`公費情報の保存に失敗しました: ${peErrorText(error.message)}`); return; }
             setPublicExpenses(prev => prev.map(r => r.id === editingPeId ? { ...r, ...pf } : r));
             setEditingPeId(null);
             setPeForm(null);
@@ -4863,6 +4930,7 @@ function ClientDetail({
               valid_end: rec.valid_end, confirmed_date: rec.confirmed_date,
               application_type: rec.application_type, outpatient_copay: rec.outpatient_copay,
               special_type: rec.special_type, inpatient_copay: rec.inpatient_copay,
+              self_pay_amount: rec.self_pay_amount ?? null,
             });
           };
           const deleteRec = async (id: string) => {
@@ -5012,6 +5080,20 @@ function ClientDetail({
                           className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="円" />
                       </div>
                     </div>
+
+                    {/* 本人支払額 (生保の介護券の月額)。請求ではこの額までを本人負担、残りを公費請求 */}
+                    <div className="grid grid-cols-4 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-500" title="介護券・受給者証の本人支払額 (月額)。福祉用具の請求でこの額までを本人負担にし、残りを公費へ請求します (伝送の 公費1本人負担額)。空欄 = 0 円">本人支払額 (月額)</label>
+                        <input type="number" min={0} step={1} value={pfv("self_pay_amount")}
+                          onChange={e => {
+                            const v = e.target.value;
+                            const n = Number(v);
+                            spf("self_pay_amount", v === "" ? null : Number.isInteger(n) && n >= 0 ? n : null);
+                          }}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" placeholder="円 (空欄 = 0)" />
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -5037,6 +5119,7 @@ function ClientDetail({
                         ["外来負担金", sel.outpatient_copay != null ? `${sel.outpatient_copay}円` : "—"],
                         ["特別区分", sel.special_type ?? "—"],
                         ["入院負担金", sel.inpatient_copay != null ? `${sel.inpatient_copay}円` : "—"],
+                        ["本人支払額", sel.self_pay_amount != null ? `${sel.self_pay_amount.toLocaleString()}円` : "—"],
                       ].map(([label, value]) => (
                         <div key={label} className="space-y-0.5">
                           <div className="text-[11px] text-gray-500">{label}</div>

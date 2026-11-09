@@ -426,6 +426,8 @@ export type ClientPublicExpense = {
   outpatient_copay: number | null; // 外来負担金
   special_type: string | null;     // 特別区分
   inpatient_copay: number | null;  // 入院負担金
+  /** 本人支払額 (介護券・受給者証の月額・円)。migrations/fukuyogu_kohi_month_mode.sql で追加 (未適用の DB では列が無い = undefined) */
+  self_pay_amount?: number | null;
   created_at: string;
 };
 

@@ -2,7 +2,12 @@
  * 福祉用具 国保連伝送: order-app が DB から組む伝送 と ほのぼのの実伝送 (KK) の突合 — ★ READ ONLY
  *
  *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk <KK261004.CSV> [--month 2026-09]
- *        [--db-cache <json>] [--refresh] [--out <json>]
+ *        [--db-cache <json>] [--refresh] [--out <json>] [--benefit-from-csv]
+ *
+ *   給付率 (2026-11-09 FY-H): BillingTab と同じく「提供月に掛かる負担割合証 → 無ければ認定行」
+ *   (lib/insurance/cert-month.ts の resolveBenefitForMonth)。表 client_benefit_certificates が未作成なら
+ *   BillingTab と同じく clients.benefit_rate。--benefit-from-csv を付けると、表が未作成でも
+ *   ほのぼのの負担割合証等 CSV (ケアサポ + 全社) をメモリ上で表の代わりにする (取込後の見込みを測る)。
  *
  * ★ DB は一切書き換えない (service_role で SELECT するだけ)。全件読みは 1 回にして --db-cache に保存し再利用
  *   (既定 = OS の一時フォルダ。最新を読み直すときは --refresh)。
@@ -38,6 +43,8 @@ import {
   type FukuyoguSeikyuRow, type FukuyoguDetailLine,
 } from "../lib/kokuho-densou/build";
 import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
+import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
+import { serviceClient, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(name);
@@ -238,6 +245,20 @@ async function main() {
     else console.log(`  ⚠ fukuyogu_cm_units を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 表が未適用なら CM 指示単位数は全員 入力なし (実績で請求) として組む`);
     console.log(`  CM 指示単位数: ${cmUnitsByClient.size} 名 (${MONTH})`);
   }
+  // ★ 負担割合証 (FY-H)。表があれば表、無ければ BillingTab と同じく clients.benefit_rate (--benefit-from-csv で CSV を代わりに)
+  let benefitBy: Map<string, BenefitCertRow[]> | null = null;
+  {
+    const sb = await serviceClient(["../kaigo-app/.env.local", ".env.local"]);
+    const K = "../kaigo-app";
+    if (sb) {
+      const b = await loadBenefitCertsDbOrCsv(sb, [...dbLines.keys()], [
+        { label: "ケアサポ 20261109", futan: join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/負担割合証等_全件.CSV"), ins: [join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/介護保険_全件_保険と認定.CSV")] },
+        { label: "全社 20260830", futan: join(K, "利用者データ/全社_R8-08/負担割合証等1.CSV"), ins: [join(K, "利用者データ/全社_R8-08/介護保険1.CSV")] },
+      ]);
+      if (b.source === "db" || process.argv.includes("--benefit-from-csv")) benefitBy = b.byClient;
+      console.log(`  給付率: ${benefitBy ? `負担割合証 (${b.note}) → 無ければ認定行` : "clients.benefit_rate (表が未作成。--benefit-from-csv で CSV の見込み)"}`);
+    }
+  }
   // 開始年月日のため 利用者ごとの 介護保険の貸与 全部 (過去月の終了分も)
   const rentalsByClient = new Map<string, ItemRow[]>();
   for (const it of snap.items) {
@@ -272,7 +293,10 @@ async function main() {
     }
     const k = pickKohi(cid);
     const kohi = k ? { hobetsu: k.hohei_code!, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number } : null;
-    const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: c.benefit_rate, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
+    const benefitRaw = benefitBy
+      ? (() => { const r = resolveBenefitForMonth(model.insByClient.get(cid) ?? [], benefitBy.get(cid) ?? [], model.monthStartS, model.monthEndS); return r.benefitRate != null ? String(r.benefitRate) : c.benefit_rate; })()
+      : c.benefit_rate;
+    const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: benefitRaw, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
     periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, derivePeriod((rentalsByClient.get(cid) ?? []).map(toP), billed.map(toP), MONTH));
     rows.push({
       userName: c.name, insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null,
@@ -357,7 +381,7 @@ async function main() {
     const hSum = h.d.reduce((s, d) => s + Number(d.v[13]), 0), mSum = m.d.reduce((s, d) => s + Number(d.v[13]), 0);
     if (h.s && h.s.v[8] !== h.s.v[9]) why.add("金額差: ほのぼのは 計画単位数 (給付管理) で頭打ち。超過分は保険外 (請求画面の CM 指示単位数が未入力 or 値違い)", { ...ex, 計画: h.s.v[8], 実績: h.s.v[9] });
     else if (hSum !== mSum) why.add("金額差: 明細の単位数合計が違う (用具・単位数の差)", { ...ex, 明細合計: `ほ${hSum}/新${mSum}` });
-    else if (h.h.v[28] !== m.h.v[28]) why.add("金額差: 保険給付率が違う (clients.benefit_rate)", { ...ex, 給付率: `ほ${h.h.v[28]}/新${m.h.v[28]}` });
+    else if (h.h.v[28] !== m.h.v[28]) why.add(benefitBy ? "金額差: 保険給付率が違う (負担割合証 → 認定行)" : "金額差: 保険給付率が違う (clients.benefit_rate)", { ...ex, 給付率: `ほ${h.h.v[28]}/新${m.h.v[28]}` });
     else if (h.h.v[6] !== m.h.v[6]) why.add("金額差: 公費の有無が違う", { ...ex, 公費: `ほ${h.h.v[6]}/新${m.h.v[6]}` });
     else why.add("金額差: その他", ex);
   }
