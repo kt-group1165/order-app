@@ -218,9 +218,10 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
 export async function loadLibs() {
   const { halfMonthUnits } = await import("../lib/half-month-units");
   const { computeFukuyoguAmounts } = await import("../lib/kokuho-densou/fukuyogu-amounts");
-  const { fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES } = await import("../lib/kokuho-densou/build");
+  const { fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, careLevelCodeForDensou } = await import("../lib/kokuho-densou/build");
+  const { pickCertForMonth, certFieldsForDensou } = await import("../lib/kokuho-densou/cert-for-month");
   const { getPriceForMonth } = await import("../lib/equipment");
-  return { halfMonthUnits, computeFukuyoguAmounts, fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, getPriceForMonth };
+  return { halfMonthUnits, computeFukuyoguAmounts, fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, careLevelCodeForDensou, pickCertForMonth, certFieldsForDensou, getPriceForMonth };
 }
 export type Libs = Awaited<ReturnType<typeof loadLibs>>;
 
@@ -228,7 +229,7 @@ export type Libs = Awaited<ReturnType<typeof loadLibs>>;
 export type DbLine = { itemId: string; tais: string; code: string | null; unitPer: number; count: number; units: number; overridden: boolean; half: boolean; skipped?: string };
 
 export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: string, libs: Libs) {
-  const { halfMonthUnits, fukuyoguServiceCode, getPriceForMonth } = libs;
+  const { halfMonthUnits, fukuyoguServiceCode, getPriceForMonth, pickCertForMonth, certFieldsForDensou, careLevelCodeForDensou } = libs;
   const clientById = new Map(snap.clients.map((c) => [c.id, c]));
   const eqByCode = new Map<string, EqRow>();
   for (const e of snap.equipment) if (!eqByCode.has(e.product_code)) eqByCode.set(e.product_code, e); // BillingTab は find = 先頭一致
@@ -279,13 +280,12 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
     const u = halfMonthUnits(base, f, s);
     return { unitPer: u, overridden: false, half: u !== base };
   };
-  const pickIns = (clientId: string) => (insByClient.get(clientId) ?? [])
-    .slice().sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""))
-    .find((r) => {
-      const st = r.certification_start_date ?? r.effective_date;
-      const en = r.certification_end_date;
-      return !(st && st > monthEndS) && !(en && en < monthStartS);
-    }) ?? null;
+  // BillingTab の autoLateClients / 伝送と同じ lib/kokuho-densou/cert-for-month.ts (被保番が一致する認定を優先。FY-C2)
+  const pickIns = (clientId: string) => {
+    const c = clientById.get(clientId);
+    return pickCertForMonth(insByClient.get(clientId) ?? [], monthStartS, monthEndS,
+      c ? { insurerNumber: c.insurer_number, insuredNumber: c.insured_number } : null);
+  };
   const pickKohi = (clientId: string) => (kohiByClient.get(clientId) ?? []).find((k) =>
     k.hohei_code && !(k.valid_start && k.valid_start > monthEndS) && !(k.valid_end && k.valid_end < monthStartS)) ?? null;
 
@@ -321,14 +321,20 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
     target.get(cid)!.push(line);
   }
   const autoLate = new Set<string>();
-  for (const cid of new Set([...dbLines.keys(), ...dbSkipped.keys()])) if (pickIns(cid)?.certification_status === "申請中") autoLate.add(cid);
+  const noCareLevel = new Set<string>(); // ★ 要介護度をコードにできない (BillingTab の noCareLevelClients と同じ。月遅れ扱いで伝送から外れる)
+  for (const cid of new Set([...dbLines.keys(), ...dbSkipped.keys()])) {
+    const rec = pickIns(cid);
+    if (rec?.certification_status === "申請中") autoLate.add(cid);
+    const c = clientById.get(cid);
+    if (c && !careLevelCodeForDensou(certFieldsForDensou(c, rec).careLevel)) { noCareLevel.add(cid); autoLate.add(cid); }
+  }
   const isLate = (cid: string) => autoLate.has(cid) || lateFlag.has(cid);
   const dbTargets = [...dbLines.keys()]; // 明細が 1 行でも乗る利用者 (BillingTab は details 0 の人を出さない)
 
   return {
     clientById, eqByCode, careOfficeNo, ordersById, overrideByItem, lateFlag, insByClient, hospByClient, kohiByClient,
     monthStartS, monthEndS, isActive, unitsOf, pickIns, pickKohi,
-    officeClients, dbLines, dbSkipped, activeOtherScope, activeCount, ceilingCheckDiffers, autoLate, isLate, dbTargets,
+    officeClients, dbLines, dbSkipped, activeOtherScope, activeCount, ceilingCheckDiffers, autoLate, noCareLevel, isLate, dbTargets,
   };
 }
 export type BillingModel = ReturnType<typeof buildBillingModel>;

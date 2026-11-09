@@ -88,9 +88,20 @@ export const FUKUYOGU_YOBO_SERVICE_CODES: Record<string, string> = Object.fromEn
   Object.entries(FUKUYOGU_SERVICE_CODES).map(([k, v]) => [k, `67${v.slice(2)}`]),
 );
 
+/**
+ * 要介護状態区分コード (01 項15)。コードにできない (未設定・"非該当"・読めない値) ときは ""。
+ *   ★ "" の利用者は伝送から外す (buildFukuyoguDensou 冒頭)。請求画面 (BillingTab) は同じ関数で
+ *   「要介護度なし」の印を付けて月遅れ扱いにする。
+ */
+export function careLevelCodeForDensou(careLevel: string | null | undefined): string {
+  // 2026-08-31 監査: CARE_LEVEL_CODE のキーは半角だが、clients.care_level は
+  //   ほのぼの由来で**全角のことがある** (実測 306 件: 要介護１〜５ / 要支援１・２)。NFKC で寄せてから引く。
+  return CARE_LEVEL_CODE[(careLevel ?? "").normalize("NFKC").replace(/\s/g, "")] ?? "";
+}
+
 /** 要支援 (要支援1・2) = 介護予防 (7132 / サービス種類 67) で請求する人か */
 export function isYoboCareLevel(careLevel: string | null | undefined): boolean {
-  const code = CARE_LEVEL_CODE[(careLevel ?? "").normalize("NFKC").replace(/\s/g, "")];
+  const code = careLevelCodeForDensou(careLevel);
   return code === "12" || code === "13";
 }
 
@@ -296,6 +307,15 @@ export function buildFukuyoguDensou(
       `${r.userName}: ${miss}が未登録のため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 被保険者証を確認して登録してください`,
     );
     return false;
+  }).filter((r) => {
+    // ★ 2026-11-09 (FY-C2): 要介護度をコードにできない行も伝送に載せない。項15 が 0 (空欄の 0 埋め) の
+    //   7131 になり確実に返戻するうえ、7131/7132 の振り分けもできない
+    //   (実例: 西野 規子(介) 1000062551 — 当月に有効な認定が無く、ほのぼのは要支援2 の 7132 で出していた)。
+    if (careLevelCodeForDensou(r.careLevel)) return true;
+    warnings.push(
+      `${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードにできないため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 当月に有効な認定を登録してください (月遅れ扱い)`,
+    );
+    return false;
   });
   const ym = `${opts.year}${String(opts.month).padStart(2, "0")}`;
   const office = (opts.officeNumber ?? "").trim();
@@ -393,13 +413,8 @@ export function buildFukuyoguDensou(
     const insurerRaw = (r.insurerNumber ?? "").trim();
     const insurer = insurerRaw ? insurerRaw.padStart(8, "0") : "";
     const insured = (r.insuredNumber ?? "").trim();
-    // 保険者・被保険者番号が空の行は冒頭で除外済み (ここには来ない)
-    // 2026-08-31 監査: CARE_LEVEL_CODE のキーは半角だが、clients.care_level は
-    //   ほのぼの由来で**全角のことがある** (実測 306 件: 要介護１〜５ / 要支援１・２)。
-    //   そのまま引くと項15 が空欄で出力される。NFKC で寄せてから引く。
-    const careLevelKey = (r.careLevel ?? "").normalize("NFKC").replace(/\s/g, "");
-    const careLevelCode = CARE_LEVEL_CODE[careLevelKey] ?? "";
-    if (!careLevelCode) warnings.push(`${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードに変換できません`);
+    // 保険者・被保険者番号が空の行 / 要介護度をコードにできない行は冒頭で除外済み (ここには来ない)
+    const careLevelCode = careLevelCodeForDensou(r.careLevel);
     if (!r.birthDate) warnings.push(`${r.userName}: 生年月日が未登録です`);
     if (!r.careOfficeNumber) warnings.push(`${r.userName}: 担当居宅介護支援事業所 (事業所番号) が未登録です`);
 

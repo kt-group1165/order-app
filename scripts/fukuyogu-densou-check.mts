@@ -26,7 +26,7 @@
  * DB は読まない (純関数のみ)。
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
+import { buildFukuyoguDensou, careLevelCodeForDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
 import { computeFukuyoguAmounts, normalizeCmUnits, normalizeSelfPay, KOHI_MONTH_MODE_DEFAULT, type FukuyoguAmounts, type KohiMonthMode } from "../lib/kokuho-densou/fukuyogu-amounts";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
@@ -217,6 +217,26 @@ console.log("\n══ ★ 日付・貸与日数・認定の選び方 (2026-11-09
   eq("★ 当月有効の認定を選ぶ (更新後の 要介護2)", c1?.care_level, "要介護2");
   eq("★ 認定が無ければ clients の列",
     certFieldsForDensou({ care_level: "要支援1", certification_start_date: "2026-01-01", certification_end_date: null }, null).careLevel, "要支援1");
+
+  // ★ 2026-11-09 (FY-C2) 被保番が一致する認定を優先 — 内海 淳 (122291 / 1000304436) の実データの形。
+  //   旧被保番 H333010211 (生保単独の頃) の認定が当月に掛かったまま残り、正しい認定は effective_date が null
+  const utsumi = [
+    { id: "old-H", effective_date: "2024-05-01", insurer_number: "122291", insured_number: "H333010211", certification_start_date: "2024-05-01", certification_end_date: "2028-04-30", care_level: "要介護1" },
+    { id: "right", effective_date: null, insurer_number: "122291", insured_number: "1000304436", certification_start_date: "2026-04-22", certification_end_date: "2026-10-31", care_level: "要介護1" },
+    { id: "next", effective_date: "2026-11-01", insurer_number: "122291", insured_number: "1000304436", certification_start_date: "2026-11-01", certification_end_date: "2029-10-31", care_level: "要介護2" },
+  ];
+  eq("★ 被保番が一致する認定を優先 (内海 淳 → 2026-04-22〜10-31)",
+    pickCertForMonth(utsumi, "2026-09-01", "2026-09-30", { insurerNumber: "122291", insuredNumber: "1000304436" })?.id, "right");
+  eq("★ 負のコントロール: 番号を渡さないと 旧被保番の認定を選ぶ (直す前の挙動)",
+    pickCertForMonth(utsumi, "2026-09-01", "2026-09-30")?.id, "old-H");
+  eq("★ 番号は 全角・6 桁/8 桁 の違いを吸収 (００１２２２９１ / １０００３０４４３６)",
+    pickCertForMonth(utsumi, "2026-09-01", "2026-09-30", { insurerNumber: "００１２２２９１", insuredNumber: "１０００３０４４３６" })?.id, "right");
+  eq("★ 一致する認定が当月に無ければ 従来どおり当月に掛かる先頭",
+    pickCertForMonth(utsumi, "2026-09-01", "2026-09-30", { insurerNumber: "122291", insuredNumber: "9999999999" })?.id, "old-H");
+  eq("★ 保険者番号が違えば一致扱いにしない",
+    pickCertForMonth(utsumi, "2026-09-01", "2026-09-30", { insurerNumber: "122192", insuredNumber: "1000304436" })?.id, "old-H");
+  eq("★ 一致しても当月に掛からない認定は選ばない (11 月からの認定は 9 月に出ない)",
+    pickCertForMonth(utsumi.slice(1), "2026-09-01", "2026-09-30", { insurerNumber: "122291", insuredNumber: "1000304436" })?.id, "right");
 }
 
 console.log("\n══ 金額の丸め (国保連は 円未満切り捨て) ══");
@@ -238,6 +258,26 @@ const bad = buildFukuyoguDensou([{ ...base, insurerNumber: null, insuredNumber: 
 eq("★ 事業所番号が 10 桁でないと警告", bad.warnings.some((w) => w.includes("10 桁")), true);
 eq("★ 保険者番号が無いと警告", bad.warnings.some((w) => w.includes("保険者番号")), true);
 eq("★ 被保険者番号が無いと警告", bad.warnings.some((w) => w.includes("被保険者番号")), true);
+
+// ★ 2026-11-09 (FY-C2) 要介護度をコードにできない行は伝送から外す (保険者番号が無い行と同じ扱い)。
+//   実例: 西野 規子(介) 1000062551 — 当月に有効な認定が無く 要介護度 0 の 7131 が出ていた (確実に返戻)
+{
+  const noLevel: FukuyoguSeikyuRow = { ...base, userName: "見本 要介護度なし", insuredNumber: "1000000003", careLevel: null };
+  const r = buildFukuyoguDensou([base, noLevel, { ...noLevel, userName: "見本 非該当", insuredNumber: "1000000004", careLevel: "非該当" }],
+    { officeNumber: "1270402124", year: 2026, month: 12 });
+  const rc = r.content.split("\r\n").filter(Boolean).map(cols);
+  eq("★ 要介護度なし・非該当 は 01 が出ない (残るのは 見本 太郎 だけ)",
+    rc.filter((c) => (c[2] === "7131" || c[2] === "7132") && c[3] === "01").map((c) => c[7]), ["1000000001"]);
+  eq("★ 7111 の件数・単位数にも入らない (1 件 / 1400)",
+    (() => { const h = rc.find((c) => c[2] === "7111")!; return [h[8], h[9]]; })(), ["1", "1400"]);
+  eq("★ 外したことを警告する (2 名)", r.warnings.filter((w) => w.includes("要介護度") && w.includes("除外")).length, 2);
+  eq("★ 項15 が 0 の 01 は 1 行も無い", rc.filter((c) => c[3] === "01" && c[16] === "0").length, 0);
+  const keep = buildFukuyoguDensou([base, { ...noLevel, careLevel: "要支援２" }], { officeNumber: "1270402124", year: 2026, month: 12 });
+  eq("★ 負のコントロール: 全角 \"要支援２\" はコードにできる → 外さない (7131 1 + 7132 1)",
+    keep.content.split("\r\n").filter(Boolean).map(cols).filter((c) => c[3] === "01").map((c) => c[2]), ["7131", "7132"]);
+  eq("careLevelCodeForDensou: 要介護３→23 / 事業対象者→06 / null・非該当→\"\"",
+    [careLevelCodeForDensou("要介護３"), careLevelCodeForDensou("事業対象者"), careLevelCodeForDensou(null), careLevelCodeForDensou("非該当")], ["23", "06", "", ""]);
+}
 eq("利用者 0 名でもファイルは組める", buildFukuyoguDensou([], { officeNumber: "1270402124", year: 2026, month: 12 })
   .content.split("\r\n").filter(Boolean).length, 3); // control + 7111 + end
 

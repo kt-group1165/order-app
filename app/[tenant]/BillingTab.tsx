@@ -25,7 +25,7 @@ import {
 } from "@/lib/billing";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
-import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
+import { buildFukuyoguDensou, careLevelCodeForDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits, kohiCoverageInMonth, isKohiMonthMode, KOHI_MONTH_MODES, KOHI_MONTH_MODE_LABEL, KOHI_MONTH_MODE_DEFAULT, type FukuyoguKohi, type FukuyoguLineInput, type KohiMonthMode } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { getCmUnits, saveCmUnits } from "@/lib/fukuyoguCmUnits";
 import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fukuyoguKohiMonth";
@@ -490,26 +490,29 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     return () => { cancelled = true; };
   }, [tenantId]);
 
-  // 月遅れ自動判定：保険証のcertification_statusが「申請中」の利用者
-  const autoLateClients = useMemo(() => {
+  // 月遅れ自動判定：
+  //   ① 当月の認定の certification_status が「申請中」の利用者
+  //   ② ★ 2026-11-09 (FY-C2): 伝送の要介護度をコードにできない利用者 (当月に有効な認定が無い 等)。
+  //      build.ts も伝送から外す (確実に返戻するため)。行に「要介護度なし」の印を出す。
+  //   認定の選び方は伝送と同じ lib/kokuho-densou/cert-for-month.ts (被保番が一致する認定を優先)。
+  const { autoLateClients, noCareLevelClients } = useMemo(() => {
     const [y, m] = billingMonth.split("-").map(Number);
     const monthStart = `${billingMonth}-01`;
     const monthEnd = monthEndYmd(y, m);
     const lateSet = new Set<string>();
-    for (const client of clients) {
-      const recs = insuranceRecords
-        .filter(r => r.client_id === client.id)
-        .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
-      const rec = recs.find(r => {
-        const start = r.certification_start_date ?? r.effective_date;
-        const end = r.certification_end_date;
-        if (start && start > monthEnd) return false;
-        if (end && end < monthStart) return false;
-        return true;
-      });
-      if (rec?.certification_status === "申請中") lateSet.add(client.id);
+    const noLevel = new Set<string>();
+    const recsByClient = new Map<string, ClientInsuranceRecord[]>();
+    for (const r of insuranceRecords) {
+      const xs = recsByClient.get(r.client_id);
+      if (xs) xs.push(r); else recsByClient.set(r.client_id, [r]);
     }
-    return lateSet;
+    for (const client of clients) {
+      const rec = pickCertForMonth(recsByClient.get(client.id) ?? [], monthStart, monthEnd,
+        { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
+      if (rec?.certification_status === "申請中") lateSet.add(client.id);
+      if (!careLevelCodeForDensou(certFieldsForDensou(client, rec).careLevel)) { noLevel.add(client.id); lateSet.add(client.id); }
+    }
+    return { autoLateClients: lateSet, noCareLevelClients: noLevel };
   }, [insuranceRecords, clients, billingMonth]);
 
   // 当月アクティブレンタルを取得
@@ -907,6 +910,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       ...Array.from(lateFlags.keys()),
     ]);
     const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
+    // 要介護度をコードにできず外した人 (月遅れ扱い) は確認ダイアログにも出す
+    const noCareLevelNames = clientGroups.filter((g) => noCareLevelClients.has(g.client.id)).map((g) => g.client.name);
 
     // 公費 (生保 等) 情報を当月分だけ取得 (期間と本人支払額つき。lib/fukuyoguKohiMonth.ts)。
     //   月途中の公費は「公費の扱い」(kohiModes) で、本人支払額は介護券の額までを本人負担に (fukuyogu-amounts.ts)。
@@ -955,6 +960,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     // 明細行 → 利用者ごとの請求行を組む
     const rows: FukuyoguSeikyuRow[] = [];
     for (const n of kohiLoad.notices) preWarnings.push(n);
+    if (noCareLevelNames.length > 0) {
+      preWarnings.push(`要介護度をコードにできない (当月に有効な認定が無い 等) ため伝送から除外し月遅れ扱いにしました ${noCareLevelNames.length} 名: ${noCareLevelNames.join("・")} — 認定を登録してください`);
+    }
     if (kohiModesNotice) preWarnings.push(kohiModesNotice);
     for (const { client, items } of billingGroups) {
       const details: FukuyoguDetailLine[] = [];
@@ -1064,7 +1072,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         birthDate: client.birth_date,
         gender: client.gender,
         // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
-        ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
+        ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+          { insurerNumber: client.insurer_number, insuredNumber: client.insured_number })),
         careOfficeNumber: careOffice?.office_number ?? null,
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
         copayRate,
@@ -1404,7 +1413,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           birthDate: client.birth_date,
           gender: client.gender,
           // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
-          ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
+          ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+          { insurerNumber: client.insurer_number, insuredNumber: client.insured_number })),
           careOfficeNumber: careOffice?.office_number ?? null,
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
           copayRate,
@@ -1771,17 +1781,11 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                 // 申請中バッジ
                 const monthStart = `${billingMonth}-01`;
                 const monthEnd = monthEndYmd(y, m);
-                const insRecs = insuranceRecords
-                  .filter(r => r.client_id === client.id)
-                  .sort((a, b) => (b.effective_date ?? "").localeCompare(a.effective_date ?? ""));
-                const insRec = insRecs.find(r => {
-                  const start = r.certification_start_date ?? r.effective_date;
-                  const end = r.certification_end_date;
-                  if (start && start > monthEnd) return false;
-                  if (end && end < monthStart) return false;
-                  return true;
-                });
+                // 認定の選び方は 月遅れ自動判定・伝送と同じ (被保番が一致する認定を優先)
+                const insRec = pickCertForMonth(insuranceRecords.filter(r => r.client_id === client.id), monthStart, monthEnd,
+                  { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
                 const isApplying = insRec?.certification_status === "申請中";
+                const isNoCareLevel = noCareLevelClients.has(client.id);
                 // サービス事業所名 (居宅介護支援事業所)
                 const careOfficeId = client.care_office_id ?? insRec?.care_office_id ?? null;
                 const careOfficeName = careOfficeId
@@ -1813,6 +1817,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                     <div className="px-1 py-2 border-l border-gray-100 text-center">
                       {isApplying && (
                         <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">申請中</span>
+                      )}
+                      {isNoCareLevel && !isApplying && (
+                        <span
+                          className="inline-block bg-red-100 text-red-800 border border-red-300 font-semibold text-[10px] px-1 py-0.5 rounded leading-tight"
+                          title="当月に有効な認定が無い等で要介護度をコードにできないため、伝送から外して月遅れ扱いにしています (そのまま出すと確実に返戻)。利用者タブで認定を登録してください"
+                        >要介護度なし</span>
                       )}
                     </div>
                     <div className="px-2 py-2 border-l border-gray-100">

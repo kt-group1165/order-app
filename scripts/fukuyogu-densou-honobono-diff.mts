@@ -302,7 +302,8 @@ async function main() {
       userName: c.name, insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null,
       birthDate: c.birth_date, gender: c.gender,
       // 要介護度・認定期間 = 当月に有効な認定レコード優先 (BillingTab と同じ lib/kokuho-densou/cert-for-month.ts)
-      ...certFieldsForDensou(c, pickCertForMonth(model.insByClient.get(cid) ?? [], model.monthStartS, model.monthEndS)),
+      ...certFieldsForDensou(c, pickCertForMonth(model.insByClient.get(cid) ?? [], model.monthStartS, model.monthEndS,
+        { insurerNumber: c.insurer_number, insuredNumber: c.insured_number })),
       careOfficeNumber: c.care_office_id ? (careOfficeNo.get(c.care_office_id) || null) : null,
       carePlanKubun: c.care_office_id ? planKubunById.get(c.care_office_id) ?? null : null,
       copayRate: amt.copayRate, details,
@@ -365,6 +366,7 @@ async function main() {
     const exn = { ...ex, 氏名: c.name, client_id: c.id };
     if (c.deleted_at) why.add("ほのぼのだけ: 利用者が削除済み", exn);
     else if (c.office_id !== office.id) why.add("ほのぼのだけ: clients.office_id が別事業所", { ...exn, office_id: c.office_id });
+    else if (model.noCareLevel.has(c.id)) why.add("ほのぼのだけ: 新システムは要介護度をコードにできず (当月に有効な認定なし 等) 月遅れ扱いで伝送から外す", exn);
     else if (isLate(c.id)) why.add("ほのぼのだけ: 月遅れ扱い (認定 申請中 / 月遅れフラグ) で伝送から外れる", exn);
     else if (model.dbSkipped.has(c.id) && !dbLines.has(c.id)) why.add("ほのぼのだけ: 貸与はあるが請求に乗らない (単位 0 / サービスコード不明)", { ...exn, 理由: model.dbSkipped.get(c.id)!.map((l) => l.skipped) });
     else if (model.activeOtherScope.has(c.id)) why.add("ほのぼのだけ: 当月の貸与が別事業所の発注 (orders.office_id)", { ...exn, 例: model.activeOtherScope.get(c.id)![0].why });
