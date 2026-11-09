@@ -328,6 +328,15 @@ export function buildFukuyoguDensou(
       `${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードにできないため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 当月に有効な認定を登録してください (月遅れ扱い)`,
     );
     return false;
+  }).filter((r) => {
+    // ★ 2026-11-10 (user 承認): CM 指示単位数が 0 (給付管理で 0 単位) の人はレセプトを出さない。
+    //   ほのぼのも月次情報の区分支給限度基準内単位数 0 の人 (廣瀬・秦・横瀬 2026-09) は伝送に載せていない。
+    //   保険請求 0 のレセプトは国保連で返戻になる。実績分は全額利用者負担 (保険外)。
+    if (r.kohiTandoku || r.planUnits !== 0) return true;
+    warnings.push(
+      `${r.userName}: CM 指示単位数が 0 のため伝送から除外しました (実績 ${r.limitTargetUnits ?? r.totalUnits} 単位は保険外・全額利用者負担)`,
+    );
+    return false;
   });
   const ym = `${opts.year}${String(opts.month).padStart(2, "0")}`;
   const office = (opts.officeNumber ?? "").trim();

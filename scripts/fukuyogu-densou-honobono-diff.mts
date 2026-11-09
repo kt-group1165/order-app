@@ -103,7 +103,7 @@ class Buckets {
     if (this.m.size === 0) console.log("  (差なし)");
     for (const [k, v] of [...this.m].sort((a, b) => b[1].length - a[1].length)) {
       console.log(`  ${String(v.length).padStart(5)}  ${k}`);
-      for (const e of v.slice(0, 10)) console.log(`         - ${typeof e === "string" ? e : JSON.stringify(e)}`);
+      for (const e of v.slice(0, Number(process.env.DIFF_SHOW ?? 10))) console.log(`         - ${typeof e === "string" ? e : JSON.stringify(e)}`);
     }
   }
   toJSON() { return Object.fromEntries([...this.m].map(([k, v]) => [k, { count: v.length, items: v }])); }
