@@ -23,6 +23,8 @@
  *   ・予定行は使わない (実績と 424/5,907 件で食い違い、請求は実績どおり)
  *   ・日付が DB と食い違うときは 提供票 (実績) を正とする
  *   ・0 円の付属品 (自費レンタル=対象・概算単位 0) も貸与に入れる → payment_type='自費'・rental_price=0
+ *     ★ 2026-11-09: 保険事業所の行で 概算単位 0 なら 自費レンタル欄が空でも 自費 (欄が空の月だけ 介護 0 円になり、翌月の自費と別明細に割れていた)
+ *   ・用具が「+単位+中止」で決まるとき、中止で絞る前の候補に その利用者の DB の既存明細の TAIS が 1 つだけあれば それを優先 (2026-11-09)
  *     (BillingTab は 介護 だけを請求、UserBillingTab は単価 0 を飛ばすので、金額には出ない)
  *   ・自費レンタル事業所の行 → payment_type='自費'。rental_price = 月額の単位数 × 10 (★ 仮。自費マスタが来たら見直し)
  *     自費の用具が用具マスタに無ければ equipment_master に EQ-nnnnnn で追加 (lib/equipment.ts の採番と同じ形)
@@ -164,7 +166,8 @@ function makeMatcher(masters) {
     const cu = c.filter((x) => x.units === full);
     if (cu.length && uniq(cu)) return [cu[0], "+単位"];
     const cn = (cu.length ? cu : c).filter((x) => !x.stop);
-    if (cn.length && uniq(cn)) return [cn[0], "+単位+中止"];
+    // ★ 2026-11-09: 中止で絞る前の候補も返す (呼び出し側で その利用者の DB の既存明細の TAIS を優先する)
+    if (cn.length && uniq(cn)) return [cn[0], "+単位+中止", cu.length ? cu : c];
     return [null, ""];
   };
   /** @returns {{how:string, tais:string|null, m:object|null, cands:string[]}} */
@@ -180,8 +183,8 @@ function makeMatcher(masters) {
       for (const nm of names) for (const f of ["略称", "商品名称", "型番"]) {
         const c = (I[mk][f].get(nm) ?? []).filter((x) => x.cat === k);
         if (!c.length) continue;
-        const [hit, how] = narrow(c, full);
-        res = hit ? { how: `完全一致(${mk}マスタ・${f}${how})${nm !== it ? "/予除去" : ""}`, tais: hit.tais || null, m: hit, cands: [] }
+        const [hit, how, pre] = narrow(c, full);
+        res = hit ? { how: `完全一致(${mk}マスタ・${f}${how})${nm !== it ? "/予除去" : ""}`, tais: hit.tais || null, m: hit, cands: [], pre: pre ?? null }
                   : { how: "複数", tais: null, m: null, cands: [...new Set(c.map((x) => x.tais).filter(Boolean))] };
         break outer;
       }
@@ -378,19 +381,30 @@ async function main() {
     r.full = fullUnitsOf(r);
     const res = match(r.src, r.kindRaw, r.item, r.full ?? r.units);
     Object.assign(r, { tais: res.tais, how: res.how, mrow: res.m, cands: res.cands });
+    const haveTais = () => new Set((itemsByClient.get(clientOfUser.get(r.userNo)?.id) ?? []).map((it) => taisOfCode(it.product_code)));
     if (!r.tais && (r.how === "複数" || r.how === "類似が複数")) {
       // 候補の中で その利用者の DB の明細にある TAIS が 1 つだけなら それ
-      const c = clientOfUser.get(r.userNo);
-      const have = new Set((itemsByClient.get(c?.id) ?? []).map((it) => taisOfCode(it.product_code)));
+      const have = haveTais();
       const hit = r.cands.filter((t) => have.has(t));
       if (hit.length === 1) { r.tais = hit[0]; r.how = `${r.how} → DB の既存明細で特定`; r.mrow = masters.介護.rows.find((x) => x.tais === hit[0]) ?? null; }
+    } else if (res.pre) {
+      // ★ 2026-11-09: 「+単位+中止」で決まった用具は、中止で絞る前の候補に その利用者の DB の既存明細の TAIS が 1 つだけあれば それを優先
+      //   (中止で絞ると 別の TAIS (後継品) が選ばれ、元の明細と別に insert して二重になった: 松本 ちよ 00167-000435/437・小山 いわ 00563-000019/021)
+      const have = haveTais();
+      const hit = [...new Set(res.pre.map((x) => x.tais).filter(Boolean))].filter((t) => have.has(t));
+      if (hit.length === 1 && hit[0] !== r.tais) {
+        r.tais = hit[0]; r.how = `${r.how} → 中止で絞る前の候補を DB の既存明細で特定`;
+        r.mrow = res.pre.filter((x) => x.tais === hit[0]).sort((a, b) => Number(a.stop) - Number(b.stop))[0];
+      }
     }
-    r.payType = r.src === "自費" || r.jihiFlag ? "自費" : "介護";
+    // ★ 2026-11-09: 保険事業所の行で 概算単位 0 は 自費レンタル欄が空でも 0 円の付属 = 自費 (介護 0 円 172 件になった)
+    r.zeroUnits = r.src !== "自費" && !r.jihiFlag && r.units === 0;
+    r.payType = r.src === "自費" || r.jihiFlag || r.zeroUnits ? "自費" : "介護";
     if (r.payType === "自費" && r.src !== "自費" && r.units > 0) R.warn.add("自費レンタル=対象 だが 概算単位 > 0 (保険事業所の行)", { file: r.file, row: r.row, 氏名: r.name, 用具: r.item, 単位: r.units });
     r.grp = r.src === "自費" ? "自費事業所" : "保険事業所";
     // 支払区分もキーに入れる (同じ TAIS の有料の台と 0 円の付属を混ぜない)
     r.key = `${r.payType}|` + (r.tais ? `T:${r.tais}` : `N:${kindOf(r.kindRaw)}|${nf(r.item).replace(/^予/, "")}`);
-    R.map.add(`${r.src}${r.payType === "自費" && r.src !== "自費" ? "(0円付属)" : ""}: ${r.tais ? r.how : r.mrow ? `${r.how} (TAIS なし)` : r.src === "自費" ? `★ マスタに無い (${r.how}。名前で用具マスタに追加)` : `★ 引き当て不可 (${r.how})`}`, null);
+    R.map.add(`${r.src}${r.payType === "自費" && r.src !== "自費" ? (r.zeroUnits ? "(0円付属・自費レンタル欄が空)" : "(0円付属)") : ""}: ${r.tais ? r.how : r.mrow ? `${r.how} (TAIS なし)` : r.src === "自費" ? `★ マスタに無い (${r.how}。名前で用具マスタに追加)` : `★ 引き当て不可 (${r.how})`}`, null);
   }
 
   // ── 区間 → 台 (連結) ─────────────────────────────────────────────────

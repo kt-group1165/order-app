@@ -17,6 +17,10 @@
  *      (★ status='ordered'/'delivered'等は納品前でnullが正常なので対象外)
  *   ③ rental_start_date が1年以上先 (入力ミスの疑い)
  *   ④ rental_price が0またはnull (単位数が必ず0になり請求から欠落する)
+ *      ★ 2026-11-09: payment_type='自費' かつ単価 0 は除く。ほのぼの 提供票の「0 円の付属品」(自費レンタル・概算単位 0)
+ *        を貸与として持つ正常な形 (rebuild_rentals_from_teikyohyo.mjs の方針。BillingTab は介護だけ請求・
+ *        UserBillingTab は単価 0 を飛ばすので金額には出ない)。件数は参考として別に出す。
+ *        ★ 自費でも null は除かない (単価の入れ忘れ)。介護/予防の 0 円は従来どおり数える
  *   ⑤ quantity が0以下
  *
  * ── 基準値方式 (0を目指す検査) ────────────────────────────────────────────
@@ -53,24 +57,28 @@ async function pageAll<T>(table: string, select: string, orderCol = "id"): Promi
 
 type Row = {
   id: string; status: string; rental_start_date: string | null; rental_end_date: string | null;
-  rental_price: number | null; quantity: number | null;
+  rental_price: number | null; quantity: number | null; payment_type: string | null;
 };
+
+/** 自費の 0 円付属品 (提供票の自費レンタル・概算単位 0)。④ から除く */
+export const isJihiZeroAccessory = (r: Pick<Row, "payment_type" | "rental_price">) => r.payment_type === "自費" && r.rental_price === 0;
 
 export function checkIntegrity(rows: Row[], todayIso: string) {
   const oneYearOut = `${Number(todayIso.slice(0, 4)) + 1}${todayIso.slice(4)}`;
   const reversed = rows.filter((r) => r.rental_start_date && r.rental_end_date && r.rental_end_date < r.rental_start_date);
   const nullStartWhenStarted = rows.filter((r) => (r.status === "rental_started" || r.status === "terminated") && !r.rental_start_date);
   const farFutureStart = rows.filter((r) => r.rental_start_date && r.rental_start_date > oneYearOut);
-  const zeroOrNullPrice = rows.filter((r) => r.rental_price == null || r.rental_price === 0);
+  const zeroOrNullPrice = rows.filter((r) => (r.rental_price == null || r.rental_price === 0) && !isJihiZeroAccessory(r));
+  const jihiZeroAccessory = rows.filter(isJihiZeroAccessory);
   const zeroOrNegativeQty = rows.filter((r) => r.quantity == null || r.quantity <= 0);
-  return { reversed, nullStartWhenStarted, farFutureStart, zeroOrNullPrice, zeroOrNegativeQty };
+  return { reversed, nullStartWhenStarted, farFutureStart, zeroOrNullPrice, zeroOrNegativeQty, jihiZeroAccessory };
 }
 
 const now = new Date();
 const TODAY = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 console.log(`══ order_items データ整合性 常設監視 (基準日 ${TODAY}・READ ONLY) ══\n`);
 
-const allItems = await pageAll<Row>("order_items", "id,status,rental_start_date,rental_end_date,rental_price,quantity");
+const allItems = await pageAll<Row>("order_items", "id,status,rental_start_date,rental_end_date,rental_price,quantity,payment_type");
 console.log(`【分母】order_items 全件: ${allItems.length} 行\n`);
 
 const result = checkIntegrity(allItems, TODAY);
@@ -78,8 +86,9 @@ console.log("見ているもの (5種):");
 console.log(`  ① 貸与期間の逆転 (start > end)                          : ${result.reversed.length} 件`);
 console.log(`  ② rental_started/terminated なのに開始日が null          : ${result.nullStartWhenStarted.length} 件`);
 console.log(`  ③ 開始日が1年以上先 (${TODAY}起算)                        : ${result.farFutureStart.length} 件`);
-console.log(`  ④ rental_price が0またはnull                            : ${result.zeroOrNullPrice.length} 件`);
+console.log(`  ④ rental_price が0またはnull (自費の0円付属は除く)          : ${result.zeroOrNullPrice.length} 件`);
 console.log(`  ⑤ quantity が0以下またはnull                             : ${result.zeroOrNegativeQty.length} 件`);
+console.log(`  (参考・合否に入れない) 自費の0円付属 (payment_type=自費・単価0) : ${result.jihiZeroAccessory.length} 件`);
 
 const counts = {
   reversed: result.reversed.length,
