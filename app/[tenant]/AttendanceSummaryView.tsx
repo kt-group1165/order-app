@@ -138,9 +138,10 @@ export default function AttendanceSummaryView({
       list.push(toRecord(r));
       byEmp.set(r.employee_id, list);
     }
-    // 在籍 + 非表示でない職員、または期間内に行のある職員 (退職者でも記録があれば出す)
+    // 非表示 (attendance_hidden) の職員は記録があっても出さない (テスト用・集計対象外の枠)。
+    // それ以外は 在籍者、または期間内に行のある退職者を出す
     const shown = emps.filter(
-      (e) => (e.employment_status !== "退職者" && e.attendance_hidden !== true) || byEmp.has(e.id),
+      (e) => e.attendance_hidden !== true && (e.employment_status !== "退職者" || byEmp.has(e.id)),
     );
     return shown.map((e) => {
       const recs = byEmp.get(e.id) ?? [];
