@@ -50,6 +50,7 @@ import {
   overtimeLimitHours,
 } from "@/lib/attendance/overtime-limit";
 import AttendanceSummaryView from "./AttendanceSummaryView";
+import { supabase } from "@/lib/supabase";
 
 // 月間残業枠 (事業所ごと: 統括営業本部 35h・他 20h) と 法定休日・深夜の換算は lib/attendance/overtime-limit.ts (残業集計と共通)
 
@@ -234,6 +235,8 @@ export default function AttendanceTab({
   const [statusBusy, setStatusBusy] = useState(false);
   const [pdfFolder, setPdfFolder] = useState<string | null>(null);
   const [isMaster, setIsMaster] = useState(false);
+  // 事業所管理者として管理できる offices.id (残業集計の Excel 反映を事業所管理者にも出すため)
+  const [adminOfficeIds, setAdminOfficeIds] = useState<string[]>([]);
   const [showAdminModal, setShowAdminModal] = useState(false);
   // 管理モーダルを閉じた時に事業所・職員一覧を再読込するためのカウンタ
   const [adminRefresh, setAdminRefresh] = useState(0);
@@ -312,6 +315,15 @@ export default function AttendanceTab({
         if (!cancelled) setIsMaster(json.is_master === true);
       } catch {
         // 判定失敗時はボタン非表示のまま (機能自体は payroll-app 側でも操作可能)
+      }
+      const { data: adminRows, error: adminErr } = await supabase.rpc("auth_admin_office_ids");
+      if (adminErr) {
+        console.error("auth_admin_office_ids failed:", adminErr.message);
+      } else if (!cancelled) {
+        type AdminRow = { auth_admin_office_ids?: string } | string;
+        setAdminOfficeIds(
+          ((adminRows ?? []) as AdminRow[]).map((r) => (typeof r === "string" ? r : r.auth_admin_office_ids ?? "")),
+        );
       }
     })();
     return () => { cancelled = true; };
@@ -739,6 +751,7 @@ export default function AttendanceTab({
         offices={officeList}
         initialPayrollOfficeId={payrollOfficeId}
         isMaster={isMaster}
+        adminOfficeIds={adminOfficeIds}
         onBack={() => {
           setView("input");
           // 反映で職員が増えた・行が変わった可能性があるので読み直す

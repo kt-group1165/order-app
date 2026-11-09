@@ -77,11 +77,14 @@ function displayName(s: string): string {
 export default function AttendanceExcelImportModal({
   tenantId,
   office,
+  canCreateStaff,
   onClose,
 }: {
   tenantId: string;
   /** 反映先の payroll 事業所 (出勤簿タブで選択中のもの) */
   office: AttendanceOffice;
+  /** 職員の新規作成 (members を作る) ができるか。全社管理者 (master) だけ。事業所管理者は既存職員への反映のみ */
+  canCreateStaff: boolean;
   /** changed = 1 件でも書いた */
   onClose: (changed: boolean) => void;
 }) {
@@ -207,6 +210,8 @@ export default function AttendanceExcelImportModal({
           const status = empId && s.ym ? statuses.get(`${empId}|${s.ym}`) : undefined;
           if (!blocked && emp.kind === "ambiguous") blocked = `同じ氏名が複数 (${emp.names.join(" / ")})`;
           if (!blocked && status === "approved") blocked = "この月は承認済みのため上書きしません";
+          if (!blocked && !canCreateStaff && (emp.kind === "create" || emp.kind === "link-member"))
+            blocked = "出勤簿に居ない職員です (職員の追加は全社管理者に依頼してください)";
 
           const mine = empId ? (rowsByEmp.get(empId) ?? []) : [];
           const existingByDate = new Map(mine.map((r) => [r.work_date, r]));
@@ -255,7 +260,7 @@ export default function AttendanceExcelImportModal({
         setParsing(false);
       }
     },
-    [office.id, office.office_id, tenantId, weekStart, importedOn, currentYm],
+    [office.id, office.office_id, tenantId, weekStart, importedOn, currentYm, canCreateStaff],
   );
 
   const onPick = (file: File | undefined) => {

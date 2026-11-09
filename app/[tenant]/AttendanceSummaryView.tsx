@@ -50,6 +50,7 @@ export default function AttendanceSummaryView({
   offices,
   initialPayrollOfficeId,
   isMaster,
+  adminOfficeIds,
   onBack,
   onOpenEmployee,
 }: {
@@ -58,6 +59,8 @@ export default function AttendanceSummaryView({
   initialPayrollOfficeId: string;
   /** master user だけ「Excel から反映」を出す (職員の新規作成を伴うため。スタッフ管理と同じ判定) */
   isMaster: boolean;
+  /** 事業所管理者として管理できる offices.id (この事業所の管理者なら Excel 反映を使える) */
+  adminOfficeIds: string[];
   onBack: () => void;
   /** セルをクリック → 入力画面でその職員・その月を開く */
   onOpenEmployee: (payrollOfficeId: string, employeeId: string, ym: string) => void;
@@ -75,6 +78,9 @@ export default function AttendanceSummaryView({
 
   const office = offices.find((o) => o.id === payrollOfficeId) ?? null;
   const weekStart = office?.work_week_start ?? 0;
+  // Excel 反映: 全社管理者か、この事業所の事業所管理者なら使える (職員の新規作成は全社管理者だけ)
+  const officeCommonId = office?.office_id ?? "";
+  const canImport = isMaster || (officeCommonId !== "" && adminOfficeIds.includes(officeCommonId));
   const today = todayYmd();
   const currentYm = today.slice(0, 7);
 
@@ -193,7 +199,7 @@ export default function AttendanceSummaryView({
             <RefreshCw size={13} />
             再読込
           </button>
-          {isMaster && (
+          {canImport && (
             <button
               onClick={() => setShowImport(true)}
               disabled={!office}
@@ -288,6 +294,7 @@ export default function AttendanceSummaryView({
         <AttendanceExcelImportModal
           tenantId={tenantId}
           office={office}
+          canCreateStaff={isMaster}
           onClose={(changed) => {
             setShowImport(false);
             if (changed) setReloadKey((n) => n + 1);
