@@ -154,6 +154,8 @@ export interface FukuyoguSeikyuRow {
   certEnd: string | null; // 認定有効期間 終了
   /** 担当居宅介護支援事業所番号 (10 桁) */
   careOfficeNumber: string | null;
+  /** 担当居宅の care_offices.plan_kubun。"3" = 介護予防支援事業所・地域包括作成 (要支援の 7132 だけで使う)。未設定・列未適用は "1" 扱い */
+  carePlanKubun?: string | null;
   /** 利用者負担率 (0.1 / 0.2 / 0.3) */
   copayRate: number;
   details: FukuyoguDetailLine[];
@@ -403,7 +405,8 @@ export function buildFukuyoguDensou(
       //   kaigo-app build.ts:328 と同じく居宅事業所番号の有無で 1/2 を出し分ける。
       //   ⚠ "2" (被保険者が自己作成) は実際にケアマネが居る利用者に付けると
       //     居宅側の給付管理票と突合できず返戻になり得る。上の warning を必ず潰すこと。
-      r.careOfficeNumber ? "1" : "2", // 19 居宅サービス計画作成区分コード
+      // ★ 2026-11-09: ほのぼの実伝送 KK261004 では 区分 3 は 7132 (要支援) の 5 事業所だけ (care_offices.plan_kubun)
+      r.careOfficeNumber ? (yobo && r.carePlanKubun === "3" ? "3" : "1") : "2", // 19 居宅サービス計画作成区分コード
       r.careOfficeNumber ?? "", // 20 事業所番号 (居宅介護支援事業所)
       dateNum(r.serviceStartDate ?? null), // 21 開始年月日 (月内にサービスを始めた人)
       dateNum(r.serviceStopDate ?? null), // 22 中止年月日 (月内にサービスをやめた人)

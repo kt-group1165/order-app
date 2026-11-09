@@ -132,6 +132,15 @@ const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && 
 const chunks = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
 const relPath = (p) => relative(REPO_ROOT, p).replace(/\\/g, "/");
 const dOrNull = (s) => nDate(s) || null;
+/**
+ * 負担割合 (copay_rate) は 給付率から決める。★ 表で単位が違う (同じ列名):
+ *   clients.copay_rate                  = percent 表記 "10"/"20"/"30"
+ *   client_insurance_records.copay_rate = 割 表記 "1"/"2"/"3"  (★ 認定に "10" を入れると 10 割負担に潰れる)
+ * 給付率 90/80/70 以外 (0 = 公費単独・100・空) は決めない (null = 書かない)。
+ * 2026-11-09: 当初版は benefit_rate だけ書き copay_rate を書いていなかった (fix_honobono_sync_shared_certs.mjs で後始末)。
+ */
+const clientCopayOf = (br) => ({ "90": "10", "80": "20", "70": "30" })[nRate(String(br ?? ""))] ?? null;
+const certCopayOf = (br) => ({ "90": "1", "80": "2", "70": "3" })[nRate(String(br ?? ""))] ?? null;
 const sOrNull = (s) => nfkc(s) || null;
 const iOrNull = (s) => (nfkc(s) === "" ? null : toInt(s));
 /** 比較用の正規化 (日付・要介護度・数値・文字) */
@@ -472,7 +481,7 @@ async function main() {
         name: p.name, furigana: p.kana || null, birth_date: p.birth || null, gender: ["男", "女"].includes(p.gender) ? p.gender : null,
         postal_code: p.postal, address: p.address, phone: p.phone, mobile: p.mobile,
         care_level: cert?.care ?? null, certification_start_date: cert?.start ?? null, certification_end_date: cert?.end ?? null,
-        insurer_number: cert?.insurer ?? null, insured_number: cert?.insured ?? null, benefit_rate: cert ? rateAt(cert, AS_OF) : null,
+        insurer_number: cert?.insurer ?? null, insured_number: cert?.insured ?? null, benefit_rate: cert ? rateAt(cert, AS_OF) : null, copay_rate: cert ? clientCopayOf(rateAt(cert, AS_OF)) : null,
         ...(p.death ? { status: "deceased" } : {}),
       },
       noCert: !cert,
@@ -500,7 +509,7 @@ async function main() {
       client: {
         name: u.name, furigana: u.kana || null, birth_date: u.birth || null, gender: ["男", "女"].includes(u.gender) ? u.gender : null,
         care_level: nCare(rr[C.CARE_LEVEL]) || null, certification_start_date: nDate(rr[C.CERT_START]) || null, certification_end_date: nDate(rr[C.CERT_END]) || null,
-        insurer_number: nInsurer(rr[C.INSURER]) || null, insured_number: nInsured(rr[C.INSURED]) || null, benefit_rate: nRate(rr[C.BENEFIT]) || null,
+        insurer_number: nInsurer(rr[C.INSURER]) || null, insured_number: nInsured(rr[C.INSURED]) || null, benefit_rate: nRate(rr[C.BENEFIT]) || null, copay_rate: clientCopayOf(rr[C.BENEFIT]),
       },
       src: { file: SRC_KDS, key: u.key, ref: receiptRef(rr) },
     });
@@ -602,7 +611,7 @@ async function main() {
           tenant_id: TENANT, office_id: OFFICE, user_number: s.person?.userNo ?? s.kds.userNo, name: s.client.name, furigana: s.client.furigana, birth_date: s.client.birth_date, gender: s.client.gender,
           postal_code: s.client.postal_code ?? null, address: s.client.address ?? null, phone: s.client.phone ?? null, mobile: s.client.mobile ?? null,
           care_level: s.client.care_level, certification_start_date: s.client.certification_start_date, certification_end_date: s.client.certification_end_date,
-          insurer_number: s.client.insurer_number, insured_number: s.client.insured_number, benefit_rate: s.client.benefit_rate, care_office_id: co.co?.id ?? null,
+          insurer_number: s.client.insurer_number, insured_number: s.client.insured_number, benefit_rate: s.client.benefit_rate, copay_rate: s.client.copay_rate ?? null, care_office_id: co.co?.id ?? null,
           is_facility: false, is_provisional: false, status: s.client.status ?? "active", deleted_at: null,
         };
         applyOp("clients", { table: "clients", action: "insert", id, why: s.person ? "新規 (基本情報)" : "新規 (KDS のみ)", ref: s.ex, src: s.src, row });
@@ -622,7 +631,7 @@ async function main() {
       const patch = {}, before = {};
       for (const [col, v] of Object.entries(s.client)) {
         if (v == null || v === "") continue;
-        if (s.noCert && /care_level|certification|insur|benefit/.test(col)) continue;
+        if (s.noCert && /care_level|certification|insur|benefit|copay/.test(col)) continue;
         if (normFor(col, c[col] ?? null) !== normFor(col, v)) { patch[col] = v; before[col] = c[col] ?? null; }
       }
       const curCoNo = c.care_office_id ? m0.careOfficeNo.get(c.care_office_id) ?? "" : "";
@@ -659,7 +668,7 @@ async function main() {
     const m1 = buildBillingModel(sim, MONTH, OFFICE, libs);
     const INS_COLS = ["care_level", "certification_end_date", "insurer_number", "insurer_name", "insured_number", "benefit_rate", "certification_status", "certification_date",
       "issued_date", "insurance_confirmed_date", "qualification_date", "insurance_valid_start", "insurance_valid_end", "limit_period_start", "limit_period_end",
-      "service_limit_amount", "care_manager", "care_manager_org", "care_office_name", "service_restriction", "service_memo"];
+      "service_limit_amount", "care_manager", "care_manager_org", "care_office_name", "service_restriction", "service_memo", "copay_rate"];
     for (const s of subjects) {
       const cid = resolvedS.get(s.sid);
       if (!cid) continue;
@@ -672,7 +681,7 @@ async function main() {
         const at = c.end && c.end < AS_OF ? c.end : AS_OF < c.start ? c.start : AS_OF;
         return { row: {
           care_level: c.care, certification_start_date: c.start, certification_end_date: c.end, insurer_number: c.insurer || null, insurer_name: c.insurerName,
-          insured_number: c.insured || null, benefit_rate: rateAt(c, at), certification_status: c.care ? "認定済み" : "申請中", certification_date: c.certDate,
+          insured_number: c.insured || null, benefit_rate: rateAt(c, at), copay_rate: certCopayOf(rateAt(c, at)), certification_status: c.care ? "認定済み" : "申請中", certification_date: c.certDate,
           issued_date: c.issued, insurance_confirmed_date: c.confirmed, qualification_date: c.qualified, insurance_valid_start: c.insStart, insurance_valid_end: c.insEnd,
           limit_period_start: c.limStart, limit_period_end: c.limEnd, service_limit_amount: c.limit, care_manager: c.cm, care_manager_org: c.office, care_office_name: c.officeFull,
           service_restriction: c.restriction ?? "なし", service_memo: c.memo, care_office_id: co.co?.id ?? null, care_office_number: co.no,
@@ -681,7 +690,7 @@ async function main() {
         const rr = repReceipt(s.kds, monthEndS);
         return [{ row: {
           care_level: s.client.care_level, certification_start_date: s.client.certification_start_date, certification_end_date: s.client.certification_end_date,
-          insurer_number: s.client.insurer_number, insured_number: s.client.insured_number, benefit_rate: s.client.benefit_rate, certification_status: "認定済み",
+          insurer_number: s.client.insurer_number, insured_number: s.client.insured_number, benefit_rate: s.client.benefit_rate, copay_rate: certCopayOf(s.client.benefit_rate), certification_status: "認定済み",
           care_office_id: s.careOffice.co?.id ?? null, care_office_number: s.careOffice.no,
         }, src: { file: SRC_KDS, key: s.kds.key, ref: receiptRef(rr) } }];
       })();

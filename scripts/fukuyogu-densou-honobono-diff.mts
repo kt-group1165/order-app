@@ -30,7 +30,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PROVIDER_BN, loadSnapshot, loadLibs, buildBillingModel, ymOf, type ItemRow,
+  PROVIDER_BN, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, type ItemRow,
 } from "./_honobono-sync-core.mjs";
 import {
   buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
@@ -214,6 +214,17 @@ async function main() {
   const model = buildBillingModel(snap, MONTH, office.id, libs);
   const { clientById, careOfficeNo, dbLines, isLate, pickKohi, ordersById } = model;
   const itemById = new Map(snap.items.map((i) => [i.id, i]));
+  // 計画作成区分 (care_offices.plan_kubun。migrations/care_offices_plan_kubun.sql)。スナップショットに無い列なので都度読む。
+  //   列が未適用ならその旨を出して全件 "1" 扱い (BillingTab と同じ)
+  const planKubunById = new Map<string, string>();
+  {
+    const env = readEnv();
+    const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/care_offices?select=id,plan_kubun&plan_kubun=eq.3`, {
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    if (res.ok) for (const r of (await res.json()) as { id: string; plan_kubun: string }[]) planKubunById.set(r.id, r.plan_kubun);
+    else console.log(`  ⚠ care_offices.plan_kubun を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 列が未適用なら全件 区分1 扱い`);
+  }
   // 開始年月日のため 利用者ごとの 介護保険の貸与 全部 (過去月の終了分も)
   const rentalsByClient = new Map<string, ItemRow[]>();
   for (const it of snap.items) {
@@ -256,6 +267,7 @@ async function main() {
       // 要介護度・認定期間 = 当月に有効な認定レコード優先 (BillingTab と同じ lib/kokuho-densou/cert-for-month.ts)
       ...certFieldsForDensou(c, pickCertForMonth(model.insByClient.get(cid) ?? [], model.monthStartS, model.monthEndS)),
       careOfficeNumber: c.care_office_id ? (careOfficeNo.get(c.care_office_id) || null) : null,
+      carePlanKubun: c.care_office_id ? planKubunById.get(c.care_office_id) ?? null : null,
       copayRate: amt.copayRate, details, totalUnits, totalCost: amt.totalCost,
       insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
       kohiHobetsu: amt.kohiHobetsu, kohiFutansha: kohi?.futansha ?? null, kohiJukyusha: kohi?.jukyusha ?? null,

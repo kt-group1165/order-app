@@ -849,6 +849,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
         ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
         careOfficeNumber: careOffice?.office_number ?? null,
+        carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
         copayRate,
         details,
         totalUnits,
@@ -1176,6 +1177,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
           ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd)),
           careOfficeNumber: careOffice?.office_number ?? null,
+        carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
           copayRate,
           details,
           totalUnits,
