@@ -9,7 +9,8 @@ import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { HW_KANA } from "./search-utils";
 import { calcMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
-import { getExceptionGrants, hasActiveGrant, isTableMissingError } from "@/lib/fukuyoguExceptions";
+import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
+import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
 import { halfMonthUnits } from "@/lib/half-month-units";
 import { getAllOrders, getAllOrderItemsByTenant } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
@@ -333,7 +334,7 @@ function MonthlyInfoTab({
   );
 }
 
-export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: string; currentOfficeId: string | null }) {
+export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionGrant }: { tenantId: string; currentOfficeId: string | null; onOpenExceptionGrant?: (clientId: string, restrictionGroup: string) => void }) {
   // サブタブ: 月次情報 / 介護請求 / 利用請求 / 売上帳票
   const [subTab, setSubTab] = useState<BillingSubTab>("monthly");
   const [clients, setClients] = useState<Client[]>([]);
@@ -421,6 +422,32 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
   const [cmUnitsNotice, setCmUnitsNotice] = useState<string | null>(null);
   const [cmUnitsAvailable, setCmUnitsAvailable] = useState(true);
   const [cmSavingId, setCmSavingId] = useState<string | null>(null);
+  // ★ 軽度者 例外給付の印 (2026-11-09): 利用者行に 記録なし/切れ = 赤・30日以内に期限/期間要なのに終了日空 = 橙。
+  //   押すと利用者タブの例外給付タブを その品目区分の新規入力で開く。基準日は請求月の 1 日 (伝送の警告と同じ)。
+  //   表が読めなければ印は出さず、理由を画面下の集計欄に出す (伝送の警告は従来どおり別経路)。
+  const [exGrants, setExGrants] = useState<FukuyoguExceptionGrant[] | null>(null);
+  const [exRules, setExRules] = useState<ExceptionInsurerRule[]>([]);
+  const [exNotice, setExNotice] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const notices: string[] = [];
+      try {
+        const g = await getAllExceptionGrants(tenantId);
+        if (!cancelled) setExGrants(g);
+      } catch (e) {
+        console.error("例外給付記録の取得失敗:", e);
+        notices.push(isTableMissingError(e as { code?: string })
+          ? "例外給付の表が未作成のため、利用者行の例外給付の印は出していません"
+          : `例外給付記録を読めなかったため、利用者行の例外給付の印は出していません (${(e as { message?: string })?.message ?? String(e)})`);
+        if (!cancelled) setExGrants(null);
+      }
+      const r = await getExceptionInsurerRules(tenantId);
+      if (r.message) notices.push(r.message);
+      if (!cancelled) { setExRules(r.rules); setExNotice(notices.length > 0 ? notices.join(" / ") : null); }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId]);
 
   // 月遅れ自動判定：保険証のcertification_statusが「申請中」の利用者
   const autoLateClients = useMemo(() => {
@@ -488,6 +515,32 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
   }, [activeRentals, orders, clients]);
+
+  // 例外給付の判定 (利用者ごと)。ok の利用者は入れない
+  const exceptionByClient = useMemo(() => {
+    const m = new Map<string, { level: ExceptionAlertLevel; items: ExceptionJudgement[] }>();
+    if (!exGrants) return m;
+    const onDate = `${billingMonth}-01`;
+    const eqByCode = new Map(equipment.map((e) => [e.product_code, e]));
+    for (const { client, items } of clientGroups) {
+      const groups: string[] = [];
+      for (const item of items) {
+        const cat = eqByCode.get(item.product_code)?.category;
+        if (!isKeidoRestricted(client.care_level, cat)) continue;
+        const g = RESTRICTION_GROUP_OF_CATEGORY[cat ?? ""];
+        if (g) groups.push(g);
+      }
+      if (groups.length === 0) continue;
+      const j = judgeClientExceptions(exGrants, client.id, groups, onDate, findInsurerRule(exRules, client.insurer_number));
+      if (j.level !== "ok") m.set(client.id, { level: j.level, items: j.items.filter((i) => i.level !== "ok") });
+    }
+    return m;
+  }, [exGrants, exRules, clientGroups, equipment, billingMonth]);
+  const openExceptionGrant = (clientId: string, group: string) => {
+    if (!onOpenExceptionGrant) return;
+    if (isDirty && !confirm("月遅・返戻・過誤のフラグに未保存の変更があります。保存せずに利用者タブへ移りますか？")) return;
+    onOpenExceptionGrant(clientId, group);
+  };
 
   // DBからフラグを読み込む
   useEffect(() => {
@@ -1649,6 +1702,19 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                     <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-700">{client.user_number ?? "—"}</div>
                     <div className="px-2 py-2 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-1.5 min-w-0">
                       <span className="flex-1 truncate">{client.name}</span>
+                      {(() => {
+                        const ex = exceptionByClient.get(client.id);
+                        if (!ex) return null;
+                        // 押したら 赤 (記録なし/切れ) の区分を優先して開く
+                        const target = ex.items.find((i) => i.level === "danger") ?? ex.items[0];
+                        return (
+                          <button
+                            onClick={e => { e.stopPropagation(); openExceptionGrant(client.id, target.group); }}
+                            title={`${ex.items.map(describeJudgement).join("\n")}\n\n押すと利用者タブの例外給付 (${target.group}) の入力を開きます`}
+                            className={`shrink-0 text-[10px] border rounded px-1.5 py-0.5 font-semibold transition-colors ${ex.level === "danger" ? "border-red-400 text-red-700 bg-red-50 hover:bg-red-100" : "border-orange-400 text-orange-700 bg-orange-50 hover:bg-orange-100"}`}
+                          >例外給付{ex.level === "danger" ? (ex.items.some((i) => i.kind === "missing") ? "なし" : "切れ") : "期限"}</button>
+                        );
+                      })()}
                       <button
                         onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
                         className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -1770,6 +1836,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                     <span>利用者負担額 <strong className="font-mono text-red-600">{copayClaim.toLocaleString()}</strong></span>
                     <span>公費分本人負担 <strong className="font-mono">—</strong></span>
                   </div>
+                  {(exceptionByClient.size > 0 || exNotice) && (
+                    <div className="mt-1.5 text-[11px] text-red-700">
+                      {exceptionByClient.size > 0 && <span>⚠ 軽度者 例外給付 要確認 {exceptionByClient.size} 名 (記録なし/期限切れ {[...exceptionByClient.values()].filter((v) => v.level === "danger").length} 名) — 利用者名の横の印を押すと入力を開きます。記録が無いだけの可能性があります</span>}
+                      {exNotice && <span className="block">⚠ {exNotice}</span>}
+                    </div>
+                  )}
                   {(cappedCount > 0 || cmUnitsNotice) && (
                     <div className="mt-1.5 text-[11px] text-orange-700">
                       {cappedCount > 0 && <span>⚠ CM 指示単位数で頭打ち {cappedCount} 名 — 保険外 (全額自己負担) {outsideTotal.toLocaleString()} 円 (上の保険請求額・利用者負担額には含めていません)</span>}

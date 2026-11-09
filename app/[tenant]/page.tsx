@@ -180,6 +180,8 @@ export default function TenantPage({
   const [attendanceDirty, setAttendanceDirty] = useState(0);
   const [pendingTabChange, setPendingTabChange] = useState<Tab | null>(null);
   const [clientTabTarget, setClientTabTarget] = useState<string | null>(null);
+  // 請求画面の「例外給付 記録なし」から 利用者タブの例外給付タブを その品目区分で開くための受け渡し (2026-11-09)
+  const [clientTabKeidoGroup, setClientTabKeidoGroup] = useState<string | null>(null);
   // 書類タスク → Documents タブ遷移時に、対象 client を pre-select するための受け渡し
   // v2: doc_task.id と expected_doc_type も渡し、modal auto-open + 完了時 task close
   const [docsTabTarget, setDocsTabTarget] = useState<{
@@ -282,10 +284,10 @@ export default function TenantPage({
         {activeTab === "home" && <HomeMenu tenantName={tenantName} onNavigate={setActiveTab} />}
         {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
-        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} onClearInitialClient={() => setClientTabTarget(null)} />}
+        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} initialKeidoGroup={clientTabKeidoGroup} onClearInitialClient={() => { setClientTabTarget(null); setClientTabKeidoGroup(null); }} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={(clientId, docTaskId, expectedDocType) => { setDocsTabTarget(clientId ? { clientId, docTaskId, expectedDocType } : null); setActiveTab("documents"); }} />}
-        {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} />}
+        {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} onOpenExceptionGrant={(clientId, group) => { setClientTabTarget(clientId); setClientTabKeidoGroup(group); setActiveTab("clients"); }} />}
         {activeTab === "documents" && <DocumentsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} initialSelectedClientId={docsTabTarget?.clientId ?? null} initialDocTaskId={docsTabTarget?.docTaskId ?? null} initialExpectedDocType={docsTabTarget?.expectedDocType ?? null} onClearInitialClient={() => setDocsTabTarget(null)} />}
         {activeTab === "staff" && <StaffTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "overtime" && <OvertimeTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}

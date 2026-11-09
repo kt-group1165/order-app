@@ -5,6 +5,7 @@
 //   「テーブル未作成」を握りつぶさずに区別できるようにする。
 import { supabase } from "./supabase";
 import { selectInChunks } from "./inChunks";
+import type { ExceptionInsurerRule } from "./fukuyoguExceptionRules";
 
 export type FukuyoguExceptionGrant = {
   id: string;
@@ -71,4 +72,85 @@ export function hasActiveGrant(
     g.valid_from <= onDate &&
     (g.valid_end == null || g.valid_end >= onDate),
   );
+}
+
+// ─── 市町村 (保険者) ごとのルール (2026-11-09) ─────────────────────────────
+// ⚠ migrations/fukuyogu_exception_insurer_rules.sql が未適用の間は表が無い。
+//   読めないときは rules=[] (= 全市町村「未設定」) で返し、message に理由を入れる。
+//   呼出側は message を画面に出し、console.error も出す (silent にしない)。
+
+export type InsurerRulesLoad = { rules: ExceptionInsurerRule[]; available: boolean; message: string | null };
+
+export async function getExceptionInsurerRules(tenantId: string): Promise<InsurerRulesLoad> {
+  const { data, error } = await supabase
+    .from("fukuyogu_exception_insurer_rules")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("insurer_number")
+    .order("id");
+  if (error) {
+    const missing = isTableMissingError(error);
+    const message = missing
+      ? "軽度者例外給付の市町村ルール表が未作成です (migrations/fukuyogu_exception_insurer_rules.sql 未適用)。全市町村「ルール未設定」として扱います"
+      : `軽度者例外給付の市町村ルールを読めませんでした (${error.message})。全市町村「ルール未設定」として扱います`;
+    console.error("例外給付 市町村ルールの取得失敗:", error.code, error.message);
+    return { rules: [], available: false, message };
+  }
+  return { rules: (data ?? []) as ExceptionInsurerRule[], available: true, message: null };
+}
+
+export type InsurerRuleInput = Pick<ExceptionInsurerRule, "insurer_number" | "insurer_name" | "requires_period" | "period_months" | "notes">;
+
+export async function createExceptionInsurerRule(tenantId: string, input: InsurerRuleInput): Promise<ExceptionInsurerRule> {
+  const { data, error } = await supabase
+    .from("fukuyogu_exception_insurer_rules")
+    .insert({ tenant_id: tenantId, ...input })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as ExceptionInsurerRule;
+}
+
+export async function updateExceptionInsurerRule(id: string, patch: InsurerRuleInput): Promise<void> {
+  const { error } = await supabase.from("fukuyogu_exception_insurer_rules").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteExceptionInsurerRule(id: string): Promise<void> {
+  const { error } = await supabase.from("fukuyogu_exception_insurer_rules").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/** 保険者番号から保険者名を引く (マスタが無いので認定行に入っている名前を 1 件借りる)。見つからなければ null */
+export async function lookupInsurerName(tenantId: string, insurerNumber: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("client_insurance_records")
+    .select("insurer_name")
+    .eq("tenant_id", tenantId)
+    .eq("insurer_number", insurerNumber)
+    .not("insurer_name", "is", null)
+    .limit(1);
+  if (error) {
+    console.error("保険者名の取得失敗:", error.message);
+    return null;
+  }
+  return (data?.[0]?.insurer_name as string | undefined) ?? null;
+}
+
+/** テナントの例外給付記録を全件 (利用者一覧の印用)。記録は 1 利用者に数件なので全件で足りる */
+export async function getAllExceptionGrants(tenantId: string): Promise<FukuyoguExceptionGrant[]> {
+  const PAGE = 1000;
+  const all: FukuyoguExceptionGrant[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("fukuyogu_exception_grants")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("id")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    all.push(...((data ?? []) as FukuyoguExceptionGrant[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return all;
 }

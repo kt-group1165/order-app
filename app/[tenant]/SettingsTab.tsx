@@ -16,10 +16,11 @@ import { getOffices, createOffice, updateOffice, deleteOffice, type Office } fro
 import { getCareOffices, upsertCareOffice, deleteCareOffice, getCareManagers, addCareManager, updateCareManager, deleteCareManager, type CareOffice, type CareManager } from "@/lib/careOffices";
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
+import ExceptionInsurerRulesSection from "./ExceptionInsurerRulesSection";
 
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
-type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "contract_template" | "speech_usage" | "data_reimport";
+type SettingsPage = "menu" | "company" | "own_offices" | "suppliers" | "care_offices" | "care_plan" | "contract_template" | "speech_usage" | "data_reimport" | "exception_insurer_rules";
 
 // データ再取込 (SettingsTab の data_reimport) を出すか。2026-11-09 に停止 (理由はメニュー定義の注記)
 const DATA_REIMPORT_ENABLED = false;
@@ -253,6 +254,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     { id: "care_offices", label: "居宅事業所マスタ",    desc: "ケアマネ事務所・FAX番号の管理" },
     { id: "care_plan",    label: "個別援助計画書テンプレート", desc: "計画書の定型文管理" },
     { id: "contract_template", label: "契約書・重要事項の文面", desc: "帳票の文章ブロックを編集" },
+    { id: "exception_insurer_rules", label: "軽度者例外給付 市町村ルール", desc: "市町村ごとに例外給付の有効期間が要るか・標準の期間" },
     { id: "speech_usage", label: "AI使用状況・料金",       desc: "音声認識・カナ変換の使用量と料金を確認" },
     // ★ 2026-11-09 非表示: 「データ再取込」は client_insurance_records を tenant 全体で DELETE し (kaigo-app の認定も消える)、
     //   clients.care_office_id も全件 NULL にする。共有表を壊すので止めた。取込は migrations/sync_fukuyogu_from_honobono.mjs
@@ -530,6 +532,18 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
           ) : (
             <p className="text-sm text-gray-600">この機能は停止しています (介護側と共有の保険情報を全件消すため)。</p>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── 軽度者例外給付 市町村ルール (2026-11-09) ──
+  if (settingsPage === "exception_insurer_rules") {
+    return (
+      <div className="flex flex-col h-full bg-gray-50">
+        <PageHeader title="軽度者例外給付 市町村ルール" onBack={() => setSettingsPage("menu")} />
+        <div className="flex-1 overflow-y-auto p-4">
+          <ExceptionInsurerRulesSection tenantId={tenantId} />
         </div>
       </div>
     );

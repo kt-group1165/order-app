@@ -11,7 +11,9 @@ import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { type CareOfficeChoice } from "./SendRentalReportModal";
 import { HW_KANA, matchClient } from "./search-utils";
 import { KANA_ROWS } from "./kana-rows";
-import { STATUS_LABEL, STATUS_COLOR, NEXT_STATUSES } from "./order-item-helpers";
+import { STATUS_LABEL, STATUS_COLOR, NEXT_STATUSES, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
+import { getAllExceptionGrants, getExceptionInsurerRules, isTableMissingError, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
+import { judgeClientExceptions, findInsurerRule, describeJudgement, proposeValidEnd, diffDaysYmd, EXCEPTION_EXPIRY_WARN_DAYS, type ExceptionInsurerRule, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
 import CarePlanModal from "./CarePlanModal";
 import ProposalModal from "./ProposalModal";
 import ContractDocumentsModal from "./ContractDocumentsModal";
@@ -32,7 +34,7 @@ import { getMaxUserNumber } from "@kt/shared/user-number";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
 
-export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; onClearInitialClient?: () => void }) {
+export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, initialKeidoGroup, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; initialKeidoGroup?: string | null; onClearInitialClient?: () => void }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -44,6 +46,8 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
   const [kanaFilter, setKanaFilter] = useState("");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedClientInitialViewMode, setSelectedClientInitialViewMode] = useState<"current" | "insurance" | undefined>(undefined);
+  // 請求画面の「例外給付 記録なし」から来たとき、例外給付タブをこの品目区分で開く (2026-11-09)
+  const [selectedClientInitialKeidoGroup, setSelectedClientInitialKeidoGroup] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "insurance" | "history">("list");
   const [allInsuranceRecords, setAllInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   /** 保険情報一覧の読み込み状態。一覧に切り替えたときだけ読む (null = まだ読んでいない) */
@@ -185,7 +189,12 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         }
         if (initialClientId) {
           const target = c.find((cl) => cl.id === initialClientId);
-          if (target) setSelectedClient(target);
+          if (target) {
+            setSelectedClient(target);
+            setSelectedClientInitialKeidoGroup(initialKeidoGroup ?? null);
+          } else if (initialKeidoGroup) {
+            alert("対象の利用者がこの一覧にいません (事業所の絞り込みを確認してください)。");
+          }
           onClearInitialClient?.();
         }
       } finally {
@@ -256,6 +265,67 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
     return m;
   }, [clients]);
 
+  // ── 軽度者 例外給付の印 (2026-11-09) ──────────────────────────────
+  //   軽度者 × 原則対象外品目を (取消・終了以外で) 借りている利用者について、今日時点で
+  //   記録なし/切れ = 赤、30 日以内に切れる/市町村ルールで期間が要るのに終了日空 = 橙。
+  //   ⚠ 例外給付の表が読めないときは印を出さない (全員「記録なし」に見えるため)。理由は画面に出す。
+  const [exceptionGrantsAll, setExceptionGrantsAll] = useState<FukuyoguExceptionGrant[] | null>(null);
+  const [exceptionRules, setExceptionRules] = useState<ExceptionInsurerRule[]>([]);
+  const [exceptionNotice, setExceptionNotice] = useState<string | null>(null);
+  const [exceptionFilter, setExceptionFilter] = useState(false);
+  const exceptionListVisible = selectedClient === null;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const notices: string[] = [];
+      try {
+        const g = await getAllExceptionGrants(tenantId);
+        if (!cancelled) setExceptionGrantsAll(g);
+      } catch (e) {
+        const missing = isTableMissingError(e as { code?: string });
+        console.error("例外給付記録の取得失敗:", e);
+        notices.push(missing
+          ? "例外給付の表が未作成のため、例外給付の印は出していません"
+          : `例外給付記録を読めなかったため、例外給付の印は出していません (${(e as { message?: string })?.message ?? String(e)})`);
+        if (!cancelled) setExceptionGrantsAll(null);
+      }
+      const r = await getExceptionInsurerRules(tenantId);
+      if (r.message) notices.push(r.message);
+      if (!cancelled) {
+        setExceptionRules(r.rules);
+        setExceptionNotice(notices.length > 0 ? notices.join(" / ") : null);
+      }
+    })();
+    return () => { cancelled = true; };
+  // 詳細から一覧に戻ったとき (例外給付を入力した後) にも読み直す
+  }, [tenantId, exceptionListVisible]);
+  const exceptionStatusByClient = useMemo(() => {
+    const m = new Map<string, { level: ExceptionAlertLevel; lines: string[] }>();
+    if (!exceptionGrantsAll) return m;
+    const today = todayYmd();
+    const groupsByClient = new Map<string, string[]>();
+    for (const item of orderItems) {
+      if (item.status === "cancelled" || item.status === "terminated") continue;
+      const order = orderById.get(item.order_id);
+      if (!order) continue;
+      if ((item.payment_type ?? order.payment_type) !== "介護") continue;
+      const client = order.client_id ? clientById.get(order.client_id) : undefined;
+      const cat = equipmentByCode.get(item.product_code)?.category;
+      if (!client || !isKeidoRestricted(client.care_level, cat)) continue;
+      const group = RESTRICTION_GROUP_OF_CATEGORY[cat ?? ""];
+      if (!group) continue;
+      if (!groupsByClient.has(client.id)) groupsByClient.set(client.id, []);
+      groupsByClient.get(client.id)!.push(group);
+    }
+    for (const [clientId, groups] of groupsByClient) {
+      const rule = findInsurerRule(exceptionRules, clientById.get(clientId)?.insurer_number);
+      const j = judgeClientExceptions(exceptionGrantsAll, clientId, groups, today, rule);
+      if (j.level === "ok") continue;
+      m.set(clientId, { level: j.level, lines: j.items.filter((i) => i.level !== "ok").map(describeJudgement) });
+    }
+    return m;
+  }, [exceptionGrantsAll, exceptionRules, orderItems, orderById, clientById, equipmentByCode]);
+
   // 入院フィルター用
   const hospFilteredIds = useMemo(() => {
     if (!hospFilter) return null;
@@ -275,6 +345,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && !clientOfficeMap.has(c.id)) return false;
       // 仮登録のみ表示
       if (provisionalFilter && !c.is_provisional) return false;
+      if (exceptionFilter && !exceptionStatusByClient.has(c.id)) return false;
       if (hospFilter) return hospFilteredIds!.has(c.id);
       if (kanaFilter) {
         const row = KANA_ROWS.find((r) => r.label === kanaFilter);
@@ -296,7 +367,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
       if (fa !== fb) return fa - fb;
       return (a.furigana ?? a.name).localeCompare(b.furigana ?? b.name, "ja");
     }),
-    [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, hospFilter, hospFilteredIds, kanaFilter, search]);
+    [clients, currentOfficeId, officeViewAll, clientOfficeMap, provisionalFilter, exceptionFilter, exceptionStatusByClient, hospFilter, hospFilteredIds, kanaFilter, search]);
 
   // 変更履歴を生成（Mapルックアップで O(N²) → O(N) に、useMemoで再描画時再実行しない）
   // 注意: 早期 return より前に置くこと（フックの順序を保つ）
@@ -336,8 +407,9 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         tenantId={tenantId}
         currentOfficeId={currentOfficeId}
         initialViewMode={selectedClientInitialViewMode}
+        initialKeidoGroup={selectedClientInitialKeidoGroup}
         hospitalizations={hospitalizations}
-        onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); }}
+        onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); setSelectedClientInitialKeidoGroup(null); }}
       />
     );
   }
@@ -2124,8 +2196,8 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         ) : (
           <>
             <button
-              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); }}
-              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter && !trashFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
+              onClick={() => { setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); setExceptionFilter(false); }}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${!kanaFilter && !provisionalFilter && !trashFilter && !exceptionFilter ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-500"}`}
             >すべて</button>
             {KANA_ROWS.map((row) => (
               <button
@@ -2142,6 +2214,11 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
               onClick={() => { setTrashFilter(!trashFilter); setKanaFilter(""); setProvisionalFilter(false); }}
               className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${trashFilter ? "bg-gray-600 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
             >🗑️ ゴミ箱</button>
+            <button
+              onClick={() => { setExceptionFilter(!exceptionFilter); setKanaFilter(""); setProvisionalFilter(false); setTrashFilter(false); }}
+              title={exceptionNotice ?? "軽度者 × 原則対象外品目の例外給付が 記録なし・期限切れ (赤) / 30日以内に期限・終了日が必要 (橙) の利用者だけを表示"}
+              className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${exceptionFilter ? "bg-red-500 text-white" : "bg-red-50 text-red-700 hover:bg-red-100"}`}
+            >⚠ 例外給付{exceptionGrantsAll ? ` ${exceptionStatusByClient.size}` : " (未取得)"}</button>
           </>
         )}
       </div>
@@ -2196,6 +2273,16 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
                       {isHospitalized && (
                         <span className="text-xs px-1 py-0.5 bg-red-100 text-red-600 rounded font-medium shrink-0">入院中</span>
                       )}
+                      {(() => {
+                        const ex = exceptionStatusByClient.get(client.id);
+                        if (!ex) return null;
+                        return (
+                          <span title={ex.lines.join("\n")}
+                            className={`text-xs px-1 py-0.5 rounded font-medium shrink-0 ${ex.level === "danger" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"}`}>
+                            例外給付{ex.level === "danger" ? "要" : "期限"}
+                          </span>
+                        );
+                      })()}
                       <span className="flex-1 min-w-0 text-xs text-gray-400 truncate">{client.address ?? ""}</span>
                     </div>
                     <ChevronRight size={16} className="text-gray-300 shrink-0" />
@@ -2720,6 +2807,7 @@ function ClientDetail({
   tenantId,
   currentOfficeId,
   initialViewMode,
+  initialKeidoGroup,
   hospitalizations,
   onBack,
 }: {
@@ -2729,6 +2817,8 @@ function ClientDetail({
   tenantId: string;
   currentOfficeId: string | null;
   initialViewMode?: "current" | "insurance";
+  /** 請求画面から来たとき: 例外給付タブをこの品目区分の新規入力で開く */
+  initialKeidoGroup?: string | null;
   hospitalizations?: import("@/lib/supabase").ClientHospitalization[];
   onBack: () => void;
 }) {
@@ -2737,7 +2827,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "keido">(initialViewMode === "insurance" ? "insurance" : "usage");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : "usage");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
@@ -2937,11 +3027,55 @@ function ClientDetail({
   const [grantForm, setGrantForm] = useState<Omit<import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant, "id" | "tenant_id" | "client_id" | "created_at" | "updated_at"> | null>(null);
   const [editingGrantId, setEditingGrantId] = useState<string | null>(null);
   const [grantSaving, setGrantSaving] = useState(false);
-  const emptyGrantForm = () => ({
-    restriction_group: "車いす系", judgment_route: null,
-    doctor_opinion_date: null, meeting_confirmed_date: null, insurer_confirmed_date: null,
-    valid_from: todayYmd(), valid_end: null, notes: null,
-  });
+  // 市町村 (保険者) ルール (2026-11-09): 期間が要るのに終了日が空なら警告 / 開始日 + 標準の期間 を終了日の初期値に
+  const [keidoRules, setKeidoRules] = useState<ExceptionInsurerRule[]>([]);
+  const [keidoRulesNotice, setKeidoRulesNotice] = useState<string | null>(null);
+  const [keidoRulesLoaded, setKeidoRulesLoaded] = useState(false);
+  // 終了日が提案値のままか (開始日を変えたら追従させる。手で変えたら追従しない)
+  const [grantEndAuto, setGrantEndAuto] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getExceptionInsurerRules(tenantId).then((r) => {
+      if (cancelled) return;
+      setKeidoRules(r.rules);
+      setKeidoRulesNotice(r.message);
+      setKeidoRulesLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+  // 保険者番号: 今日を含む認定 → 番号のある最新の認定 → clients の値
+  const clientInsurerNumber = useMemo(() => {
+    const today = todayYmd();
+    const withNo = insuranceRecords.filter((r) => r.insurer_number);
+    const cur = withNo.find((r) => {
+      const st = r.certification_start_date ?? r.effective_date;
+      const en = r.certification_end_date;
+      return (!st || st <= today) && (!en || en >= today);
+    });
+    return cur?.insurer_number ?? withNo[0]?.insurer_number ?? client.insurer_number ?? null;
+  }, [insuranceRecords, client.insurer_number]);
+  const keidoRule = findInsurerRule(keidoRules, clientInsurerNumber);
+  const emptyGrantForm = (group?: string) => {
+    const from = todayYmd();
+    const proposed = keidoRule?.period_months ? proposeValidEnd(from, keidoRule.period_months) : null;
+    setGrantEndAuto(proposed != null);
+    return {
+      restriction_group: group ?? "車いす系", judgment_route: null,
+      doctor_opinion_date: null, meeting_confirmed_date: null, insurer_confirmed_date: null,
+      valid_from: from, valid_end: proposed, notes: null,
+    } as Omit<FukuyoguExceptionGrant, "id" | "tenant_id" | "client_id" | "created_at" | "updated_at">;
+  };
+  // 請求画面から来たとき: 読み込みが済んだら その品目区分で新規入力を開く (1 回だけ)
+  const keidoInitDone = useRef(false);
+  useEffect(() => {
+    if (!initialKeidoGroup || keidoInitDone.current || loading || !keidoRulesLoaded) return;
+    keidoInitDone.current = true;
+    setTopTab("keido");
+    setSelectedGrantId(null);
+    setEditingGrantId(null);
+    setGrantForm(emptyGrantForm(initialKeidoGroup));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- emptyGrantForm は毎描画で作り直されるが、初期化は 1 回だけ
+  }, [initialKeidoGroup, loading, keidoRulesLoaded]);
 
   const [regenDoc, setRegenDoc] = useState<ClientDocument | null>(null);
   const [showCarePlan, setShowCarePlan] = useState(false);
@@ -4932,8 +5066,18 @@ function ClientDetail({
           const sgf = <K extends keyof NonNullable<typeof gf>>(k: K, v: NonNullable<typeof gf>[K]) =>
             setGrantForm(f => f ? { ...f, [k]: v } : f);
 
+          // 保存前の確認: 終了日 < 開始日 は止める / 期間が要る市町村で終了日が空なら確認
+          const confirmGrant = (f: NonNullable<typeof gf>): boolean => {
+            if (!f.valid_from) { alert("有効期間の開始日を入力してください"); return false; }
+            if (f.valid_end && f.valid_end < f.valid_from) { alert(`有効期間の終了日 (${f.valid_end}) が開始日 (${f.valid_from}) より前です`); return false; }
+            if (keidoRule?.requires_period && !f.valid_end) {
+              return confirm(`${keidoRule.insurer_name ?? keidoRule.insurer_number} は市町村ルールで例外給付の有効期間が要りますが、終了日が空です。\nこのまま保存しますか？ (保存後も警告が出続けます)`);
+            }
+            return true;
+          };
           const saveNew = async () => {
             if (!gf) return;
+            if (!confirmGrant(gf)) return;
             setGrantSaving(true);
             const { data, error } = await supabase.from("fukuyogu_exception_grants").insert({
               tenant_id: tenantId, client_id: client.id, ...gf,
@@ -4949,6 +5093,7 @@ function ClientDetail({
           };
           const saveEdit = async () => {
             if (!gf || !editingGrantId) return;
+            if (!confirmGrant(gf)) return;
             setGrantSaving(true);
             const { error } = await supabase.from("fukuyogu_exception_grants").update(gf).eq("id", editingGrantId);
             setGrantSaving(false);
@@ -4958,6 +5103,7 @@ function ClientDetail({
             setGrantForm(null);
           };
           const startEdit = (rec: import("@/lib/fukuyoguExceptions").FukuyoguExceptionGrant) => {
+            setGrantEndAuto(false);
             setSelectedGrantId(rec.id);
             setEditingGrantId(rec.id);
             setGrantForm({
@@ -4991,6 +5137,13 @@ function ClientDetail({
                 <b>記録が無い = 例外給付を取っていない、ではありません。</b>現場で例外給付を受けている場合は、その内容をここに記録してください。
                 自動排泄処理装置は判定を保留しています(要介護4・5のみ対象という別ルールがあり、当システムでは型を区別できないため)。
               </div>
+              <div className={`mx-4 mb-2 px-3 py-1.5 rounded-lg text-xs border ${keidoRule?.requires_period ? "bg-orange-50 border-orange-200 text-orange-800" : "bg-gray-50 border-gray-200 text-gray-600"}`}>
+                市町村ルール: 保険者 {clientInsurerNumber ?? "(番号なし)"}{keidoRule?.insurer_name ? ` ${keidoRule.insurer_name}` : ""} —{" "}
+                {keidoRule
+                  ? <>有効期間 <b>{keidoRule.requires_period ? "要る" : "不要"}</b>{keidoRule.period_months ? ` / 標準 ${keidoRule.period_months} か月` : ""}{keidoRule.notes ? ` (${keidoRule.notes})` : ""}</>
+                  : <>未設定 (設定 → 軽度者例外給付 市町村ルール で登録できます)</>}
+                {keidoRulesNotice && <div className="mt-0.5 text-red-600">{keidoRulesNotice}</div>}
+              </div>
               {/* 一覧テーブル */}
               <div className="shrink-0 mx-4 mb-3 border border-gray-200 rounded-lg overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
@@ -5022,7 +5175,21 @@ function ClientDetail({
                             <td className="px-3 py-2 font-medium text-gray-800">{rec.restriction_group}</td>
                             <td className="px-3 py-2 text-gray-600">{rec.judgment_route ?? "—"}</td>
                             <td className="px-3 py-2 text-gray-600">{rec.valid_from}</td>
-                            <td className="px-3 py-2 text-gray-600">{rec.valid_end ?? "(期限なし)"}</td>
+                            <td className="px-3 py-2 text-gray-600">
+                              {(() => {
+                                const today = todayYmd();
+                                if (rec.valid_end == null) {
+                                  return keidoRule?.requires_period
+                                    ? <span className="text-orange-700 font-medium" title="市町村ルールで有効期間が要ります">(期限なし) ⚠ 終了日が必要</span>
+                                    : "(期限なし)";
+                                }
+                                const left = diffDaysYmd(today, rec.valid_end);
+                                if (rec.valid_from > today) return rec.valid_end;
+                                if (left < 0) return <span className="text-red-600 font-semibold">{rec.valid_end} 期限切れ</span>;
+                                if (left <= EXCEPTION_EXPIRY_WARN_DAYS) return <span className="text-orange-700 font-medium">{rec.valid_end} (あと {left} 日)</span>;
+                                return rec.valid_end;
+                              })()}
+                            </td>
                             <td className="px-3 py-2 flex gap-1.5 justify-end">
                               <button onClick={e => { e.stopPropagation(); startEdit(rec); }}
                                 className="text-xs text-blue-600 border border-blue-200 px-2 py-0.5 rounded hover:bg-blue-50">編集</button>
@@ -5094,13 +5261,37 @@ function ClientDetail({
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
                         <label className="text-xs text-gray-500"><span className="text-red-500">*</span> 有効期間 開始</label>
-                        <input type="date" value={gf.valid_from} onChange={e => sgf("valid_from", e.target.value)}
+                        <input type="date" value={gf.valid_from} onChange={e => {
+                          const v = e.target.value;
+                          sgf("valid_from", v);
+                          // 終了日が提案値のままなら 開始日 + 標準の期間 に追従させる
+                          if (grantEndAuto && keidoRule?.period_months && v) sgf("valid_end", proposeValidEnd(v, keidoRule.period_months));
+                        }}
                           className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
                       </div>
                       <div className="space-y-1">
                         <label className="text-xs text-gray-500">有効期間 終了 (空欄 = 期限なし)</label>
-                        <input type="date" value={gf.valid_end ?? ""} onChange={e => sgf("valid_end", e.target.value || null)}
-                          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                        <input type="date" value={gf.valid_end ?? ""} onChange={e => { setGrantEndAuto(false); sgf("valid_end", e.target.value || null); }}
+                          className={`w-full text-sm border rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 ${keidoRule?.requires_period && !gf.valid_end ? "border-orange-400" : "border-gray-200"}`} />
+                        {(() => {
+                          const proposed = keidoRule?.period_months && gf.valid_from ? proposeValidEnd(gf.valid_from, keidoRule.period_months) : null;
+                          return (
+                            <>
+                              {keidoRule?.requires_period && !gf.valid_end && (
+                                <p className="text-[11px] text-orange-700">⚠ この市町村は有効期間が要ります。終了日を入れてください</p>
+                              )}
+                              {proposed && proposed !== gf.valid_end && (
+                                <button type="button" onClick={() => { sgf("valid_end", proposed); setGrantEndAuto(true); }}
+                                  className="text-[11px] text-blue-600 underline">
+                                  提案: {proposed} (開始日 + {keidoRule?.period_months} か月) を入れる
+                                </button>
+                              )}
+                              {grantEndAuto && proposed && proposed === gf.valid_end && (
+                                <p className="text-[11px] text-gray-500">開始日 + {keidoRule?.period_months} か月の提案値です (確認して保存してください)</p>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 
