@@ -2,7 +2,12 @@
  * 福祉用具 国保連伝送: order-app が DB から組む伝送 と ほのぼのの実伝送 (KK) の突合 — ★ READ ONLY
  *
  *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk <KK261004.CSV> [--month 2026-09]
- *        [--db-cache <json>] [--refresh] [--out <json>] [--benefit-from-csv]
+ *        [--db-cache <json>] [--refresh] [--out <json>] [--benefit-from-csv] [--pauses-from-notes | --no-pauses]
+ *
+ *   休止 (2026-11-09 FY-PZ): 貸与の休止期間 order_item_pauses (migrations/order_item_pauses.sql) を読み、
+ *   BillingTab と同じく 明細 項10 日数 と 半月按分の判定 から休止日を除く。表が未作成なら警告して休止なし。
+ *   --pauses-from-notes を付けると、表が未作成でも order_items.notes の "[休止 YYYY-MM-DD〜YYYY-MM-DD]" を
+ *   メモリ上で表の代わりにする (投入後の見込みを測る)。--no-pauses は休止を一切使わない (投入前の比較用)。
  *
  *   給付率 (2026-11-09 FY-H): BillingTab と同じく「提供月に掛かる負担割合証 → 無ければ認定行」
  *   (lib/insurance/cert-month.ts の resolveBenefitForMonth)。表 client_benefit_certificates が未作成なら
@@ -209,6 +214,44 @@ function derivePeriod(
   return { startDate, stopDate };
 }
 
+/**
+ * 貸与の休止期間 (order_item_id → 期間)。★ READ ONLY。
+ *   既定 = 表 order_item_pauses。未作成なら警告して空 (--pauses-from-notes なら notes を代わりに読む)。--no-pauses = 空
+ */
+async function loadPauses(): Promise<Map<string, { from: string; to: string | null }[]>> {
+  const out = new Map<string, { from: string; to: string | null }[]>();
+  const add = (id: string, from: string, to: string) => { if (!out.has(id)) out.set(id, []); out.get(id)!.push({ from, to }); };
+  if (process.argv.includes("--no-pauses")) { console.log("  休止: 使わない (--no-pauses)"); return out; }
+  const env = readEnv();
+  const h = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+  const pageAll = async <T,>(path: string): Promise<{ ok: true; rows: T[] } | { ok: false; status: number; text: string }> => {
+    const rows: T[] = [];
+    for (let from = 0; ; from += 1000) {
+      const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}&order=id&limit=1000&offset=${from}`, { headers: h });
+      if (!res.ok) return { ok: false, status: res.status, text: (await res.text()).slice(0, 160) };
+      const page = (await res.json()) as T[];
+      rows.push(...page);
+      if (page.length < 1000) return { ok: true, rows };
+    }
+  };
+  const t = await pageAll<{ order_item_id: string; pause_from: string; pause_to: string }>(`order_item_pauses?select=order_item_id,pause_from,pause_to&tenant_id=eq.${TENANT}`);
+  if (t.ok && !process.argv.includes("--pauses-from-notes")) {
+    for (const r of t.rows) add(r.order_item_id, r.pause_from, r.pause_to);
+    console.log(`  休止: order_item_pauses ${t.rows.length} 期間 / 明細 ${out.size}`);
+    return out;
+  }
+  if (!process.argv.includes("--pauses-from-notes")) {
+    console.log(`  ⚠ order_item_pauses を読めない (${t.ok ? "" : `${t.status} ${t.text}`}) — 表が未適用なら 休止なし (貸与期間の全日) で組む。投入後の見込みは --pauses-from-notes`);
+    return out;
+  }
+  const n = await pageAll<{ id: string; notes: string | null }>(`order_items?select=id,notes&tenant_id=eq.${TENANT}&notes=like.*${encodeURIComponent("休止")}*`);
+  if (!n.ok) throw new Error(`order_items (notes) を読めない: ${n.status} ${n.text}`);
+  let periods = 0;
+  for (const r of n.rows) for (const m of (r.notes ?? "").matchAll(/\[休止 (\d{4}-\d{2}-\d{2})〜(\d{4}-\d{2}-\d{2})\]/g)) { add(r.id, m[1], m[2]); periods++; }
+  console.log(`  休止: ★ order_items.notes の [休止 …] をメモリ上で使う (--pauses-from-notes) ${periods} 期間 / 明細 ${out.size}`);
+  return out;
+}
+
 async function main() {
   const libs = await loadLibs();
   const kkText = readFileSync(KK!, "latin1"); // ASCII のみ (漢字を含まない)
@@ -219,7 +262,8 @@ async function main() {
   const snap = await loadSnapshot(MONTH, CACHE, process.argv.includes("--refresh"));
   const office = snap.offices.find((o) => (o.business_number ?? "").replace(/-/g, "") === PROVIDER_BN);
   if (!office) throw new Error(`offices に business_number=${PROVIDER_BN} が無い`);
-  const model = buildBillingModel(snap, MONTH, office.id, libs);
+  const pausesByItem = await loadPauses();
+  const model = buildBillingModel(snap, MONTH, office.id, libs, pausesByItem);
   const { clientById, careOfficeNo, dbLines, isLate, pickKohi, ordersById } = model;
   const itemById = new Map(snap.items.map((i) => [i.id, i]));
   // 計画作成区分 (care_offices.plan_kubun。migrations/care_offices_plan_kubun.sql)。スナップショットに無い列なので都度読む。
@@ -285,7 +329,7 @@ async function main() {
       const it = itemById.get(l.itemId)!;
       details.push({
         serviceCode: l.code!, unitPer: l.unitPer, count: l.count, units: l.units,
-        days: fukuyoguRentalDaysInMonth(it.rental_start_date, it.rental_end_date, MONTH),
+        days: fukuyoguRentalDaysInMonth(it.rental_start_date, it.rental_end_date, MONTH, model.pausesOf(it.id)),
         taisCode: model.eqByCode.get(it.product_code)?.tais_code ?? null,
       });
       billed.push(it);

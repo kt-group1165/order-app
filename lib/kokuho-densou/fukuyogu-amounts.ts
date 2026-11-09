@@ -45,7 +45,7 @@
  *
  * 検証: npm run check:fukuyogu-amounts / npm run check:fukuyogu-densou (頭打ち・月途中の公費・本人支払額の節)
  */
-import { halfMonthUnits } from "../half-month-units";
+import { halfMonthUnits, rentalDayMask, type DateRange } from "../half-month-units";
 
 export interface KohiPeriod {
   start: string | null;
@@ -95,6 +95,8 @@ export interface FukuyoguLineInput {
   /** 貸与開始日 / 終了日 (YYYY-MM-DD。null = 制限なし) */
   rentalStart?: string | null;
   rentalEnd?: string | null;
+  /** 休止 (order_item_pauses)。休止日は貸与日に数えない (公費の日割・半月の判定も同じ) */
+  pauses?: readonly DateRange[] | null;
 }
 
 /** 明細 02 の 1 行分の公費 (公費1対象日数・回数 / 公費1対象サービス単位数) */
@@ -246,7 +248,7 @@ export function kohiShareOfPiece(u: number, rental: boolean[], kohi: boolean[], 
  */
 export function kohiCoverageInMonth(periods: KohiPeriod[] | null | undefined, lines: FukuyoguLineInput[], ym: string) {
   const kohi = daysMask(ym, periods && periods.length ? periods : [{ start: null, end: null }]);
-  const rentals = lines.map((l) => daysMask(ym, [{ start: l.rentalStart ?? null, end: l.rentalEnd ?? null }]));
+  const rentals = lines.map((l) => rentalDayMask(l.rentalStart ?? null, l.rentalEnd ?? null, ym, l.pauses ?? []));
   let anyCovered = false;
   let anyUncovered = false;
   for (const r of rentals) {

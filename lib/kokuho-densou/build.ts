@@ -44,6 +44,7 @@
  * Shift_JIS への変換は呼出側 (UI) で行う。
  */
 import { fukuyoguLinePieces, type KohiPiece } from "./fukuyogu-amounts";
+import { rentalDayMask, type DateRange } from "../half-month-units";
 
 // ─── コード値 ────────────────────────────────────────────────────────────────
 // 要介護状態区分コード (被保険者証記載の標準コード)
@@ -128,15 +129,26 @@ const monthBounds = (ym: string) => {
 };
 
 /**
- * 当月の貸与日数 (明細 項10 日数・回数)。貸与開始日〜終了日を当月に切り詰めた日数 (両端含む)。
+ * 当月の貸与日数 (明細 項10 日数・回数)。貸与開始日〜終了日を当月に切り詰めた日数 (両端含む) から、
+ * 休止 (order_item_pauses。月の途中で使わなかった日) を除いた日数。
  * ほのぼの実伝送 KK261004 の 7131/7132-02 項10 と同じ (9/9 開始 → 22、9/22 終了 → 22、通月 → 30)。
- * ⚠ 入院で半月按分になった月でも日数は貸与期間で数える (単位数だけが半分になる)。
+ * ★ 休止 (2026-11-09 FY-PZ): ほのぼのは項10 を「提供票の実績の印の数」で出す = 休止日を数えない
+ *   (例 山口 裕 2026-09: 9/15〜9/27 休止 → 17 / 江藤 久美: 9/11〜9/28 → 12 / 小川 幸江: 9/11〜9/22 → 18)。
+ * ⚠ 入院 (client_hospitalizations) は日数から除かない (単位数の半月按分にだけ効く)。入院の月の項10 を
+ *   ほのぼのの実出力で確かめた例が無いため従来どおり。休止として登録すれば日数からも除かれる。
  */
-export function fukuyoguRentalDaysInMonth(rentalStart: string | null, rentalEnd: string | null, ym: string): number {
+export function fukuyoguRentalDaysInMonth(
+  rentalStart: string | null,
+  rentalEnd: string | null,
+  ym: string,
+  pauses: readonly DateRange[] = [],
+): number {
   const { first, last } = monthBounds(ym);
   const s = rentalStart && rentalStart.slice(0, 10) > first ? rentalStart.slice(0, 10) : first;
   const e = rentalEnd && rentalEnd.slice(0, 10) < last ? rentalEnd.slice(0, 10) : last;
-  return e < s ? 0 : daysBetween(s, e);
+  if (e < s) return 0;
+  if (pauses.length === 0) return daysBetween(s, e);
+  return rentalDayMask(rentalStart, rentalEnd, ym, pauses).filter(Boolean).length;
 }
 
 

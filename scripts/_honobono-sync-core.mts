@@ -216,20 +216,27 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
 
 // ── 本物の計算関数 (BillingTab / 伝送と同じもの) ────────────────────────
 export async function loadLibs() {
-  const { halfMonthUnits } = await import("../lib/half-month-units");
+  const { halfMonthUnits, halfMonthFlags, hospitalizationRanges } = await import("../lib/half-month-units");
   const { computeFukuyoguAmounts } = await import("../lib/kokuho-densou/fukuyogu-amounts");
   const { fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, careLevelCodeForDensou } = await import("../lib/kokuho-densou/build");
   const { pickCertForMonth, certFieldsForDensou } = await import("../lib/kokuho-densou/cert-for-month");
   const { getPriceForMonth } = await import("../lib/equipment");
-  return { halfMonthUnits, computeFukuyoguAmounts, fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, careLevelCodeForDensou, pickCertForMonth, certFieldsForDensou, getPriceForMonth };
+  return { halfMonthUnits, halfMonthFlags, hospitalizationRanges, computeFukuyoguAmounts, fukuyoguServiceCode, FUKUYOGU_SERVICE_CODES, careLevelCodeForDensou, pickCertForMonth, certFieldsForDensou, getPriceForMonth };
 }
 export type Libs = Awaited<ReturnType<typeof loadLibs>>;
 
 // ── 当月の請求対象を組む (BillingTab と同じ条件) ────────────────────────
 export type DbLine = { itemId: string; tais: string; code: string | null; unitPer: number; count: number; units: number; overridden: boolean; half: boolean; skipped?: string };
 
-export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: string, libs: Libs) {
-  const { halfMonthUnits, fukuyoguServiceCode, getPriceForMonth, pickCertForMonth, certFieldsForDensou, careLevelCodeForDensou } = libs;
+/**
+ * pausesByItem: 貸与の休止期間 (order_item_pauses。order_item_id → 期間)。省略 = 休止なし (従来どおり)。
+ *   BillingTab と同じく 半月按分の判定 で休止日を貸与日に数えない (lib/half-month-units.ts halfMonthFlags)。
+ *   明細 項10 日数 は呼出側で fukuyoguRentalDaysInMonth(…, model.pausesOf(itemId)) に渡す。
+ */
+export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: string, libs: Libs,
+  pausesByItem: Map<string, { from: string; to: string | null }[]> = new Map()) {
+  const pausesOf = (itemId: string) => pausesByItem.get(itemId) ?? [];
+  const { halfMonthUnits, halfMonthFlags, hospitalizationRanges, fukuyoguServiceCode, getPriceForMonth, pickCertForMonth, certFieldsForDensou, careLevelCodeForDensou } = libs;
   const clientById = new Map(snap.clients.map((c) => [c.id, c]));
   const eqByCode = new Map<string, EqRow>();
   for (const e of snap.equipment) if (!eqByCode.has(e.product_code)) eqByCode.set(e.product_code, e); // BillingTab は find = 先頭一致
@@ -267,16 +274,9 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
     const price = getPriceForMonth(snap.priceHist as never, item.product_code, MONTH) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return { unitPer: base, overridden: false, half: false };
-    const rs = pld(item.rental_start_date);
-    const re = item.rental_end_date ? pld(item.rental_end_date) : monthEnd;
-    const hs = hospByClient.get(clientId) ?? [];
-    let f = false, s = false;
-    for (let d = 1; d <= daysIn(MONTH); d++) {
-      const date = new Date(Y, M - 1, d);
-      if (date < rs || date > re) continue;
-      const inHosp = hs.some((h) => date >= pld(h.admission_date) && date <= (h.discharge_date ? pld(h.discharge_date) : monthEnd));
-      if (!inHosp) { if (d <= 15) f = true; else s = true; }
-    }
+    // 半月按分: 入院・休止の日を除いた貸与日で判定 (BillingTab と同じ halfMonthFlags)
+    const { firstHalf: f, secondHalf: s } = halfMonthFlags(item.rental_start_date, item.rental_end_date, MONTH,
+      [...hospitalizationRanges(hospByClient.get(clientId) ?? []), ...pausesOf(item.id)]);
     const u = halfMonthUnits(base, f, s);
     return { unitPer: u, overridden: false, half: u !== base };
   };
@@ -333,7 +333,7 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
 
   return {
     clientById, eqByCode, careOfficeNo, ordersById, overrideByItem, lateFlag, insByClient, hospByClient, kohiByClient,
-    monthStartS, monthEndS, isActive, unitsOf, pickIns, pickKohi,
+    monthStartS, monthEndS, isActive, unitsOf, pickIns, pickKohi, pausesOf,
     officeClients, dbLines, dbSkipped, activeOtherScope, activeCount, ceilingCheckDiffers, autoLate, noCareLevel, isLate, dbTargets,
   };
 }

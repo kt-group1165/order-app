@@ -28,7 +28,8 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { buildFukuyoguDensou, careLevelCodeForDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
-import { computeFukuyoguAmounts, normalizeCmUnits, normalizeSelfPay, KOHI_MONTH_MODE_DEFAULT, type FukuyoguAmounts, type KohiMonthMode } from "../lib/kokuho-densou/fukuyogu-amounts";
+import { computeFukuyoguAmounts, normalizeCmUnits, normalizeSelfPay, kohiCoverageInMonth, KOHI_MONTH_MODE_DEFAULT, type FukuyoguAmounts, type KohiMonthMode } from "../lib/kokuho-densou/fukuyogu-amounts";
+import { halfMonthFlags, halfMonthUnits, hospitalizationRanges } from "../lib/half-month-units";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
 
 const BASELINE = "scripts/fukuyogu-densou-check-baseline.json";
@@ -210,6 +211,55 @@ console.log("\n══ ★ 日付・貸与日数・認定の選び方 (2026-11-09
   eq("貸与日数 9/30 開始 → 1 / 9/11〜9/27 → 17",
     [fukuyoguRentalDaysInMonth("2026-09-30", null, "2026-09"), fukuyoguRentalDaysInMonth("2026-09-11", "2026-09-27", "2026-09")], [1, 17]);
   eq("★ 負のコントロール: 当月に掛からない貸与は 0", fukuyoguRentalDaysInMonth("2026-10-01", null, "2026-09"), 0);
+
+  // ── ★ 休止 (order_item_pauses。2026-11-09 FY-PZ) ──────────────────────────────
+  // 期待値 = ほのぼの福祉用具 提供票 (用具貸与期間_20261109/提供票_202609.csv) の実績の印の数 = KK261004 の 7131-02 項10
+  //   山口 裕   印 9/1〜14・9/28〜30 → 休止 9/15〜9/27 → 17
+  //   江藤 久美 印 9/1〜10・9/29〜30 → 休止 9/11〜9/28 → 12
+  //   小川 幸江 印 9/1〜10・9/23〜30 → 休止 9/11〜9/22 → 18
+  console.log("  ── 休止 ──");
+  const yamaguchi = [{ from: "2026-09-15", to: "2026-09-27" }];
+  eq("★ 休止 山口 裕 9/15〜9/27 → 17 (KK261004)", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", yamaguchi), 17);
+  eq("★ 休止 江藤 久美 9/11〜9/28 → 12 (KK261004)", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", [{ from: "2026-09-11", to: "2026-09-28" }]), 12);
+  eq("★ 休止 小川 幸江 9/11〜9/22 → 18 (KK261004)", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", [{ from: "2026-09-11", to: "2026-09-22" }]), 18);
+  eq("★ 負のコントロール: 休止を渡さなければ 山口 裕 は 30 (=当方の旧出力)", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09"), 30);
+  eq("休止 2 回 (9/3〜9/5・9/20〜9/21) → 30−3−2 = 25",
+    fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", [{ from: "2026-09-03", to: "2026-09-05" }, { from: "2026-09-20", to: "2026-09-21" }]), 25);
+  const cross = [{ from: "2026-08-20", to: "2026-09-05" }];
+  eq("月をまたぐ休止 8/20〜9/5: 8 月 31−12 = 19 / 9 月 30−5 = 25",
+    [fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-08", cross), fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", cross)], [19, 25]);
+  eq("休止が貸与期間の外にもかかる (9/9 開始・休止 9/1〜9/10) → 22−2 = 20",
+    fukuyoguRentalDaysInMonth("2026-09-09", null, "2026-09", [{ from: "2026-09-01", to: "2026-09-10" }]), 20);
+  eq("全月休止 → 0", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", [{ from: "2026-08-25", to: "2026-10-03" }]), 0);
+  eq("★ 負のコントロール: 他の月の休止 (10 月) は 9 月の日数を変えない", fukuyoguRentalDaysInMonth("2026-04-01", null, "2026-09", [{ from: "2026-10-01", to: "2026-10-10" }]), 30);
+
+  // 半月按分 (前半 1〜15日 / 後半 16日〜末日 に休止以外の貸与日があるか)
+  //   提供票の休止のある実績行 279 行中 277 行で 日割区分 と一致 (lib/half-month-units.ts halfMonthFlags の注記)
+  const units = (start: string | null, end: string | null, ym: string, ex: { from: string; to: string | null }[] = []) => {
+    const f = halfMonthFlags(start, end, ym, ex);
+    return halfMonthUnits(500, f.firstHalf, f.secondHalf);
+  };
+  eq("★ 月内の休止 (山口 裕) は満額のまま 500 (提供票 日割区分=全額)", units("2026-04-01", null, "2026-09", yamaguchi), 500);
+  eq("★ 前半全部休止 (9/1〜9/15) で後半だけ → 半額 250", units("2026-04-01", null, "2026-09", [{ from: "2026-09-01", to: "2026-09-15" }]), 250);
+  eq("★ 負のコントロール: 同じ台で休止を渡さなければ 満額 500", units("2026-04-01", null, "2026-09"), 500);
+  eq("★ 後半全部休止 (9/16〜9/30) で前半だけ → 半額 250", units("2026-04-01", null, "2026-09", [{ from: "2026-09-16", to: "2026-09-30" }]), 250);
+  eq("月をまたぐ休止 8/20〜9/20 → 9 月は後半だけ → 半額 250", units("2026-04-01", null, "2026-09", [{ from: "2026-08-20", to: "2026-09-20" }]), 250);
+  eq("全月休止 → 0", units("2026-04-01", null, "2026-09", [{ from: "2026-09-01", to: "2026-09-30" }]), 0);
+  eq("9/10 開始 + 9/10〜9/15 休止 → 後半だけ → 半額 250", units("2026-09-10", null, "2026-09", [{ from: "2026-09-10", to: "2026-09-15" }]), 250);
+  // 小出 和子 2026-08: 印 8/1・8/19〜31 → 当方 満額 / ほのぼの 日割区分=半額 (休止のある 279 行中の例外 2 行の 1 つ。規則には入れない)
+  eq("既知の例外 小出 和子 2026-08 (印 8/1・8/19〜31): 当方は満額 500 (ほのぼのは半額)", units("2026-04-01", null, "2026-08", [{ from: "2026-08-02", to: "2026-08-18" }]), 500);
+  // 入院 (client_hospitalizations) は従来どおり半月の判定にだけ効く。退院日 null = 月末まで
+  eq("入院 9/1〜9/15 → 後半だけ → 半額 250 (従来の BillingTab と同じ)",
+    units("2026-04-01", null, "2026-09", hospitalizationRanges([{ admission_date: "2026-09-01", discharge_date: "2026-09-15" }])), 250);
+  eq("入院 9/10〜(退院日なし) → 前半だけ → 半額 250",
+    units("2026-04-01", null, "2026-09", hospitalizationRanges([{ admission_date: "2026-09-10", discharge_date: null }])), 250);
+  eq("入院 9/1〜9/10 + 休止 9/11〜9/15 → 後半だけ → 半額 250",
+    units("2026-04-01", null, "2026-09", [...hospitalizationRanges([{ admission_date: "2026-09-01", discharge_date: "2026-09-10" }]), { from: "2026-09-11", to: "2026-09-15" }]), 250);
+  // 月途中の公費: 休止日は公費の判定でも貸与日に数えない (fukuyogu-amounts.ts kohiCoverageInMonth)
+  const kc = (pauses: { from: string; to: string }[] | null) =>
+    kohiCoverageInMonth([{ start: "2026-09-15", end: "2026-09-27" }], [{ unitPer: 500, count: 1, units: 500, rentalStart: "2026-04-01", rentalEnd: null, pauses }], "2026-09").covered;
+  eq("★ 公費の期間 = 休止の期間 だけ → 公費がかからない (covered=false)", kc(yamaguchi), false);
+  eq("★ 負のコントロール: 休止を渡さなければ covered=true", kc(null), true);
   const c1 = pickCertForMonth([
     { effective_date: "2025-09-01", certification_start_date: "2025-09-01", certification_end_date: "2026-08-31", care_level: "要介護1" },
     { effective_date: "2026-09-01", certification_start_date: "2026-09-01", certification_end_date: "2030-08-31", care_level: "要介護2" },
