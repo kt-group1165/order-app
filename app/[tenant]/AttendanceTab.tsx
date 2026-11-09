@@ -727,6 +727,11 @@ export default function AttendanceTab({
   // ─── 残業集計 (職員 × 月) ───────────────────────────────────────────
   const [view, setView] = useState<"input" | "summary">(initialView ?? "input");
   if (view === "summary") {
+    // 直リンクで開いたときは 事業所の解決 (payrollOfficeId) がまだなので、決まるまで待つ。
+    // 集計側は初期値でしか事業所を受け取らないため、空のまま開くと「職員がいません」になる
+    if (!payrollOfficeId || officeList.length === 0) {
+      return <div className="p-6 text-sm text-gray-500">読み込み中…</div>;
+    }
     return (
       <AttendanceSummaryView
         tenantId={tenantId}
