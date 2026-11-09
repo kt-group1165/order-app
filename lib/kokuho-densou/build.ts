@@ -29,6 +29,11 @@
  *   - サービス種類コード = 17 (要介護) / 67 (要支援)。サービス項目コードは同じ (1001〜1013)
  *   - 単位数単価 = 10.00 円固定 (地域区分の対象外。ほのぼの実伝送も 7131/7132 とも 1000)
  *   - 処遇改善等の加算は無し
+ *   - ★ CM 指示単位数で頭打ち (2026-11-09): ケアマネが給付管理で割り付けた単位数が実績より少ないとき、
+ *     ほのぼのは 10 項9 計画単位数 = CM の単位数 / 項10 限度額管理対象 = 実績 / 項14 以降と 01 項33-35・
+ *     7111 = 頭打ち後 で出す (KK261004 で 6 名。明細 02 は実績のまま)。超過分は保険外 (全額自己負担)。
+ *     row.totalUnits = 頭打ち後 / row.limitTargetUnits = 実績 / row.planUnits = CM の単位数 で渡す
+ *     (金額は lib/kokuho-densou/fukuyogu-amounts.ts の computeFukuyoguAmounts で頭打ち後に計算済み)。
  *
  * Shift_JIS への変換は呼出側 (UI) で行う。
  */
@@ -159,8 +164,16 @@ export interface FukuyoguSeikyuRow {
   /** 利用者負担率 (0.1 / 0.2 / 0.3) */
   copayRate: number;
   details: FukuyoguDetailLine[];
+  /** 保険請求の対象単位数 (CM 指示単位数で頭打ちしたときは頭打ち後)。01 項33 / 10 項14 / 7111 項8 */
   totalUnits: number;
-  /** 費用総額 (円) */
+  /**
+   * 実績の単位数 (明細 02 のサービス単位数の合計 = 10 項10 限度額管理対象単位数)。
+   * 省略時は totalUnits (頭打ちなし)。totalUnits より大きいとき = CM 指示単位数で頭打ちした
+   */
+  limitTargetUnits?: number | null;
+  /** 10 項9 計画単位数 (CM 指示単位数)。省略時は totalUnits */
+  planUnits?: number | null;
+  /** 費用総額 (円。頭打ち後の単位数 × 10。保険外は含まない) */
   totalCost: number;
   /** 保険請求額 (円) */
   insuranceAmount: number;
@@ -438,6 +451,23 @@ export function buildFukuyoguDensou(
     // 明細情報レコード (02) — ★ 1 用具 1 行 (ほのぼの実伝送と同じ。同じ用具 2 個は 2 行)
     //   項9 単位数 = 0 (_if_svc.txt ※6「福祉用具貸与は NULL もしくは 0」) / 項10 = 当月の貸与日数 /
     //   項14 = その用具の単位数 / 項18 摘要 = TAIS コード
+    // ★ CM 指示単位数で頭打ち: 項10 = 実績 (明細の合計) / 項14 = 頭打ち後 / 項9 = CM の単位数
+    const limitTargetUnits = r.limitTargetUnits ?? r.totalUnits;
+    const planUnits = r.planUnits ?? r.totalUnits;
+    if (limitTargetUnits > r.totalUnits) {
+      warnings.push(
+        `${r.userName}: CM 指示単位数で頭打ち — 実績 ${limitTargetUnits} 単位のうち ${r.totalUnits} 単位を保険請求 (超過 ${limitTargetUnits - r.totalUnits} 単位は保険外)`,
+      );
+    } else if (limitTargetUnits < r.totalUnits) {
+      warnings.push(`${r.userName}: 保険請求の単位数 (${r.totalUnits}) が実績 (${limitTargetUnits}) より多くなっています — 呼出側の計算を確認してください`);
+    }
+    const detailSum = r.details.reduce((s, d) => s + d.units, 0);
+    if (detailSum !== limitTargetUnits) {
+      warnings.push(`${r.userName}: 明細のサービス単位数の合計 (${detailSum}) と 限度額管理対象単位数 (${limitTargetUnits}) が違います`);
+    }
+    if (planUnits < r.totalUnits) {
+      warnings.push(`${r.userName}: 保険請求の単位数 (${r.totalUnits}) が計画単位数 (${planUnits}) を超えています — 国保連で査定されます`);
+    }
     let serviceDays = 0;
     for (const d of r.details) {
       // 桁あふれは返戻になる (_if_form2.txt: 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
@@ -486,9 +516,9 @@ export function buildFukuyoguDensou(
       kind, // 7 サービス種類コード
       String(serviceDays), // 8 サービス実日数 (= 明細の貸与日数の最大。ほのぼの実伝送と同じ)
       // 9 計画単位数: ほのぼのは給付管理票の計画単位数を入れ、超過分 (項10 − 項9) は保険外になる。
-      //   order-app は計画単位数を持たないので 実績単位数 を入れる (2026-09 は 6 名で差。報告済み)
-      String(r.totalUnits),
-      String(r.totalUnits), // 10 限度額管理対象単位数
+      //   ★ 2026-11-09: 請求画面の「CM 指示単位数」が入っていればその値 (planUnits)。無ければ実績
+      String(planUnits),
+      String(limitTargetUnits), // 10 限度額管理対象単位数 (= 実績。明細 02 の合計)
       "0", // 11 限度額管理対象外単位数
       "", // 12 短期入所計画日数
       "", // 13 短期入所実日数

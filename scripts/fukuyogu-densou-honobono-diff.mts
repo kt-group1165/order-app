@@ -15,7 +15,8 @@
  *     保険者・被保番・給付率 = clients の列 / 要介護度・認定期間 = 当月有効の認定 (cert-for-month.ts) / 居宅事業所 = clients.care_office_id /
  *     公費 = 当月有効な client_public_expenses の最初の 1 件 / 金額 = computeFukuyoguAmounts /
  *     月遅れ (認定 申請中・billing_late_flags) は除外 /
- *     貸与日数 = fukuyoguRentalDaysInMonth / 開始・中止 = fukuyoguServicePeriod (build.ts の本物)
+ *     貸与日数 = fukuyoguRentalDaysInMonth / 開始・中止 = fukuyoguServicePeriod (build.ts の本物) /
+ *     ★ CM 指示単位数 = fukuyogu_cm_units (その月・その事業所。請求画面と同じ。表が未適用なら警告して全員 入力なし)
  *
  * ── 突合のキー ────────────────────────────────────────────────────────────
  *   レセプト: (様式 7131/7132, 保険者番号 8 桁, 被保険者番号)
@@ -30,7 +31,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PROVIDER_BN, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, type ItemRow,
+  PROVIDER_BN, TENANT, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, type ItemRow,
 } from "./_honobono-sync-core.mjs";
 import {
   buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
@@ -225,6 +226,18 @@ async function main() {
     if (res.ok) for (const r of (await res.json()) as { id: string; plan_kubun: string }[]) planKubunById.set(r.id, r.plan_kubun);
     else console.log(`  ⚠ care_offices.plan_kubun を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 列が未適用なら全件 区分1 扱い`);
   }
+  // ★ CM 指示単位数 (fukuyogu_cm_units。migrations/fukuyogu_cm_units.sql)。請求画面と同じく その月・その事業所の値。
+  //   スナップショットに無い表なので都度読む。表が未適用・読めないなら警告して全員「入力なし」(実績で請求)
+  const cmUnitsByClient = new Map<string, number>();
+  {
+    const env = readEnv();
+    const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/fukuyogu_cm_units?select=client_id,units&tenant_id=eq.${TENANT}&office_id=eq.${office.id}&service_month=eq.${MONTH}`, {
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    if (res.ok) for (const r of (await res.json()) as { client_id: string; units: number }[]) cmUnitsByClient.set(r.client_id, r.units);
+    else console.log(`  ⚠ fukuyogu_cm_units を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 表が未適用なら CM 指示単位数は全員 入力なし (実績で請求) として組む`);
+    console.log(`  CM 指示単位数: ${cmUnitsByClient.size} 名 (${MONTH})`);
+  }
   // 開始年月日のため 利用者ごとの 介護保険の貸与 全部 (過去月の終了分も)
   const rentalsByClient = new Map<string, ItemRow[]>();
   for (const it of snap.items) {
@@ -259,7 +272,7 @@ async function main() {
     }
     const k = pickKohi(cid);
     const kohi = k ? { hobetsu: k.hohei_code!, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number } : null;
-    const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: c.benefit_rate, insuredNumber: c.insured_number, totalUnits, kohi });
+    const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: c.benefit_rate, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
     periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, derivePeriod((rentalsByClient.get(cid) ?? []).map(toP), billed.map(toP), MONTH));
     rows.push({
       userName: c.name, insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null,
@@ -268,7 +281,8 @@ async function main() {
       ...certFieldsForDensou(c, pickCertForMonth(model.insByClient.get(cid) ?? [], model.monthStartS, model.monthEndS)),
       careOfficeNumber: c.care_office_id ? (careOfficeNo.get(c.care_office_id) || null) : null,
       carePlanKubun: c.care_office_id ? planKubunById.get(c.care_office_id) ?? null : null,
-      copayRate: amt.copayRate, details, totalUnits, totalCost: amt.totalCost,
+      copayRate: amt.copayRate, details,
+      totalUnits: amt.billedUnits, limitTargetUnits: amt.actualUnits, planUnits: amt.planUnits, totalCost: amt.totalCost,
       insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
       kohiHobetsu: amt.kohiHobetsu, kohiFutansha: kohi?.futansha ?? null, kohiJukyusha: kohi?.jukyusha ?? null,
       kohiAmount: amt.kohiAmount, kohiTandoku: amt.kohiTandoku,
@@ -341,7 +355,7 @@ async function main() {
     if (h.h.v[32] === m.h.v[32] && h.h.v[33] === m.h.v[33] && h.h.v[34] === m.h.v[34]) continue;
     const ex = { key, 氏名: nameOf(key), ほ: `${h.h.v[32]}単位/${h.h.v[33]}/${h.h.v[34]}`, 新: `${m.h.v[32]}単位/${m.h.v[33]}/${m.h.v[34]}` };
     const hSum = h.d.reduce((s, d) => s + Number(d.v[13]), 0), mSum = m.d.reduce((s, d) => s + Number(d.v[13]), 0);
-    if (h.s && h.s.v[8] !== h.s.v[9]) why.add("金額差: ほのぼのは 計画単位数 (給付管理) で頭打ち。超過分は保険外 (DB に計画単位数が無い)", { ...ex, 計画: h.s.v[8], 実績: h.s.v[9] });
+    if (h.s && h.s.v[8] !== h.s.v[9]) why.add("金額差: ほのぼのは 計画単位数 (給付管理) で頭打ち。超過分は保険外 (請求画面の CM 指示単位数が未入力 or 値違い)", { ...ex, 計画: h.s.v[8], 実績: h.s.v[9] });
     else if (hSum !== mSum) why.add("金額差: 明細の単位数合計が違う (用具・単位数の差)", { ...ex, 明細合計: `ほ${hSum}/新${mSum}` });
     else if (h.h.v[28] !== m.h.v[28]) why.add("金額差: 保険給付率が違う (clients.benefit_rate)", { ...ex, 給付率: `ほ${h.h.v[28]}/新${m.h.v[28]}` });
     else if (h.h.v[6] !== m.h.v[6]) why.add("金額差: 公費の有無が違う", { ...ex, 公費: `ほ${h.h.v[6]}/新${m.h.v[6]}` });

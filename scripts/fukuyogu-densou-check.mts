@@ -28,6 +28,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, isYoboCareLevel, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
+import { computeFukuyoguAmounts, normalizeCmUnits, type FukuyoguAmounts } from "../lib/kokuho-densou/fukuyogu-amounts";
 import { formatRecordLikeHonobono } from "../../kaigo-app/src/lib/kokuho-densou/honobono-format";
 
 const BASELINE = "scripts/fukuyogu-densou-check-baseline.json";
@@ -267,6 +268,70 @@ if (fmtDiff === 0) {
   console.log(`  NG  ★ ${fmtDiff} / ${lines.filter((l) => cols(l)[0] === "2").length} レコードが ほのぼの書式と違う`);
   console.log(`      order-app は formatRecordLikeHonobono を通していない (kaigo-app は通している)。`);
   console.log(`      ⚠ 国保連が受け付けるかは別問題だが、**ほのぼのが通っている形に揃える**のが安全。`);
+}
+
+console.log("\n══ ★ CM 指示単位数で頭打ち (2026-11-09・ほのぼの実伝送 KK261004 の 6 名と同じ値) ══");
+{
+  // [様式, 氏名, 給付率, 実績単位, CM 指示単位, 期待 保険請求, 期待 利用者負担] — 値は KK261004 の 01 項33-35 / 10 項9・10・14・16・17
+  const CASES: [string, string, string, number, number, number, number][] = [
+    ["7131", "正木 清", "90", 3010, 2048, 18432, 2048],
+    ["7131", "髙畠 孝祐", "70", 3150, 1085, 7595, 3255],
+    ["7131", "石原 照子", "90", 4630, 1221, 10989, 1221],
+    ["7131", "露﨑 均", "90", 2290, 1598, 14382, 1598],
+    ["7131", "中村 弘子", "90", 2250, 1757, 15813, 1757],
+    ["7132", "石原 昌代", "90", 1970, 1858, 16722, 1858],
+  ];
+  const mkRow = (c: (typeof CASES)[number], i: number, amt: FukuyoguAmounts): FukuyoguSeikyuRow => ({
+    ...base, userName: c[1], insuredNumber: `90000000${String(i).padStart(2, "0")}`, careLevel: c[0] === "7132" ? "要支援1" : "要介護3",
+    details: [{ serviceCode: "171003", unitPer: c[3], count: 1, units: c[3], days: 30, taisCode: "00170-000892" }],
+    copayRate: amt.copayRate, totalUnits: amt.billedUnits, limitTargetUnits: amt.actualUnits, planUnits: amt.planUnits,
+    totalCost: amt.totalCost, insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
+  });
+  /** CM 指示を渡す (useCm) / 渡さない で組み、6 名の値がほのぼのと一致した数を返す */
+  const run = (useCm: boolean) => {
+    const amts = CASES.map((c) => computeFukuyoguAmounts({ benefitRateRaw: c[2], insuredNumber: "1", totalUnits: c[3], kohi: null, cmUnits: useCm ? c[4] : null }));
+    const built = buildFukuyoguDensou(CASES.map((c, i) => mkRow(c, i, amts[i])), { officeNumber: "1272400050", year: 2026, month: 9 });
+    const ls = built.content.split("\r\n").filter(Boolean).map(cols);
+    let match = 0;
+    const got: string[][] = [];
+    CASES.forEach((c, i) => {
+      const ins = `90000000${String(i).padStart(2, "0")}`;
+      const h = ls.find((x) => x[2] === c[0] && x[3] === "01" && x[7] === ins)!;
+      const t = ls.find((x) => x[2] === c[0] && x[3] === "10" && x[7] === ins)!;
+      const ds = ls.filter((x) => x[2] === c[0] && x[3] === "02" && x[7] === ins);
+      // 01: 33 単位 / 34 請求 / 35 本人  10: 9 計画 / 10 限度額管理対象 / 11 対象外 / 14 保険単位 / 16 請求 / 17 本人  02: 14 = 実績のまま
+      const v = [h[34], h[35], h[36], t[10], t[11], t[12], t[15], t[17], t[18], ds.map((d) => d[15]).join("+")];
+      const want = [String(c[4]), String(c[5]), String(c[6]), String(c[4]), String(c[3]), "0", String(c[4]), String(c[5]), String(c[6]), String(c[3])];
+      got.push(v);
+      if (JSON.stringify(v) === JSON.stringify(want)) match++;
+    });
+    const h7111 = ls.find((x) => x[2] === "7111" && x[5] === "1")!;
+    return { match, got, amts, built, h7111 };
+  };
+  const on = run(true);
+  CASES.forEach((c, i) => eq(`★ ${c[0]} ${c[1]} 01(33-35)/10(9,10,11,14,16,17)/02(14)`, on.got[i],
+    [String(c[4]), String(c[5]), String(c[6]), String(c[4]), String(c[3]), "0", String(c[4]), String(c[5]), String(c[6]), String(c[3])]));
+  eq("★ 7111 単位数 / 費用合計 / 保険請求 / 利用者負担 = 頭打ち後の合計",
+    [on.h7111[9], on.h7111[10], on.h7111[11], on.h7111[13]],
+    [String(CASES.reduce((a, c) => a + c[4], 0)), String(CASES.reduce((a, c) => a + c[4] * 10, 0)), String(CASES.reduce((a, c) => a + c[5], 0)), String(CASES.reduce((a, c) => a + c[6], 0))]);
+  eq("★ 保険外 (全額自己負担) = 超過単位 × 10 円 (髙畠 2,065 単位 → 20,650 円)", [on.amts[1].overUnits, on.amts[1].outsideAmount, on.amts[1].capped], [2065, 20650, true]);
+  eq("★ 警告「CM 指示単位数で頭打ち」が 6 名とも出る (金額計算 / 伝送)",
+    [on.amts.filter((a) => a.warnings.some((w) => w.includes("CM 指示単位数で頭打ち"))).length, on.built.warnings.filter((w) => w.includes("CM 指示単位数で頭打ち")).length], [6, 6]);
+  // 負のコントロール: 頭打ちを外すと 6 名とも ほのぼのと合わなくなる (= この節は頭打ちを本当に見ている)
+  const off = run(false);
+  eq("★ 負のコントロール: CM 指示を渡さないと 6 名とも不一致 / 警告も出ない", [off.match, off.built.warnings.filter((w) => w.includes("頭打ち")).length], [0, 0]);
+  // 入力なし・実績以下・実績超え・0
+  const a0 = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 1400, kohi: null });
+  eq("入力なし (cmUnits 省略) = 従来どおり (計画=実績=請求 1400 / 保険外 0)", [a0.planUnits, a0.actualUnits, a0.billedUnits, a0.outsideAmount, a0.insuranceAmount, a0.capped], [1400, 1400, 1400, 0, 12600, false]);
+  const aOver = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 1400, kohi: null, cmUnits: 2000 });
+  eq("CM 指示が実績より多い = 実績で請求 (計画単位数だけ 2000)", [aOver.planUnits, aOver.billedUnits, aOver.overUnits, aOver.capped, aOver.warnings.length], [2000, 1400, 0, false, 0]);
+  const aZero = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 1400, kohi: null, cmUnits: 0 });
+  eq("CM 指示 0 = 全額保険外 (保険 0 / 本人 0 / 保険外 14,000)", [aZero.billedUnits, aZero.insuranceAmount, aZero.userAmount, aZero.outsideAmount], [0, 0, 0, 14000]);
+  const aKohi = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 1400, kohi: { hobetsu: "12", futansha: "12123519", jukyusha: "0068742" }, cmUnits: 1000 });
+  eq("生保併用 + 頭打ち: 公費は頭打ち後の本人分 (1,000) / 保険外 4,000", [aKohi.insuranceAmount, aKohi.kohiAmount, aKohi.userAmount, aKohi.outsideAmount], [9000, 1000, 0, 4000]);
+  eq("入力値の読み (\"１,２００\"→1200 / 空・負・小数・文字 → 入力なし)",
+    [normalizeCmUnits("１,２００"), normalizeCmUnits(""), normalizeCmUnits("-1"), normalizeCmUnits("1.5"), normalizeCmUnits("abc"), normalizeCmUnits(null), normalizeCmUnits(0)],
+    [1200, null, null, null, null, null, 0]);
 }
 
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);

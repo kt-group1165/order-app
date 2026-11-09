@@ -25,7 +25,8 @@ import {
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
 import { buildFukuyoguDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
-import { computeFukuyoguAmounts } from "@/lib/kokuho-densou/fukuyogu-amounts";
+import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits } from "@/lib/kokuho-densou/fukuyogu-amounts";
+import { getCmUnits, saveCmUnits } from "@/lib/fukuyoguCmUnits";
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
@@ -414,6 +415,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
   const [savingFlags, setSavingFlags] = useState(false);
   const savedRebillRef = useRef<Map<string, BillingRebillFlag>>(new Map());
   const savedLateRef = useRef<Map<string, BillingLateFlag>>(new Map());
+  // ★ CM 指示単位数 (2026-11-09): 利用者ごと・月ごと。入力があればその単位数までを保険請求し 超過は保険外 (全額自己負担)。
+  //   保存は入力欄を離れたとき即時 (月遅/返戻フラグの「保存」ボタンとは別)。表が未適用なら全員 実績で請求し、理由を画面に出す。
+  const [cmUnits, setCmUnits] = useState<Map<string, number>>(new Map()); // key: client_id
+  const [cmUnitsNotice, setCmUnitsNotice] = useState<string | null>(null);
+  const [cmUnitsAvailable, setCmUnitsAvailable] = useState(true);
+  const [cmSavingId, setCmSavingId] = useState<string | null>(null);
 
   // 月遅れ自動判定：保険証のcertification_statusが「申請中」の利用者
   const autoLateClients = useMemo(() => {
@@ -505,6 +512,47 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       setIsDirty(false);
     }).catch(console.error).finally(() => setLoading(false));
   }, [tenantId, billingMonth]);
+
+  // CM 指示単位数を読む (事業所を選んでいればその事業所の値)
+  useEffect(() => {
+    let cancelled = false;
+    getCmUnits(tenantId, billingMonth, currentOfficeId).then((r) => {
+      if (cancelled) return;
+      setCmUnits(r.byClient);
+      setCmUnitsAvailable(r.available);
+      setCmUnitsNotice(r.message);
+    });
+    return () => { cancelled = true; };
+  }, [tenantId, billingMonth, currentOfficeId]);
+
+  // CM 指示単位数の入力を保存 (空欄 = 削除 = 実績で請求に戻す)。失敗は必ず画面に出す
+  const handleCmUnitsCommit = async (clientId: string, raw: string) => {
+    const units = raw.trim() === "" ? null : normalizeCmUnits(raw);
+    if (raw.trim() !== "" && units == null) {
+      alert(`CM 指示単位数「${raw}」を読めません — 0 以上の整数で入れてください`);
+      return;
+    }
+    if ((cmUnits.get(clientId) ?? null) === units) return;
+    if (!currentOfficeId) {
+      alert("CM 指示単位数は事業所ごとに保存します。事業所を選んでから入力してください。");
+      return;
+    }
+    setCmSavingId(clientId);
+    try {
+      await saveCmUnits({ tenantId, officeId: currentOfficeId, clientId, month: billingMonth, units });
+      setCmUnits((prev) => {
+        const m = new Map(prev);
+        if (units == null) m.delete(clientId); else m.set(clientId, units);
+        return m;
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("CM 指示単位数の保存失敗:", msg);
+      alert(`保存失敗: ${msg}`);
+    } finally {
+      setCmSavingId(null);
+    }
+  };
 
   // 未保存で画面(ブラウザ)を離れようとしたら警告
   useEffect(() => {
@@ -829,6 +877,8 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         insuredNumber: client.insured_number,
         totalUnits,
         kohi,
+        // ★ CM 指示単位数で頭打ち (入力が無ければ実績で請求)
+        cmUnits: cmUnits.get(client.id) ?? null,
       });
       for (const w of amt.warnings) preWarnings.push(`${client.name}: ${w}`);
       const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
@@ -852,7 +902,10 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
         copayRate,
         details,
-        totalUnits,
+        // ★ 保険請求の単位数 = 頭打ち後 / 限度額管理対象 = 実績 / 計画単位数 = CM 指示 (build.ts の注記)
+        totalUnits: amt.billedUnits,
+        limitTargetUnits: amt.actualUnits,
+        planUnits: amt.planUnits,
         totalCost,
         insuranceAmount,
         userAmount,
@@ -870,6 +923,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
       alert("対象月に国保連請求対象の福祉用具貸与がありません。");
       return;
     }
+    if (cmUnitsNotice) preWarnings.unshift(cmUnitsNotice);
 
     const result = buildFukuyoguDensou(rows, { officeNumber, year: y, month: m });
     const allWarnings = [...preWarnings, ...result.warnings];
@@ -1107,6 +1161,9 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           kohiByClient.set(k.client_id, { hobetsu: k.hohei_code, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number });
         }
       }
+      // ★ CM 指示単位数 (その月の値)。読めなければ全員 実績で請求し、その旨を警告に出す
+      const cmLoad = await getCmUnits(tenantId, ym, currentOfficeId);
+      if (cmLoad.message) allWarnings.push(`[${ym}] ${cmLoad.message}`);
       const rows: FukuyoguSeikyuRow[] = [];
       for (const { client, items } of entries) {
         const details: FukuyoguDetailLine[] = [];
@@ -1157,6 +1214,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
           insuredNumber: client.insured_number,
           totalUnits,
           kohi,
+          cmUnits: cmLoad.byClient.get(client.id) ?? null,
         });
         for (const w of amt.warnings) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
         const { copayRate, totalCost, insuranceAmount } = amt;
@@ -1180,7 +1238,9 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
           copayRate,
           details,
-          totalUnits,
+          totalUnits: amt.billedUnits,
+          limitTargetUnits: amt.actualUnits,
+          planUnits: amt.planUnits,
           totalCost,
           insuranceAmount,
           userAmount: amt.userAmount,
@@ -1463,7 +1523,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
             {/* 行 (ヘッダーは sticky にしてスクロール内へ配置。本文とスクロールバー幅を共有し列を一致させる) */}
             <div className="flex-1 overflow-y-auto">
             {/* ヘッダー行: 対象 / 申請中 / 状態 / 提出月 / 請求月 / サービス事業所 / 被保険者番号 / 利用者名 / 月遅 / 返戻 / 過誤 */}
-            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
+            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
               <div className="px-1 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
@@ -1487,6 +1547,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
               <div className="px-2 py-2 border-l border-gray-200">サービス事業所</div>
               <div className="px-2 py-2 border-l border-gray-200">被保険者番号</div>
               <div className="px-2 py-2 border-l border-gray-200">利用者名</div>
+              <div className="px-1 py-2 border-l border-gray-200 text-center" title="ケアマネが給付管理で割り付けた単位数。入れるとその単位数までを保険請求し、超えた分は保険外 (全額自己負担)。空欄 = 実績で請求">CM指示単位</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">月遅</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">返戻</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">過誤</div>
@@ -1499,7 +1560,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                   const [ry, rm] = row.month.split("-").map(Number);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
+                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
                       <div className="px-1 py-2" />
                       <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
@@ -1508,6 +1569,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                       <div className="px-2 py-2 border-l border-gray-100 text-gray-500 truncate">—</div>
                       <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-500">{row.client.user_number ?? "—"}</div>
                       <div className="px-2 py-2 border-l border-gray-100 text-gray-700 font-medium truncate">{row.client.name}</div>
+                      <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-center" />
                       <div className="px-2 py-2 border-l border-gray-100 text-center">
                         {row.flag.flag_type === "返戻" && (
@@ -1557,7 +1619,7 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
+                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
@@ -1595,6 +1657,30 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                         onClick={e => { e.stopPropagation(); setInvoiceClient(client); }}
                         className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
                       >請求書</button>
+                    </div>
+                    <div className="px-1 py-1 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+                      {(() => {
+                        const cm = cmUnits.get(client.id);
+                        const actual = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
+                        const over = cm != null && cm < actual ? actual - cm : 0;
+                        return (
+                          <>
+                            <input
+                              key={`${client.id}-${billingMonth}-${cm ?? ""}`}
+                              type="text"
+                              inputMode="numeric"
+                              defaultValue={cm != null ? String(cm) : ""}
+                              disabled={!cmUnitsAvailable || cmSavingId === client.id}
+                              placeholder={cmUnitsAvailable ? "" : "未適用"}
+                              onBlur={e => handleCmUnitsCommit(client.id, e.currentTarget.value)}
+                              onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                              title={!cmUnitsAvailable ? (cmUnitsNotice ?? "") : over > 0 ? `CM 指示単位数で頭打ち: 実績 ${actual} 単位 → 保険請求 ${cm} 単位 / 超過 ${over} 単位 (${(over * 10).toLocaleString()}円) は保険外 (全額自己負担)` : "空欄 = 実績で請求"}
+                              className={`w-full text-[11px] text-right font-mono border rounded px-1 py-0.5 bg-white disabled:bg-gray-100 ${over > 0 ? "border-orange-400 text-orange-700 font-semibold" : "border-gray-300 text-gray-700"}`}
+                            />
+                            {over > 0 && <div className="text-[9px] text-orange-700 leading-tight mt-0.5">頭打ち −{over.toLocaleString()}</div>}
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
                       <select
@@ -1651,8 +1737,15 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
               // 給付率の平均 (各 client の benefit_rate を加重平均)
               let insuranceClaim = 0;
               let copayClaim = 0;
+              let outsideTotal = 0;
+              let cappedCount = 0;
               for (const { client, items } of billingGroupsForTotal) {
-                const subUnits = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
+                const actualUnits = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
+                // ★ CM 指示単位数で頭打ち (超過分は保険外)
+                const cap = capFukuyoguUnits(actualUnits, cmUnits.get(client.id) ?? null);
+                const subUnits = cap.billedUnits;
+                outsideTotal += cap.overUnits * UNIT_PRICE;
+                if (cap.capped) cappedCount++;
                 const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
                 const subAmount = subUnits * UNIT_PRICE;
                 const subCopay = Math.round(subAmount * (100 - benefitRate) / 100);
@@ -1677,6 +1770,12 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                     <span>利用者負担額 <strong className="font-mono text-red-600">{copayClaim.toLocaleString()}</strong></span>
                     <span>公費分本人負担 <strong className="font-mono">—</strong></span>
                   </div>
+                  {(cappedCount > 0 || cmUnitsNotice) && (
+                    <div className="mt-1.5 text-[11px] text-orange-700">
+                      {cappedCount > 0 && <span>⚠ CM 指示単位数で頭打ち {cappedCount} 名 — 保険外 (全額自己負担) {outsideTotal.toLocaleString()} 円 (上の保険請求額・利用者負担額には含めていません)</span>}
+                      {cmUnitsNotice && <span className="block text-red-600">⚠ {cmUnitsNotice}</span>}
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -1724,7 +1823,10 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                 </div>
                 <div className="border-t border-gray-300 bg-gray-50 shrink-0">
                   {(() => {
-                    const totalU = detailClient.items.reduce((s, item) => s + getUnits(item, detailClient.client.id) * item.quantity, 0);
+                    const actualU = detailClient.items.reduce((s, item) => s + getUnits(item, detailClient.client.id) * item.quantity, 0);
+                    // ★ CM 指示単位数で頭打ち (超過分は保険外 = 全額自己負担)
+                    const cap = capFukuyoguUnits(actualU, cmUnits.get(detailClient.client.id) ?? null);
+                    const totalU = cap.billedUnits;
                     const UNIT_PRICE = 10;
                     const insuredAmount = totalU * UNIT_PRICE;
                     const benefitRate = parseInt(detailClient.client.benefit_rate ?? "90", 10);
@@ -1752,6 +1854,14 @@ export default function BillingTab({ tenantId, currentOfficeId }: { tenantId: st
                             <td className="px-2 py-1 text-gray-600 border-l border-gray-200 bg-gray-100 font-medium">公費本人負担</td>
                             <td className="px-2 py-1 text-right font-mono text-gray-400">—</td>
                           </tr>
+                          {cap.capped && (
+                            <tr className="border-t border-orange-200 bg-orange-50">
+                              <td colSpan={4} className="px-2 py-1 text-orange-700">
+                                ⚠ CM 指示単位数で頭打ち: 実績 {actualU.toLocaleString()} 単位 → 保険請求 {totalU.toLocaleString()} 単位。
+                                超過 {cap.overUnits.toLocaleString()} 単位 = <strong>{(cap.overUnits * UNIT_PRICE).toLocaleString()} 円は保険外 (全額自己負担)</strong>
+                              </td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     );
@@ -2845,10 +2955,30 @@ function InvoiceReceiptModal({
   }, [careItems, priceHistory, targetMonth, y, m]);
 
   const totalUnits = detailRows.reduce((s, r) => s + r.totalUnits, 0);
-  const insuredAmount = totalUnits * 10;
+  // ★ CM 指示単位数 (2026-11-09): 対象月に入力があれば その単位数までが保険、超過分は保険外 (全額自己負担)。
+  //   請求画面と同じ表 (fukuyogu_cm_units)。読めなければ実績で計算し、画面に理由を出す。
+  //   事業所は「その利用者の介護の発注の事業所」(1 つに決まるときだけ。複数なら全事業所の値を見る)
+  const [cmLoaded, setCmLoaded] = useState<{ month: string; units: number | null; notice: string | null } | null>(null);
+  const invoiceOfficeId = useMemo(() => {
+    const ids = new Set(careItems.map((it) => orders.find((o) => o.id === it.order_id)?.office_id).filter((v): v is string => !!v));
+    return ids.size === 1 ? [...ids][0] : null;
+  }, [careItems, orders]);
+  useEffect(() => {
+    let cancelled = false;
+    getCmUnits(tenantId, targetMonth, invoiceOfficeId).then((r) => {
+      if (!cancelled) setCmLoaded({ month: targetMonth, units: r.byClient.get(client.id) ?? null, notice: r.message });
+    });
+    return () => { cancelled = true; };
+  }, [tenantId, targetMonth, invoiceOfficeId, client.id]);
+  const cmForMonth = cmLoaded?.month === targetMonth ? cmLoaded.units : null;
+  const cmCap = capFukuyoguUnits(totalUnits, cmForMonth);
+  const insuredAmount = cmCap.billedUnits * 10;
   const benefitRate = parseInt(client.benefit_rate ?? "90", 10);
   const copayRate = 100 - benefitRate;
-  const copayAmount = Math.floor(insuredAmount * copayRate / 100);
+  const insuranceCopay = Math.floor(insuredAmount * copayRate / 100);
+  // 保険外 (CM 指示単位数を超えた分) は 10 割を本人に請求する
+  const outsideAmount = cmCap.overUnits * 10;
+  const copayAmount = insuranceCopay + outsideAmount;
 
   // 課税分・非課税分（現状は全部非課税）
   const taxableCopay = detailRows.reduce((s, r) => {
@@ -2972,6 +3102,9 @@ function InvoiceReceiptModal({
         })),
         total_units: totalUnits,
         insured_amount: insuredAmount,
+        cm_units: cmForMonth,
+        outside_units: cmCap.overUnits,
+        outside_amount: outsideAmount,
         benefit_rate: benefitRate,
         copay_rate: copayRate,
         copay_amount: copayAmount,
@@ -3101,6 +3234,16 @@ function InvoiceReceiptModal({
             className="ml-3 truncate rounded border border-amber-400 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800"
           >
             ⚠ 既存の請求書番号を読めませんでした
+          </span>
+        )}
+        {cmLoaded?.notice && (
+          <span title={cmLoaded.notice} className="ml-3 truncate rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-700">
+            ⚠ CM 指示単位数を反映できていません
+          </span>
+        )}
+        {cmCap.capped && (
+          <span className="ml-3 truncate rounded border border-orange-400 bg-orange-50 px-2 py-0.5 text-[11px] font-bold text-orange-800">
+            CM 指示単位数で頭打ち (保険外 {outsideAmount.toLocaleString()} 円を含む)
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -3284,8 +3427,16 @@ function InvoiceReceiptModal({
                 <td style={{ border: "1px solid #374151", padding: "6px 8px" }}>福祉用具貸与</td>
                 <td style={{ border: "1px solid #374151", padding: "6px 8px" }} />
                 <td style={{ border: "1px solid #374151", padding: "6px 8px" }} />
-                <td style={{ border: "1px solid #374151", padding: "6px 8px", textAlign: "right" }}>{copayAmount.toLocaleString()}</td>
+                <td style={{ border: "1px solid #374151", padding: "6px 8px", textAlign: "right" }}>{insuranceCopay.toLocaleString()}</td>
               </tr>
+              {outsideAmount > 0 && (
+                <tr>
+                  <td style={{ border: "1px solid #374151", padding: "6px 8px" }}>福祉用具貸与 保険外 (ケアプランの単位数を超えた分・全額自己負担)</td>
+                  <td style={{ border: "1px solid #374151", padding: "6px 8px", textAlign: "right" }}>10</td>
+                  <td style={{ border: "1px solid #374151", padding: "6px 8px", textAlign: "right" }}>{cmCap.overUnits.toLocaleString()}単位</td>
+                  <td style={{ border: "1px solid #374151", padding: "6px 8px", textAlign: "right" }}>{outsideAmount.toLocaleString()}</td>
+                </tr>
+              )}
               <tr>
                 <td style={{ borderLeft: "1px solid #374151", borderRight: "1px solid #374151", borderTop: "1px dashed #9ca3af", borderBottom: "1px dashed #9ca3af", padding: "4px 8px", paddingLeft: "32px", fontSize: "11px", color: "#333" }}>
                   　　課税分　{taxableCopay.toLocaleString()}円
