@@ -17,8 +17,8 @@ import {
   type AttendanceRecord,
 } from "@/lib/attendance/attendance-calc";
 import {
-  MONTHLY_OVERTIME_LIMIT_HOURS,
   overtimeConsumption,
+  overtimeLimitHours,
   type OvertimeConsumption,
 } from "@/lib/attendance/overtime-limit";
 import { fetchAttendanceRowsRange, fetchCompanyHolidaysRange } from "@/lib/attendance/summary-data";
@@ -63,6 +63,8 @@ export default function AttendanceSummaryView({
   onOpenEmployee: (payrollOfficeId: string, employeeId: string, ym: string) => void;
 }) {
   const [payrollOfficeId, setPayrollOfficeId] = useState(initialPayrollOfficeId || offices[0]?.id || "");
+  // 月間残業枠は事業所ごと (統括営業本部 35h・他 20h)
+  const limitHours = overtimeLimitHours(payrollOfficeId);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [rows, setRows] = useState<AttendanceDbRow[]>([]);
   const [holidays, setHolidays] = useState<Set<string>>(() => new Set());
@@ -150,13 +152,13 @@ export default function AttendanceSummaryView({
       const cells: Cell[] = months.map((ym) => {
         const days = recs.filter((r) => r.work_date.startsWith(ym)).length;
         if (days === 0) return null;
-        return { c: overtimeConsumption(calcMonthlySummary(recs, weekStart, ym, holidays)), days };
+        return { c: overtimeConsumption(calcMonthlySummary(recs, weekStart, ym, holidays), limitHours), days };
       });
       const totalOvertime = cells.reduce((s, c) => s + (c?.c.overtime ?? 0), 0);
       const totalConsumed = cells.reduce((s, c) => s + (c?.c.consumed ?? 0), 0);
       return { emp: e, cells, totalOvertime, totalConsumed };
     });
-  }, [rows, emps, months, weekStart, holidays, today]);
+  }, [rows, emps, months, weekStart, holidays, today, limitHours]);
 
   return (
     <div className="flex flex-col h-full">
@@ -207,8 +209,8 @@ export default function AttendanceSummaryView({
 
       <div className="px-3 py-1.5 border-b border-gray-100 text-[10px] text-gray-500 shrink-0 flex items-center gap-3 flex-wrap">
         <span>数字 = 通常残業 (1日8時間超 + 週40時間超)。「+」は法定休日・深夜の換算ぶん</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-200" />{MONTHLY_OVERTIME_LIMIT_HOURS}h 枠の 80% 以上</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-200" />{MONTHLY_OVERTIME_LIMIT_HOURS}h 超過</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-200" />{limitHours}h 枠の 80% 以上</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-200" />{limitHours}h 超過</span>
         <span>セルを押すとその月の出勤簿を開きます</span>
       </div>
 
@@ -264,7 +266,7 @@ export default function AttendanceSummaryView({
                           `${emp.name} ${ym} (${cell.days} 日分の入力)`,
                           `通常残業 ${formatHM(c.overtime)}`,
                           `法定休日・深夜の換算 +${formatHM(equiv)}`,
-                          `35h 枠の消費 ${formatHM(c.consumed)} / 残り ${formatHM(c.remaining)}`,
+                          `${limitHours}h 枠の消費 ${formatHM(c.consumed)} / 残り ${formatHM(c.remaining)}`,
                         ].join("\n")}
                       >
                         {formatHM(c.overtime)}
@@ -272,7 +274,7 @@ export default function AttendanceSummaryView({
                       </td>
                     );
                   })}
-                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium text-gray-700" title={`35h 枠の消費 合計 ${formatHM(totalConsumed)}`}>
+                  <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium text-gray-700" title={`${limitHours}h 枠の消費 合計 ${formatHM(totalConsumed)}`}>
                     {formatHM(totalOvertime)}
                   </td>
                 </tr>

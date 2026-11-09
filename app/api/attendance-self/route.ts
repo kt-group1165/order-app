@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyAttendanceToken } from "@/lib/attendanceToken";
 import { extendedMonthRange } from "@/lib/attendance/attendance-calc";
+import { overtimeLimitHours } from "@/lib/attendance/overtime-limit";
 
 // 出勤簿 自己入力 API (/m/attendance から呼ばれる)。
 // 認証: 個人トークン (HMAC 署名、lib/attendanceToken.ts) を検証してから
@@ -151,6 +152,8 @@ export async function GET(req: Request) {
       office_type: ctx.office_type,
       phone_duty_pay: ctx.phone_duty_pay,
       is_office_worker: ctx.is_office_worker,
+      // 月間残業枠 (事業所ごと: 統括営業本部 35h・他 20h)。スマホ画面の「あと残業できる時間」に使う
+      overtime_limit_hours: overtimeLimitHours(ctx.office_id),
     },
     month_status: statusRow ?? null,
     records: recordsRes.data ?? [],

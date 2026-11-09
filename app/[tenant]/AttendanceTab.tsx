@@ -46,12 +46,12 @@ import {
   downloadBlob,
 } from "@/lib/attendance/save-folder";
 import {
-  MONTHLY_OVERTIME_LIMIT_HOURS,
   overtimeConsumption,
+  overtimeLimitHours,
 } from "@/lib/attendance/overtime-limit";
 import AttendanceSummaryView from "./AttendanceSummaryView";
 
-// 月間残業枠 (35h) と 法定休日・深夜の換算は lib/attendance/overtime-limit.ts (残業集計と共通)
+// 月間残業枠 (事業所ごと: 統括営業本部 35h・他 20h) と 法定休日・深夜の換算は lib/attendance/overtime-limit.ts (残業集計と共通)
 
 const WEEK_DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -400,7 +400,8 @@ export default function AttendanceTab({
     return calcMonthlySummary(all, weekStart, month, companyHolidays);
   }, [rows, neighbors, weekStart, month, companyHolidays]);
 
-  // 通常残業 (1日8h超 + 週40h超)・法定休日/深夜の換算・35h 枠の消費 (残業集計と同じ関数)
+  // 通常残業 (1日8h超 + 週40h超)・法定休日/深夜の換算・月間枠の消費 (残業集計と同じ関数)
+  const limitHours = overtimeLimitHours(payrollOfficeId);
   const {
     overtime: overtimeTotal,
     holidayEquiv,
@@ -410,7 +411,7 @@ export default function AttendanceTab({
     overLimit,
     ratio,
     nearLimit,
-  } = overtimeConsumption(summary);
+  } = overtimeConsumption(summary, limitHours);
   const hasEquiv = holidayEquiv > 0 || midnightEquiv > 0;
 
   /** 本社手当 (電話当番・土日祝対応) の月集計。当月分の行のみ */
@@ -999,13 +1000,13 @@ export default function AttendanceTab({
             <span className={`text-xl font-bold tabular-nums ${overLimit ? "text-red-600" : "text-gray-800"}`}>
               {formatHM(consumed)}
             </span>
-            <span className="text-[11px] text-gray-400">/ {MONTHLY_OVERTIME_LIMIT_HOURS}:00</span>
+            <span className="text-[11px] text-gray-400">/ {limitHours}:00</span>
           </div>
 
           {overLimit && (
             <span className="inline-flex items-center gap-1 text-[11px] text-red-600 font-medium">
               <AlertTriangle size={13} />
-              月 {MONTHLY_OVERTIME_LIMIT_HOURS} 時間を超えています
+              月 {limitHours} 時間を超えています
             </span>
           )}
           {nearLimit && (
@@ -1059,7 +1060,7 @@ export default function AttendanceTab({
         </div>
         <p className="mt-1 text-[10px] text-gray-400">
           通常残業 = 1日8時間超 + 週40時間超。法定休日 (×1.35) と深夜 (+0.25) は割増率の比で通常残業 (×1.25) に換算して枠を消費します。
-          {hasEquiv && "このため実時間の合計と残り時間を足しても 35:00 にはなりません。残りは「あと通常残業できる時間」です。"}
+          {hasEquiv && `このため実時間の合計と残り時間を足しても ${limitHours}:00 にはなりません。残りは「あと通常残業できる時間」です。`}
         </p>
       </div>
 

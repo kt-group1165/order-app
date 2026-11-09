@@ -9,6 +9,19 @@ import type { MonthlySummary } from "./attendance-calc";
 export const MONTHLY_OVERTIME_LIMIT_HOURS = 35;
 export const MONTHLY_OVERTIME_LIMIT_MIN = MONTHLY_OVERTIME_LIMIT_HOURS * 60;
 
+// 事業所ごとの月間残業枠 (2026-11-09 user 指示): **統括営業本部 (本社) 以外は 20h**、統括営業本部だけ 35h。
+//   キーは payroll_offices.id。ここに無い事業所 (福祉用具 5 事業所 ほか) は DEFAULT_OFFICE_OVERTIME_LIMIT_HOURS。
+//   ケアサポの Excel 出勤簿の一覧「今月の残り残業時間」も 20h 基準だった。
+export const DEFAULT_OFFICE_OVERTIME_LIMIT_HOURS = 20;
+export const OFFICE_OVERTIME_LIMIT_HOURS: Record<string, number> = {
+  "0dad0187-fac1-44ad-9975-4a7e65a2e04c": MONTHLY_OVERTIME_LIMIT_HOURS, // 統括営業本部 (本社)
+};
+
+/** その事業所の月間残業枠 (時間)。事業所が決まっていなければ 20h */
+export function overtimeLimitHours(payrollOfficeId: string | null | undefined): number {
+  return (payrollOfficeId && OFFICE_OVERTIME_LIMIT_HOURS[payrollOfficeId]) || DEFAULT_OFFICE_OVERTIME_LIMIT_HOURS;
+}
+
 // 割増率 (労基法 §37)。法定休日労働・深夜も枠を消費するが、割増率が違うぶん
 // 通常残業に換算してから引く。
 //   換算係数 = その労働の割増率 ÷ 通常残業の割増率
@@ -40,26 +53,33 @@ export type OvertimeConsumption = {
   /** あと何分 通常残業できるか (負 = 超過) */
   remaining: number;
   overLimit: boolean;
+  /** この計算に使った枠 (分) */
+  limitMin: number;
   /** 80% 以上 (超過は含まない) */
   nearLimit: boolean;
   /** 消費率 0〜1 */
   ratio: number;
 };
 
-export function overtimeConsumption(summary: MonthlySummary): OvertimeConsumption {
+export function overtimeConsumption(
+  summary: MonthlySummary,
+  limitHours: number = MONTHLY_OVERTIME_LIMIT_HOURS,
+): OvertimeConsumption {
+  const limitMin = limitHours * 60;
   const overtime = summary.total_daily_overtime + summary.total_weekly_overtime;
   const holidayEquiv = holidayToOvertimeEquiv(summary.total_holiday);
   const midnightEquiv = midnightToOvertimeEquiv(summary.total_midnight);
   const consumed = overtime + holidayEquiv + midnightEquiv;
-  const remaining = MONTHLY_OVERTIME_LIMIT_MIN - consumed;
+  const remaining = limitMin - consumed;
   const overLimit = remaining < 0;
-  const ratio = Math.min(1, consumed / MONTHLY_OVERTIME_LIMIT_MIN);
+  const ratio = Math.min(1, consumed / limitMin);
   return {
     overtime,
     holidayEquiv,
     midnightEquiv,
     consumed,
     remaining,
+    limitMin,
     overLimit,
     nearLimit: !overLimit && ratio >= 0.8,
     ratio,

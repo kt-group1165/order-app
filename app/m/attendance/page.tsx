@@ -22,9 +22,8 @@ import {
   DEFAULT_PHONE_DUTY_PAY,
 } from "@/lib/attendance/allowance";
 
-// 35h 枠と割増換算 (AttendanceTab.tsx と同一ロジック。福祉用具の運用ライン)
-const LIMIT_HOURS = 35;
-const LIMIT_MIN = LIMIT_HOURS * 60;
+// 月間残業枠と割増換算 (AttendanceTab.tsx と同一ロジック)。枠は事業所ごと (統括営業本部 35h・他 20h) を API から受け取る
+const DEFAULT_LIMIT_HOURS = 20;
 const RATE_OVERTIME = 1.25;
 const RATE_HOLIDAY = 1.35;
 const RATE_MIDNIGHT_EXTRA = 0.25;
@@ -179,6 +178,7 @@ function SelfAttendanceInner() {
   });
   const [name, setName] = useState<string>("");
   const [officeType, setOfficeType] = useState<string>("");
+  const [limitHours, setLimitHours] = useState<number>(DEFAULT_LIMIT_HOURS);
   const [isOfficeWorker, setIsOfficeWorker] = useState(false);
   // 月次ステータス (null = 未提出)。提出済みは編集不可
   const [monthStatus, setMonthStatus] = useState<{ status: string; submitted_at: string | null } | null>(null);
@@ -215,6 +215,7 @@ function SelfAttendanceInner() {
       setName(json.employee?.name ?? "");
       setOfficeType(json.employee?.office_type ?? "");
       setIsOfficeWorker(json.employee?.is_office_worker === true);
+      setLimitHours(json.employee?.overtime_limit_hours ?? DEFAULT_LIMIT_HOURS);
       setMonthStatus(json.month_status ?? null);
       setPhoneDutyPay(json.employee?.phone_duty_pay ?? DEFAULT_PHONE_DUTY_PAY);
       const ws: number = json.employee?.work_week_start ?? 0;
@@ -314,6 +315,7 @@ function SelfAttendanceInner() {
 
   const overtimeTotal = summary.total_daily_overtime + summary.total_weekly_overtime;
   const consumed = overtimeTotal + holidayEq(summary.total_holiday) + midnightEq(summary.total_midnight);
+  const LIMIT_MIN = limitHours * 60;
   const remaining = LIMIT_MIN - consumed;
   const overLimit = remaining < 0;
   const nearLimit = !overLimit && consumed / LIMIT_MIN >= 0.8;
@@ -470,7 +472,7 @@ function SelfAttendanceInner() {
             {formatHM(Math.abs(remaining))}
           </span>
           <span className="text-[10px] text-gray-400 tabular-nums ml-auto">
-            消費 {formatHM(consumed)} / {LIMIT_HOURS}:00
+            消費 {formatHM(consumed)} / {limitHours}:00
           </span>
         </div>
         {/* 内訳は 3 列グリッド。1 行の長文だと折り返して読みにくいため */}

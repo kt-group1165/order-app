@@ -16,7 +16,7 @@ import { supabase } from "@/lib/supabase";
 import { selectInChunks } from "@/lib/inChunks";
 import { toRecord, type AttendanceOffice, type AttendanceDbRow } from "@/lib/attendance";
 import { calcMonthlySummary, extendedMonthRange, formatHM } from "@/lib/attendance/attendance-calc";
-import { overtimeConsumption } from "@/lib/attendance/overtime-limit";
+import { overtimeConsumption, overtimeLimitHours } from "@/lib/attendance/overtime-limit";
 import {
   fetchAttendanceRowsRange,
   fetchCompanyHolidaysRange,
@@ -63,7 +63,7 @@ type SheetPlan = {
   entries: DiffEntry[];
   /** 反映後のアプリ計算 (通常残業・分) */
   appOvertime: number;
-  /** 反映後の 35h 枠消費 (分) */
+  /** 反映後の 月間残業枠の消費 (分) */
   appConsumed: number;
 };
 
@@ -235,6 +235,7 @@ export default function AttendanceExcelImportModal({
             }
             const c = overtimeConsumption(
               calcMonthlySummary([...merged.values()].map(toRecord), weekStart, s.ym, holidays),
+              overtimeLimitHours(office.id),
             );
             appOvertime = c.overtime;
             appConsumed = c.consumed;
@@ -520,7 +521,7 @@ export default function AttendanceExcelImportModal({
                           {p.entries.length > 0 ? `${nNew} / ${nChg} / ${nSame}` : "—"}
                         </td>
                         <td className="px-2 py-1 text-right tabular-nums">{excelMin === null ? "—" : formatHM(excelMin)}</td>
-                        <td className="px-2 py-1 text-right tabular-nums font-medium" title={`35h 枠の消費 ${formatHM(p.appConsumed)}`}>
+                        <td className="px-2 py-1 text-right tabular-nums font-medium" title={`${overtimeLimitHours(office.id)}h 枠の消費 ${formatHM(p.appConsumed)}`}>
                           {p.entries.length > 0 ? formatHM(p.appOvertime) : "—"}
                         </td>
                         <td className="px-2 py-1 text-right tabular-nums text-gray-500">
