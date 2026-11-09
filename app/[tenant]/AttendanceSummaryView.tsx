@@ -27,6 +27,8 @@ import { todayYmd } from "@/lib/date-jst";
 import AttendanceExcelImportModal from "./AttendanceExcelImportModal";
 
 const MONTHS_BACK = 12;
+// 集計に出す最初の月。ケアサポの出勤簿は 2026-09 から入っている (それより前は空欄の列になるだけなので出さない。2026-11-09 user 指示)
+const SUMMARY_FIRST_MONTH = "2026-09";
 
 type Emp = {
   id: string;
@@ -79,7 +81,7 @@ export default function AttendanceSummaryView({
     const list: string[] = [];
     for (let i = MONTHS_BACK; i >= 0; i--) {
       const ym = shiftMonth(currentYm, -i);
-      if (ym >= ATTENDANCE_FIRST_MONTH) list.push(ym);
+      if (ym >= ATTENDANCE_FIRST_MONTH && ym >= SUMMARY_FIRST_MONTH) list.push(ym);
     }
     return list;
   }, [currentYm]);
