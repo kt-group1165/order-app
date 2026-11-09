@@ -10,14 +10,23 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
   const [includeInactive, setIncludeInactive] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState({ display_name: "", login_id: "", role: "member" as "member" | "office_admin" });
-  // 招待の氏名と空白を除いて一致する既存職員 (1 名に決まるときだけ)
+  // 招待をどの職員に紐付けるか (明示的に選ぶ)。"" = 未選択 / "new" = 新しい職員として作る / それ以外 = members.id
+  //   紐付けないと consume 時に同じ氏名の職員がもう 1 人作られる。名前の自動一致は同姓同名・異体字に弱いので候補止まりにする
+  const [inviteLinkTo, setInviteLinkTo] = useState<string>("");
   const normStaffName = (v: string) => v.replace(/[\s　]/g, "");
-  const inviteMatches = inviteForm.display_name.trim()
-    ? members.filter((m) => normStaffName(m.name ?? "") === normStaffName(inviteForm.display_name))
-    : [];
-  const matchedInviteMember = inviteMatches.length === 1 ? inviteMatches[0] : null;
+  const nameMatches = (name: string) =>
+    name.trim() ? members.filter((m) => normStaffName(m.name ?? "") === normStaffName(name)) : [];
+  const linkedMember = inviteLinkTo && inviteLinkTo !== "new" ? members.find((m) => m.id === inviteLinkTo) ?? null : null;
+  const hasAccount = (m: { auth_user_id?: string | null }) => !!m.auth_user_id;
+  const openInvite = (m?: (typeof members)[number]) => {
+    setInviteResult(null);
+    setInviteError(null);
+    setInviteForm({ display_name: m?.name ?? "", login_id: "", role: "member" });
+    setInviteLinkTo(m ? m.id : "");
+    setInviteOpen(true);
+  };
   const [inviting, setInviting] = useState(false);
-  const [inviteResult, setInviteResult] = useState<{ invite_url: string; initial_password: string; login_id: string } | null>(null);
+  const [inviteResult, setInviteResult] = useState<{ invite_url: string; initial_password: string; login_id: string; linked_name: string | null } | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
   const officeFilter = officeViewAll ? null : currentOfficeId;
@@ -119,10 +128,12 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
       setInviteError("氏名は必須です");
       return;
     }
+    if (!inviteLinkTo) {
+      setInviteError("紐付ける職員を選んでください (いない場合は「新しい職員として作る」)");
+      return;
+    }
     setInviting(true);
     try {
-      // 既存の職員と同じ氏名なら その member に紐付ける (付けないと consume 時に同名の職員がもう 1 人作られる)
-      const linkMember = matchedInviteMember;
       const res = await fetch("/api/staff/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -131,7 +142,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
           login_id: inviteForm.login_id.trim() || undefined,
           role: inviteForm.role,
           office_id: currentOfficeId,
-          member_id: linkMember?.id,
+          member_id: linkedMember?.id,
         }),
       });
       const json = await res.json();
@@ -139,7 +150,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
         setInviteError(json.message ?? json.error ?? "発行に失敗しました");
         return;
       }
-      setInviteResult({ invite_url: json.invite_url, initial_password: json.initial_password, login_id: json.login_id });
+      setInviteResult({ invite_url: json.invite_url, initial_password: json.initial_password, login_id: json.login_id, linked_name: linkedMember ? `${linkedMember.name}${linkedMember.role ? ` (${linkedMember.role})` : ""}` : null });
     } catch (e) {
       setInviteError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -152,6 +163,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
     setInviteResult(null);
     setInviteError(null);
     setInviteForm({ display_name: "", login_id: "", role: "member" });
+    setInviteLinkTo("");
   };
 
   return (
@@ -165,7 +177,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
         </label>
         <div className="ml-auto">
           <button
-            onClick={() => setInviteOpen(true)}
+            onClick={() => openInvite()}
             className="text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white inline-flex items-center gap-1"
           >
             <Plus size={14} />
@@ -187,6 +199,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
                 <th className="text-left px-3 py-2">役職</th>
                 <th className="text-left px-3 py-2">雇用形態</th>
                 <th className="text-left px-3 py-2 w-20">状態</th>
+                <th className="text-left px-3 py-2 w-28">アカウント</th>
               </tr>
             </thead>
             <tbody>
@@ -199,6 +212,13 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${m.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-gray-200 text-gray-600"}`}>
                       {m.status === "active" ? "在籍" : "退職"}
                     </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {hasAccount(m as { auth_user_id?: string | null }) ? (
+                      <span className="text-[10px] text-gray-500">あり</span>
+                    ) : m.status === "active" ? (
+                      <button onClick={() => openInvite(m)} className="text-[11px] px-2 py-0.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50">招待</button>
+                    ) : null}
                   </td>
                 </tr>
               ))}
@@ -214,6 +234,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
               <>
                 <h3 className="text-base font-semibold mb-3">招待を発行しました</h3>
                 <p className="text-xs text-gray-600 mb-2">下記 URL と初期パスワードを本人に伝えてください。</p>
+                <p className="text-xs mb-2">{inviteResult.linked_name ? <span className="text-emerald-700">紐付け先: 既存の職員「{inviteResult.linked_name}」</span> : <span className="text-gray-600">紐付け先: 新しい職員として作成</span>}</p>
                 <div className="space-y-2 text-xs">
                   <div>
                     <div className="text-gray-500 mb-0.5">ログイン ID</div>
@@ -249,11 +270,41 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
                       onChange={(e) => setInviteForm((f) => ({ ...f, display_name: e.target.value }))}
                       className="w-full border border-gray-300 rounded px-2 py-1"
                     />
-                    {matchedInviteMember ? (
-                      <p className="text-[11px] text-emerald-700 mt-1">既存の職員「{matchedInviteMember.name}{matchedInviteMember.role ? ` (${matchedInviteMember.role})` : ""}」に紐付けて発行します</p>
-                    ) : inviteForm.display_name.trim() ? (
-                      <p className="text-[11px] text-gray-500 mt-1">一覧に同じ氏名の職員がいないため、新しい職員として作られます</p>
-                    ) : null}
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">紐付ける職員 (必須)</label>
+                    <select
+                      value={inviteLinkTo}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setInviteLinkTo(v);
+                        const m = members.find((x) => x.id === v);
+                        if (m && !inviteForm.display_name.trim()) setInviteForm((f) => ({ ...f, display_name: m.name ?? "" }));
+                      }}
+                      className="w-full border border-gray-300 rounded px-2 py-1"
+                    >
+                      <option value="">— 選んでください —</option>
+                      {members
+                        .filter((m) => m.status === "active")
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}{m.role ? ` (${m.role})` : ""}{hasAccount(m as { auth_user_id?: string | null }) ? " ※アカウントあり" : ""}
+                          </option>
+                        ))}
+                      <option value="new">＋ 新しい職員として作る</option>
+                    </select>
+                    {!inviteLinkTo && nameMatches(inviteForm.display_name).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setInviteLinkTo(nameMatches(inviteForm.display_name)[0].id)}
+                        className="text-[11px] text-emerald-700 underline mt-1"
+                      >
+                        候補: 同じ氏名の「{nameMatches(inviteForm.display_name).map((m) => m.name).join(" / ")}」を選ぶ
+                      </button>
+                    )}
+                    {linkedMember && hasAccount(linkedMember as { auth_user_id?: string | null }) && (
+                      <p className="text-[11px] text-amber-700 mt-1">この職員は既にアカウントがあります。二重に発行しないか確認してください</p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs text-gray-600">ログイン ID (英小文字・数字。漢字の氏名からは作れないので入力してください 例: yarita)</label>
