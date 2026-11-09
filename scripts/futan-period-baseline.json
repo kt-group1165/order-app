@@ -5,25 +5,26 @@
     "■ mismatch (08: 6 / 09: 8) = 負担割合証と『認定行の割合』の食い違い。認定行は書き換えない方針なので残る。請求 (BillingTab) は負担割合証の値を使うので金額は証どおり (= ほのぼのと同じ)。",
     "  09 の 8 名 = 8/1 切替の 6 名 (青木英夫・和田義巳・光江章・小山勝治・平澤勝次・石渡増男) + 認定行に割合が無い 2 名。",
     "■ noCertUsedRow (08: 474 / 09: 426) = 負担割合証が無く認定行の値で請求した人 (ケアサポ以外の用具事業所の利用者は全社 CSV に居る人しか証が取れない)。none 09: 2 = 証も認定行の割合も無い。",
-    "■ 締める時期: 事業所別設計の切替時に noCertUsedRow が実質 0 になったら lib/insurance/cert-month.ts の BLOCK_DENSOU_WITHOUT_BENEFIT_CERT を true に。"
+    "■ 締める時期: 事業所別設計の切替時に noCertUsedRow が実質 0 になったら lib/insurance/cert-month.ts の BLOCK_DENSOU_WITHOUT_BENEFIT_CERT を true に。",
+    "■ 2026-11-09 夜 更新: 貸与を提供票から組み直し (batch 8583d46b) で請求対象の顔ぶれが変わった (8 月 新たに対象 約180・対象外 約110、9 月 新たに対象 27 = 月遅れ・新規・区分変更)。食い違いが増えた人 (國島彰・芹澤寛・和田義巳・小野祥三) は新たに対象に入った人で、データは前からのもの。"
   ],
   "source": "db",
   "asOf": "2026-11-09",
   "months": {
     "2026-08": {
-      "billed": 1055,
-      "withCert": 581,
-      "noCertUsedRow": 474,
-      "none": 0,
-      "mismatch": 6,
+      "billed": 1136,
+      "withCert": 681,
+      "noCertUsedRow": 453,
+      "none": 2,
+      "mismatch": 9,
       "split": 0
     },
     "2026-09": {
-      "billed": 1116,
-      "withCert": 688,
-      "noCertUsedRow": 426,
+      "billed": 1143,
+      "withCert": 703,
+      "noCertUsedRow": 438,
       "none": 2,
-      "mismatch": 8,
+      "mismatch": 9,
       "split": 0
     }
   }

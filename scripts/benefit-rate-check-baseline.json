@@ -39,18 +39,19 @@
     "",
     "■ 更新のしかた",
     "  npx tsx scripts/benefit-rate-check.mts -- --update",
-    "  ★ _readme は引き継がれる (2026-11-09 から)。件数が変わったらこの文を書き直すこと。"
+    "  ★ _readme は引き継がれる (2026-11-09 から)。件数が変わったらこの文を書き直すこと。",
+    "■ 2026-11-09 夜 更新: 貸与を提供票から組み直し (batch 8583d46b) で 6 月の請求対象の顔ぶれが変わり、給付率 未設定 19 名 + clients.benefit_rate と認定の食い違い 1 名 (鵜山不二男 clients 90 / 認定 70) が新たに対象に入った。clients.benefit_rate の空欄は前からある穴 (請求は負担割合証→認定行で解決するので金額には効かない)。"
   ],
-  "fingerprint": "806939724f04daf9",
+  "fingerprint": "e2059d60f722956b",
   "asOf": "2026-11-09",
   "month": "2026-06",
   "counts": {
     "mismatch": 0,
     "zeroNotTandoku": 0,
     "odd": 0,
-    "missing": 0,
+    "missing": 19,
     "nan": 0,
-    "vsCert": 0,
+    "vsCert": 1,
     "certExpired": 8
   }
 }
