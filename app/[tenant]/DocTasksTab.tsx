@@ -585,31 +585,72 @@ export default function DocTasksTab({
         </span>
       </div>
 
-      {/* フィルタ: status (v3) */}
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1 flex-wrap shrink-0">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">状態</span>
-        {(["pending", "completed", "received", "all"] as StatusFilter[]).map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
-            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${statusFilter === s ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-          >
-            {STATUS_FILTER_LABEL[s]} ({countByStatus[s]})
-          </button>
-        ))}
-        {/* 1 年以上前に切れた認定。**既定では一覧に出さないが、件数は必ず出す**。
-            0 件のときだけ描かない (0 を出しても意味が無いため)。
-            ⚠ 黙って消すと「期限切れで警告が消える」と同じ形になるので、
-              この chip を条件付きで隠すような変更はしないこと。 */}
-        {longOverdueCount > 0 && (
-          <button
-            onClick={() => setShowLongOverdue((v) => !v)}
-            title="認定が 1 年以上前に切れている分。既に利用者でない可能性がありますが、判定材料が無いので消していません"
-            className={`ml-auto text-xs px-2.5 py-1 rounded-full border transition-colors ${showLongOverdue ? "bg-rose-600 text-white border-rose-600" : "text-rose-600 border-rose-300 hover:border-rose-500 bg-rose-50"}`}
-          >
-            1年以上前に期限切れ {longOverdueCount} 件{showLongOverdue ? " (表示中)" : " (非表示)"}
-          </button>
-        )}
+      {/* フィルタ (状態・表示・トリガー・書類) を 1 枚にまとめる。
+          ラベル列を固定幅にして行頭を揃え、横に間延びしないようにする (2026-11-11) */}
+      <div className="px-3 py-2 border-b border-gray-200 bg-gray-50/60 shrink-0 grid grid-cols-[3.5rem_1fr] gap-x-2 gap-y-1.5 items-start">
+        <span className="text-[10px] text-gray-500 pt-1">状態</span>
+        <div className="flex items-center gap-1 flex-wrap">
+          {(["pending", "completed", "received", "all"] as StatusFilter[]).map((s) => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${statusFilter === s ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500 bg-white"}`}>
+              {STATUS_FILTER_LABEL[s]} ({countByStatus[s]})
+            </button>
+          ))}
+          {/* 1 年以上前に切れた認定。**既定では一覧に出さないが、件数は必ず出す**。
+              0 件のときだけ描かない (0 を出しても意味が無いため)。
+              ⚠ 黙って消すと「期限切れで警告が消える」と同じ形になるので、
+                この chip を条件付きで隠すような変更はしないこと。 */}
+          {longOverdueCount > 0 && (
+            <button
+              onClick={() => setShowLongOverdue((v) => !v)}
+              title="認定が 1 年以上前に切れている分。既に利用者でない可能性がありますが、判定材料が無いので消していません"
+              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${showLongOverdue ? "bg-rose-600 text-white border-rose-600" : "text-rose-600 border-rose-300 hover:border-rose-500 bg-rose-50"}`}
+            >
+              1年以上前に期限切れ {longOverdueCount} 件{showLongOverdue ? " (表示中)" : " (非表示)"}
+            </button>
+          )}
+          <span className="ml-auto flex items-center gap-1">
+            <span className="text-[10px] text-gray-500 mr-0.5">表示</span>
+            <span className="inline-flex rounded-full border border-gray-300 overflow-hidden bg-white">
+              {([["client", "人ごと"], ["flat", "期限順"]] as const).map(([m, label]) => (
+                <button key={m} onClick={() => setViewMode(m)}
+                  className={`text-xs px-2.5 py-0.5 ${viewMode === m ? "bg-gray-700 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+                  {label}
+                </button>
+              ))}
+            </span>
+            {viewMode === "client" && (
+              <>
+                <button onClick={expandAll} className="ml-1 text-[11px] text-gray-500 hover:text-gray-700 underline">全展開</button>
+                <button onClick={collapseAll} className="text-[11px] text-gray-500 hover:text-gray-700 underline">全折りたたみ</button>
+              </>
+            )}
+          </span>
+        </div>
+
+        <span className="text-[10px] text-gray-500 pt-1">トリガー</span>
+        <div className="flex items-center gap-1 flex-wrap">
+          <button onClick={() => setTriggerFilter(null)}
+            className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${triggerFilter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500 bg-white"}`}>全</button>
+          {Object.entries(TRIGGER_LABEL).map(([key, label]) => (
+            <button key={key} onClick={() => setTriggerFilter(triggerFilter === key ? null : key)}
+              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${triggerFilter === key ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500 bg-white"} ${(countByTrigger[key] ?? 0) === 0 && triggerFilter !== key ? "opacity-50" : ""}`}>
+              {label} ({countByTrigger[key] ?? 0})
+            </button>
+          ))}
+        </div>
+
+        <span className="text-[10px] text-gray-500 pt-1">書類</span>
+        <div className="flex items-center gap-1 flex-wrap">
+          <button onClick={() => setDocTypeFilter(null)}
+            className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${docTypeFilter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500 bg-white"}`}>全</button>
+          {Object.entries(DOC_LABEL).map(([key, label]) => (
+            <button key={key} onClick={() => setDocTypeFilter(docTypeFilter === key ? null : key)}
+              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${docTypeFilter === key ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500 bg-white"} ${(countByDocType[key] ?? 0) === 0 && docTypeFilter !== key ? "opacity-50" : ""}`}>
+              {label} ({countByDocType[key] ?? 0})
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* v3: 統合候補 banner */}
@@ -646,69 +687,6 @@ export default function DocTasksTab({
         </div>
       )}
 
-      {/* フィルタ: trigger_type */}
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1 flex-wrap shrink-0">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">トリガー</span>
-        <button
-          onClick={() => setTriggerFilter(null)}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${triggerFilter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-        >
-          全
-        </button>
-        {Object.entries(TRIGGER_LABEL).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTriggerFilter(triggerFilter === key ? null : key)}
-            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${triggerFilter === key ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-          >
-            {label} ({countByTrigger[key] ?? 0})
-          </button>
-        ))}
-      </div>
-
-      {/* フィルタ: 書類種別 */}
-      <div className="px-3 py-2 border-b border-gray-200 flex items-center gap-1 flex-wrap shrink-0">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">書類</span>
-        <button
-          onClick={() => setDocTypeFilter(null)}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${docTypeFilter === null ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-        >
-          全
-        </button>
-        {Object.entries(DOC_LABEL).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setDocTypeFilter(docTypeFilter === key ? null : key)}
-            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${docTypeFilter === key ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-          >
-            {label} ({countByDocType[key] ?? 0})
-          </button>
-        ))}
-      </div>
-
-      {/* 表示モード切替 */}
-      <div className="px-3 py-2 border-b border-gray-200 flex items-center gap-2 shrink-0">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide mr-1">表示</span>
-        <button
-          onClick={() => setViewMode("client")}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${viewMode === "client" ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-        >
-          人ごと
-        </button>
-        <button
-          onClick={() => setViewMode("flat")}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${viewMode === "flat" ? "bg-gray-700 text-white border-gray-700" : "text-gray-600 border-gray-300 hover:border-gray-500"}`}
-        >
-          期限順
-        </button>
-        {viewMode === "client" && (
-          <div className="ml-auto flex gap-2">
-            <button onClick={expandAll} className="text-[11px] text-gray-500 hover:text-gray-700 underline">全展開</button>
-            <button onClick={collapseAll} className="text-[11px] text-gray-500 hover:text-gray-700 underline">全折りたたみ</button>
-          </div>
-        )}
-      </div>
-
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-amber-400" /></div>
       ) : filteredRows.length === 0 ? (
@@ -719,21 +697,41 @@ export default function DocTasksTab({
           </div>
         </div>
       ) : viewMode === "client" ? (
-        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+        <div className="flex-1 overflow-y-auto p-3">
+          {/* 広い画面では人のカードを複数列に並べる。開いた人は横幅いっぱいに広げる */}
+          <div className="grid gap-1.5 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 items-start">
           {groupedByClient.map(({ clientId, client, docGroups, totalCount }) => {
             const expanded = expandedClients.has(clientId);
+            const allRowsOfClient = docGroups.flatMap((g) => g.rows);
+            const maxOverdue = allRowsOfClient.reduce((m, r) => Math.max(m, overdueDays(r.due_date) ?? 0), 0);
+            const nearestDue = allRowsOfClient.map((r) => r.due_date).filter((d): d is string => !!d).sort()[0] ?? null;
             return (
-              <div key={clientId} className="border border-gray-200 rounded-lg bg-white overflow-hidden">
+              <div key={clientId} className={`border rounded-lg bg-white overflow-hidden ${expanded ? "col-span-full border-gray-300 shadow-sm" : "border-gray-200"} ${maxOverdue > 0 ? "border-l-4 border-l-rose-400" : ""}`}>
                 <button
                   onClick={() => toggleClient(clientId)}
-                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 text-left"
+                  className="w-full px-3 py-2 hover:bg-gray-50 text-left"
                 >
-                  {expanded ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
-                  <span className="font-semibold text-gray-800">{client?.name ?? clientId.slice(0, 8)}</span>
-                  {client?.furigana && <span className="text-[10px] text-gray-400">{client.furigana}</span>}
-                  <span className="ml-auto text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
-                    未作成 {totalCount}
-                  </span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {expanded ? <ChevronDown size={14} className="text-gray-400 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
+                    <span className="font-semibold text-gray-800 truncate">{client?.name ?? clientId.slice(0, 8)}</span>
+                    {client?.furigana && <span className="text-[10px] text-gray-400 truncate min-w-0">{client.furigana}</span>}
+                    <span className="ml-auto text-[11px] text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full shrink-0">
+                      {totalCount} 件
+                    </span>
+                  </div>
+                  {/* 畳んだままでも 何の書類が・いつまでに 要るかが分かるように */}
+                  <div className="mt-1 pl-5 flex items-center gap-1 flex-wrap">
+                    {docGroups.map(({ docType, rows }) => (
+                      <span key={docType} className={`text-[10px] px-1.5 py-0.5 rounded-full ${DOC_BADGE_COLOR[docType] ?? "bg-gray-100 text-gray-700"}`}>
+                        {DOC_LABEL[docType] ?? docType}{rows.length > 1 ? ` ×${rows.length}` : ""}
+                      </span>
+                    ))}
+                    {maxOverdue > 0 ? (
+                      <span className="ml-auto text-[10px] font-medium text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">超過 最大{maxOverdue}日</span>
+                    ) : nearestDue ? (
+                      <span className="ml-auto text-[10px] text-gray-500">期限 {nearestDue}</span>
+                    ) : null}
+                  </div>
                 </button>
                 {expanded && (
                   <div className="border-t border-gray-100">
@@ -761,7 +759,7 @@ export default function DocTasksTab({
                                 <span className="text-[10px] text-gray-500 w-20 shrink-0">{TRIGGER_LABEL[row.trigger_type] ?? row.trigger_type}</span>
                                 <span className="text-[11px] text-gray-700 flex-1 truncate">{row.trigger_label ?? row.trigger_date}</span>
                                 {row.isVirtual && <span className="text-[9px] text-amber-600 bg-amber-50 px-1 rounded shrink-0">仮</span>}
-                                <span className="text-[11px] text-gray-500 shrink-0">{row.due_date ?? "—"}</span>
+                                <span className="text-[11px] text-gray-500 shrink-0 w-20 text-right tabular-nums">{row.due_date ?? "—"}</span>
                                 {overdueDays(row.due_date) !== null && (
                                   <span className="text-[10px] font-medium text-rose-600 bg-rose-50 px-1 rounded shrink-0">
                                     超過 {overdueDays(row.due_date)}日
@@ -791,10 +789,11 @@ export default function DocTasksTab({
               </div>
             );
           })}
+          </div>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-3">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-w-6xl">
             <table className="w-full table-auto bg-white text-left text-xs border-collapse min-w-[680px]">
               <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr className="text-gray-600">

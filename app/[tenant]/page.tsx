@@ -200,19 +200,16 @@ export default function TenantPage({
   }, [urlOfficeId]);
 
   // ヘッダー表示用: ログイン中 (URL ?office=) の事業所名
-  const [currentOfficeName, setCurrentOfficeName] = useState<string | null>(null);
+  // ヘッダーの事業所セレクタ用の一覧 (2026-11-11: 選んだ事業所の利用者だけ出す)
+  const [officeList, setOfficeList] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
-    if (!currentOfficeId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- HANDOVER §2 (mount init / office 切替追従)
-      setCurrentOfficeName(null);
-      return;
-    }
     let active = true;
     getOffices(tenantId)
-      .then((ofs) => { if (active) setCurrentOfficeName(ofs.find((o) => o.id === currentOfficeId)?.name ?? null); })
+      .then((ofs) => { if (active) setOfficeList(ofs.map((o) => ({ id: o.id, name: o.name }))); })
       .catch((e) => console.error("getOffices に失敗:", e));
     return () => { active = false; };
-  }, [tenantId, currentOfficeId]);
+  }, [tenantId]);
+  const currentOfficeName = currentOfficeId ? (officeList.find((o) => o.id === currentOfficeId)?.name ?? null) : null;
 
   useEffect(() => {
     getTenants().then((list) => {
@@ -274,6 +271,24 @@ export default function TenantPage({
             )}
           </div>
         </button>
+        {/* 事業所の選択。選ぶとその事業所の利用者・データだけを出す。「全事業所」で全件 */}
+        {officeList.length > 1 && (
+          <select
+            value={officeViewAll || !currentOfficeId ? "" : currentOfficeId}
+            onChange={(e) => {
+              const id = e.target.value || null;
+              handleOfficeChange(id);
+              handleOfficeViewModeChange(id === null);
+            }}
+            title="表示する事業所"
+            className="max-w-[14rem] text-xs text-gray-800 bg-white/95 rounded-md px-2 py-1 border-0 outline-none focus:ring-2 focus:ring-emerald-300"
+          >
+            <option value="">全事業所</option>
+            {officeList.map((o) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        )}
         <HeaderNotificationBadge currentOfficeId={currentOfficeId} onClick={() => setActiveTab("notifications")} />
         <span className="text-xs text-emerald-200">用具・発注管理</span>
         <span className="text-[10px] text-emerald-300 font-mono ml-1">v0.7.10</span>
