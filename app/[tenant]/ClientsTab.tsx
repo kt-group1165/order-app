@@ -34,6 +34,7 @@ import {
 } from "@/lib/offices";
 import { getMaxUserNumber } from "@kt/shared/user-number";
 import { usePerOfficeIds, isPerOffice, ownerKind, copyRowForOffice } from "@/lib/insurance/office-scope";
+import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
 
@@ -2888,7 +2889,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : "usage");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "bank" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : "usage");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   const [editingBasic, setEditingBasic] = useState(false);
@@ -3382,6 +3383,10 @@ function ClientDetail({
 
   const handleSaveInsuranceRecord = async () => {
     if (!insuranceForm) return;
+    if (insuranceForm.jusho_tokurei && insuranceForm.jusho_tokurei_insurer_number && !/^\d{6}$/.test(insuranceForm.jusho_tokurei_insurer_number)) {
+      alert("住所地特例の施設所在保険者番号は 6 桁の数字です");
+      return;
+    }
     setInsuranceSaving(true);
     try {
       if (editingInsuranceId) {
@@ -3729,7 +3734,7 @@ function ClientDetail({
 
       {/* トップタブ */}
       <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
-        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"],["keido","福祉用具 例外給付"]] as [typeof topTab, string][]).map(([t, label]) => (
+        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"],["bank","口座"],["keido","福祉用具 例外給付"]] as [typeof topTab, string][]).map(([t, label]) => (
           <button key={t} onClick={() => setTopTab(t)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
             {label}
@@ -4693,6 +4698,35 @@ function ClientDetail({
                       ? <select value={fv("service_restriction")} onChange={e => sf("service_restriction", e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 bg-white"><option value="なし">なし</option><option value="あり">あり</option></select>
                       : <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">{selRec?.service_restriction || "なし"}</div>}
                   </div>
+                  {/* 住所地特例 (2026-11-11 user 決定: 事業所ごとの保険の行に持つ) */}
+                  <div className="space-y-1 pt-1 border-t border-gray-100">
+                    <label className="text-[11px] text-gray-500">住所地特例</label>
+                    {insuranceForm ? (
+                      <div className="space-y-1.5">
+                        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                          <input type="checkbox" checked={!!F?.jusho_tokurei}
+                            onChange={e => setInsuranceForm(f => f ? { ...f, jusho_tokurei: e.target.checked } : f)} className="accent-blue-500" />
+                          対象 (施設に入所して住所を移したが、元の市町村が保険者のまま)
+                        </label>
+                        {F?.jusho_tokurei && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={fv("jusho_tokurei_insurer_number")} onChange={e => sf("jusho_tokurei_insurer_number", e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
+                              placeholder="施設所在保険者番号 (6桁)" inputMode="numeric"
+                              className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400 tabular-nums" />
+                            <input value={fv("jusho_tokurei_facility_name")} onChange={e => sf("jusho_tokurei_facility_name", e.target.value)}
+                              placeholder="入所施設 (メモ)"
+                              className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-400" />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-800 border border-transparent px-2.5 py-1.5">
+                        {selRec?.jusho_tokurei
+                          ? <>対象　施設所在保険者 <span className="tabular-nums">{selRec.jusho_tokurei_insurer_number ?? "未入力"}</span>{selRec.jusho_tokurei_facility_name ? `　${selRec.jusho_tokurei_facility_name}` : ""}</>
+                          : "対象外"}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* 右列: 介護保険負担割合証・給付制限等 */}
@@ -5196,6 +5230,10 @@ function ClientDetail({
             </div>
           );
         })()
+      ) : topTab === "bank" ? (
+        /* 口座 (事業所ごと。ClientBankAccountsPanel) */
+        <ClientBankAccountsPanel tenantId={tenantId} clientId={client.id} currentOfficeId={currentOfficeId}
+          officeNameById={new Map(assignmentOffices.map((o) => [o.id, o.name]))} />
       ) : topTab === "keido" ? (
         /* 福祉用具 軽度者 例外給付タブ (B-6d・2026-09-05) */
         (() => {

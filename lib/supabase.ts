@@ -78,6 +78,10 @@ export type ClientInsuranceRecord = {
   office_id?: string | null;
   copied_from_id?: string | null;
   office_source?: string | null;
+  /** 住所地特例 (migrations/applied_archive/insurance_jusho_tokurei_columns.sql) */
+  jusho_tokurei?: boolean;
+  jusho_tokurei_insurer_number?: string | null;
+  jusho_tokurei_facility_name?: string | null;
   service_limit_period_start: string | null;
   service_limit_period_end: string | null;
   service_limit_amount: number | null;
