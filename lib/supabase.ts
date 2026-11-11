@@ -74,6 +74,10 @@ export type ClientInsuranceRecord = {
   insurance_valid_end: string | null;
   certification_date: string | null;
   certification_status: string | null;
+  /** 行の持ち主の事業所 (事業所別保険 DESIGN_INSURANCE_PER_OFFICE.md。NULL = 事業所未定) */
+  office_id?: string | null;
+  copied_from_id?: string | null;
+  office_source?: string | null;
   service_limit_period_start: string | null;
   service_limit_period_end: string | null;
   service_limit_amount: number | null;

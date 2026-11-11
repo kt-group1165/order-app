@@ -36,6 +36,7 @@ import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fu
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
 import { resolveBenefitForMonth } from "@/lib/insurance/cert-month";
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
+import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
@@ -339,7 +340,32 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [orders, setOrders] = useState<Order[]>([]);
   const [tenantInfo, setTenantInfo] = useState<import("@/lib/tenants").Tenant | null>(null);
   const [offices, setOffices] = useState<Office[]>([]);
-  const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  const [insuranceRecordsAll, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  // ★ 2026-11-11 事業所別保険 (DESIGN_INSURANCE_PER_OFFICE.md §3.2): 認定・公費・負担割合証は
+  //   per_office の事業所なら自事業所の行だけ、shared なら per_office の事業所の行を外して使う。
+  //   per_office の事業所が 0 なら素通し (= 今の動き)。読み込んだ直後に絞るので下流 (伝送・月遅れ判定・給付率) は全部この規則に従う
+  const [perOfficeIds, setPerOfficeIds] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    loadPerOfficeOfficeIds().then((ids) => { if (!cancelled) setPerOfficeIds(ids); });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+  const perOfficeMode = isPerOffice(currentOfficeId, perOfficeIds);
+  const insuranceRecords = useMemo(
+    () => rowsForOffice(insuranceRecordsAll, currentOfficeId, perOfficeIds),
+    [insuranceRecordsAll, currentOfficeId, perOfficeIds],
+  );
+  /**
+   * 伝送に載せる 要介護度・認定期間・保険者/被保番・担当居宅。
+   *   shared … 今までどおり (認定行を優先し、空の項目は clients の列で補う / 番号・担当居宅は clients の列)
+   *   per_office … ★ 自事業所の認定行だけ。clients の列 (他事業所と共有) は使わない。行が無ければ要介護度が空になり、
+   *                build.ts の「要介護度をコードにできない」で伝送から外れる (= 認定なし・月遅れ扱い)
+   */
+  const densouCertOf = (client: Client, rec: ClientInsuranceRecord | null) => perOfficeMode
+    ? { ...certFieldsForDensou({ care_level: null, certification_start_date: null, certification_end_date: null }, rec),
+        insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
+    : { ...certFieldsForDensou(client, rec),
+        insurerNumber: client.insurer_number, insuredNumber: client.insured_number ?? null, careOfficeId: client.care_office_id };
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
@@ -422,7 +448,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     if (!benefitCerts?.available) return client.benefit_rate;
     const r = resolveBenefitForMonth(
       insuranceRecords.filter((x) => x.client_id === client.id),
-      benefitCerts.byClient.get(client.id) ?? [],
+      rowsForOffice(benefitCerts.byClient.get(client.id) ?? [], currentOfficeId, perOfficeIds),
       monthStart, monthEnd,
     );
     if (r.source === "certificate") for (const w of r.warnings) onWarn(w);
@@ -518,10 +544,11 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       const rec = pickCertForMonth(recsByClient.get(client.id) ?? [], monthStart, monthEnd,
         { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
       if (rec?.certification_status === "申請中") lateSet.add(client.id);
-      if (!careLevelCodeForDensou(certFieldsForDensou(client, rec).careLevel)) { noLevel.add(client.id); lateSet.add(client.id); }
+      if (!careLevelCodeForDensou(densouCertOf(client, rec).careLevel)) { noLevel.add(client.id); lateSet.add(client.id); }
     }
     return { autoLateClients: lateSet, noCareLevelClients: noLevel };
-  }, [insuranceRecords, clients, billingMonth]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- densouCertOf は perOfficeMode だけに依存
+  }, [insuranceRecords, clients, billingMonth, perOfficeMode]);
 
   // 当月アクティブレンタルを取得
   const activeRentals = useMemo(() => {
@@ -899,7 +926,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     let kohiLoad: Awaited<ReturnType<typeof loadKohiForMonth>>;
     try {
       // 1,000 人分を 1 回の .in() に渡すと URL が長すぎて 400 になる → 150 人ずつ (lib/inChunks.ts)
-      kohiLoad = await loadKohiForMonth(tenantId, billingGroups.map((g) => g.client.id), monthStart, monthEnd);
+      kohiLoad = await loadKohiForMonth(tenantId, billingGroups.map((g) => g.client.id), monthStart, monthEnd, { officeId: currentOfficeId, perOfficeIds });
     } catch (e) {
       const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
       console.error("公費取得失敗:", msg);
@@ -1037,23 +1064,24 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       for (const w of amt.warnings) preWarnings.push(`${client.name}: ${w}`);
       if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
       const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
-      const careOffice = client.care_office_id
-        ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+      const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+        { insurerNumber: client.insurer_number, insuredNumber: client.insured_number }));
+      const careOffice = dc.careOfficeId
+        ? careOffices.find((co) => co.id === dc.careOfficeId) ?? null
         : null;
       rows.push({
         userName: client.name,
-        insurerNumber: client.insurer_number,
+        insurerNumber: dc.insurerNumber,
         // 2026-08-31 監査: `?? client.user_number` で**社内の利用者番号**にフォールバック
         //   していた。無関係な番号で請求/実績が立ち、しかも build.ts の
         //   `if (!insured) warnings.push(...)` が user_number で埋まって発火しない
         //   = 完全な silent failure。実測で insured_number が空の client は 1,047 名。
         //   空のまま渡して警告を出させる (返戻にはなるが、誤った番号で通るより良い)。
-        insuredNumber: client.insured_number ?? null,
+        insuredNumber: dc.insuredNumber,
         birthDate: client.birth_date,
         gender: client.gender,
-        // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
-        ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
-          { insurerNumber: client.insurer_number, insuredNumber: client.insured_number })),
+        // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (per_office は自事業所の認定行だけ。上の densouCertOf)
+        careLevel: dc.careLevel, certStart: dc.certStart, certEnd: dc.certEnd,
         careOfficeNumber: careOffice?.office_number ?? null,
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
         copayRate,
@@ -1302,7 +1330,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       // 期間・本人支払額つき (lib/fukuyoguKohiMonth.ts。150 人ずつ読む)
       let kohiLoad: Awaited<ReturnType<typeof loadKohiForMonth>>;
       try {
-        kohiLoad = await loadKohiForMonth(tenantId, clientIds, monthStart, monthEnd);
+        kohiLoad = await loadKohiForMonth(tenantId, clientIds, monthStart, monthEnd, { officeId: currentOfficeId, perOfficeIds });
       } catch (e) {
         const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
         console.error("公費取得失敗:", msg);
@@ -1381,23 +1409,24 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         for (const w of amt.warnings) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
         if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
         const { copayRate, totalCost, insuranceAmount } = amt;
-        const careOffice = client.care_office_id
-          ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+        const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+          { insurerNumber: client.insurer_number, insuredNumber: client.insured_number }));
+        const careOffice = dc.careOfficeId
+          ? careOffices.find((co) => co.id === dc.careOfficeId) ?? null
           : null;
         rows.push({
           userName: client.name,
-          insurerNumber: client.insurer_number,
+          insurerNumber: dc.insurerNumber,
           // 2026-08-31 監査: `?? client.user_number` で**社内の利用者番号**にフォールバック
           //   していた。無関係な番号で請求/実績が立ち、しかも build.ts の
           //   `if (!insured) warnings.push(...)` が user_number で埋まって発火しない
           //   = 完全な silent failure。実測で insured_number が空の client は 1,047 名。
           //   空のまま渡して警告を出させる (返戻にはなるが、誤った番号で通るより良い)。
-          insuredNumber: client.insured_number ?? null,
+          insuredNumber: dc.insuredNumber,
           birthDate: client.birth_date,
           gender: client.gender,
-          // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (clients の列は古いことがある。lib/kokuho-densou/cert-for-month.ts)
-          ...certFieldsForDensou(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
-          { insurerNumber: client.insurer_number, insuredNumber: client.insured_number })),
+          // ★ 要介護度・認定期間は 当月に有効な認定レコードを優先 (per_office は自事業所の認定行だけ。上の densouCertOf)
+          careLevel: dc.careLevel, certStart: dc.certStart, certEnd: dc.certEnd,
           careOfficeNumber: careOffice?.office_number ?? null,
         carePlanKubun: (careOffice as { plan_kubun?: string | null } | undefined)?.plan_kubun ?? null,
           copayRate,

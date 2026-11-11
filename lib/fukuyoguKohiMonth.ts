@@ -9,6 +9,7 @@
  *   - self_pay_amount 列が無ければ 列を外して読み直し、本人支払額 0 (従来どおり) として理由を返す
  *   - fukuyogu_kohi_month_mode が無ければ 全員「未選択」(既定の扱い) として理由を返す
  */
+import { rowsForOffice } from "@/lib/insurance/office-scope";
 import { supabase } from "./supabase";
 import { selectInChunks } from "./inChunks";
 import { isTableMissingError } from "./fukuyoguExceptions";
@@ -16,6 +17,7 @@ import { isKohiMonthMode, type FukuyoguKohi, type KohiMonthMode } from "./kokuho
 
 type KohiDbRow = {
   client_id: string;
+  office_id?: string | null;
   hohei_code: string | null;
   futan_sha_number: string | null;
   jukyu_sha_number: string | null;
@@ -44,10 +46,14 @@ export type KohiMonthLoad = {
  *   periods = 主の行と同じ (法別, 負担者番号) の行の期間すべて (9/1〜9/15 と 9/16〜9/30 のような分割をまとめる)。
  *   本人支払額 = それらの行の self_pay_amount の最大 (違う値があれば注意を出す)。
  */
-export async function loadKohiForMonth(tenantId: string, clientIds: string[], monthStart: string, monthEnd: string): Promise<KohiMonthLoad> {
+export async function loadKohiForMonth(
+  tenantId: string, clientIds: string[], monthStart: string, monthEnd: string,
+  /** 事業所別保険 (lib/insurance/office-scope.ts)。省略 = 絞らない */
+  scope?: { officeId: string | null | undefined; perOfficeIds: readonly string[] },
+): Promise<KohiMonthLoad> {
   const notices: string[] = [];
   const clientWarnings = new Map<string, string[]>();
-  const base = "client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end";
+  const base = "client_id, hohei_code, futan_sha_number, jukyu_sha_number, valid_start, valid_end, office_id";
   const run = (select: string) =>
     selectInChunks<KohiDbRow>(clientIds, (chunk) => supabase
       .from("client_public_expenses")
@@ -63,6 +69,7 @@ export async function loadKohiForMonth(tenantId: string, clientIds: string[], mo
     notices.push("公費の本人支払額の列 (client_public_expenses.self_pay_amount) が未適用です — migrations/fukuyogu_kohi_month_mode.sql を適用するまで、本人支払額 0 円 (公費対象の利用者負担を全額公費) で計算します");
     rows = await run(base);
   }
+  if (scope) rows = rowsForOffice(rows, scope.officeId, scope.perOfficeIds);
   const inMonth = rows.filter((k) => !!k.hohei_code && !(k.valid_start && k.valid_start > monthEnd) && !(k.valid_end && k.valid_end < monthStart));
   const byClientRows = new Map<string, KohiDbRow[]>();
   for (const k of inMonth) {
