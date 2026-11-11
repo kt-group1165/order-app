@@ -4098,11 +4098,15 @@ function ClientDetail({
               {assignmentOffices.length === 0 ? (
                 <p className="text-xs text-gray-400 text-center py-4">事業所が登録されていません</p>
               ) : assignmentOffices
-                // 他事業所は 利用中のところだけ出す (利用の無い事業所は並べない。2026-11-11)
-                .filter((o) => o.id === currentOfficeId || clientAssignments.some((a) => a.office_id === o.id && a.end_date === null))
+                // 他事業所は 利用がある (または過去にあった) ところだけ出す (2026-11-11)
+                .filter((o) => o.id === currentOfficeId || clientAssignments.some((a) => a.office_id === o.id))
                 .map((o) => {
                 const activeAssignment = clientAssignments.find((a) => a.office_id === o.id && a.end_date === null);
                 const isActive = !!activeAssignment;
+                // 過去の利用 (終了した割当)。新しい順
+                const pastAssignments = clientAssignments
+                  .filter((a) => a.office_id === o.id && a.end_date !== null)
+                  .sort((a, b) => (b.end_date ?? "").localeCompare(a.end_date ?? ""));
                 return (
                   <div key={o.id} className="flex items-center justify-between px-3 py-2.5">
                     <div className="flex items-center gap-2 min-w-0">
@@ -4111,6 +4115,14 @@ function ClientDetail({
                       {isActive && <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded shrink-0">利用中</span>}
                       {isActive && activeAssignment.start_date && (
                         <span className="text-[10px] text-gray-400 shrink-0">{activeAssignment.start_date}〜</span>
+                      )}
+                      {!isActive && pastAssignments.length > 0 && (
+                        <>
+                          <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded shrink-0">解約済</span>
+                          <span className="text-[10px] text-gray-400 truncate">
+                            {pastAssignments.map((a) => `${a.start_date ?? "?"}〜${a.end_date}`).join(" / ")}
+                          </span>
+                        </>
                       )}
                     </div>
                     {o.id === currentOfficeId ? (
