@@ -35,6 +35,10 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
   const [loading, setLoading] = useState(true);
   const [formClient, setFormClient] = useState<Client | null>(null);
   const [openRecord, setOpenRecord] = useState<MonitoringRecord | null>(null);
+  // 一覧の絞り込み・検索・並び替え (2026-11-11 user 依頼)
+  const [statusFilter, setStatusFilter] = useState<"all" | "overdue" | "due" | "done" | "upcoming">("all");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<"due" | "kana" | "address" | "level" | "last">("due");
 
   // eslint-disable-next-line react-hooks/immutability, react-hooks/exhaustive-deps -- TDZ: function declared below; useEffect callback runs post-render so safe at runtime
   useEffect(() => { loadData(); }, [tenantId, currentOfficeId, officeViewAll]);
@@ -154,11 +158,28 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
   }, [clients, clientItemsMap, rentalHistoryMap, monitoringRecords, selectedMonth]);
 
   const todayMonth = (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; })();
-  const overdue       = schedule.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth);
-  const dueThisMonth  = schedule.filter(s => s.nextDue === selectedMonth && !s.doneThisMonth);
-  const completedThisMonth = schedule.filter(s => s.doneThisMonth);
-  const upcoming      = schedule.filter(s => s.nextDue && s.nextDue > selectedMonth && !s.doneThisMonth)
-    .sort((a, b) => (a.nextDue ?? "").localeCompare(b.nextDue ?? ""));
+  // 検索 (名前・フリガナ・住所。空白は無視) と並び替え
+  const norm = (v: string | null | undefined) => (v ?? "").normalize("NFKC").replace(/\s/g, "").toLowerCase();
+  const q = norm(search);
+  const searched = q ? schedule.filter(s => norm(s.client.name).includes(q) || norm(s.client.furigana).includes(q) || norm(s.client.address).includes(q)) : schedule;
+  const LEVEL_ORDER = ["要支援1", "要支援2", "要介護1", "要介護2", "要介護3", "要介護4", "要介護5"];
+  const levelRank = (v: string | null) => { const i = LEVEL_ORDER.indexOf((v ?? "").normalize("NFKC")); return i < 0 ? 99 : i; };
+  type Row = (typeof schedule)[number];
+  const byKana = (a: Row, b: Row) => (a.client.furigana || a.client.name).normalize("NFKC").localeCompare((b.client.furigana || b.client.name).normalize("NFKC"), "ja");
+  const sorter = (a: Row, b: Row): number => {
+    switch (sortKey) {
+      case "kana": return byKana(a, b);
+      case "address": return (a.client.address ?? "￿").localeCompare(b.client.address ?? "￿", "ja") || byKana(a, b);
+      case "level": return levelRank(b.client.care_level) - levelRank(a.client.care_level) || byKana(a, b);
+      case "last": return (a.lastRecord?.visit_date ?? a.lastRecord?.target_month ?? "").localeCompare(b.lastRecord?.visit_date ?? b.lastRecord?.target_month ?? "") || byKana(a, b);
+      default: return (a.nextDue ?? "9999").localeCompare(b.nextDue ?? "9999") || byKana(a, b);
+    }
+  };
+  const overdue       = searched.filter(s => s.nextDue && s.nextDue < selectedMonth && !s.doneThisMonth).sort(sorter);
+  const dueThisMonth  = searched.filter(s => s.nextDue === selectedMonth && !s.doneThisMonth).sort(sorter);
+  const completedThisMonth = searched.filter(s => s.doneThisMonth).sort(sorter);
+  const upcoming      = searched.filter(s => s.nextDue && s.nextDue > selectedMonth && !s.doneThisMonth).sort(sorter);
+  const show = (k: "overdue" | "due" | "done" | "upcoming") => statusFilter === "all" || statusFilter === k;
 
   const changeMonth = (delta: number) => {
     const [y, m] = selectedMonth.split("-").map(Number);
@@ -189,8 +210,8 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
     );
   }
 
-  const RowCard = ({ client, nextDue, rec, color, onRecord }: {
-    client: Client; nextDue?: string | null; rec?: MonitoringRecord | null;
+  const RowCard = ({ client, nextDue, rec, last, color, onRecord }: {
+    client: Client; nextDue?: string | null; rec?: MonitoringRecord | null; last?: MonitoringRecord | null;
     color: "red" | "amber" | "emerald" | "gray"; onRecord?: () => void;
   }) => {
     const bg = color === "red" ? "bg-red-50 border-red-100" : color === "amber" ? "bg-amber-50 border-amber-100" : color === "emerald" ? "bg-emerald-50 border-emerald-100" : "bg-white border-gray-100";
@@ -211,6 +232,10 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
           {color === "emerald" && nextDue && (
             <span className="text-xs text-emerald-600 shrink-0">次回:{nextDue.replace("-", "年")}月</span>
           )}
+          {color !== "emerald" && (
+            <span className="text-xs text-gray-400 shrink-0">前回:{last?.visit_date ?? (last?.target_month ? `${last.target_month.replace("-", "年")}月` : "なし")}</span>
+          )}
+          {client.address && <span className="text-xs text-gray-400 truncate min-w-0 hidden md:inline">{client.address}</span>}
         </div>
         {onRecord ? (
           <button onClick={onRecord}
@@ -247,6 +272,36 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
           <span className="text-emerald-600 font-medium">完了 {completedThisMonth.length}名</span>
           <span className="text-gray-400">今後 {upcoming.length}名</span>
         </div>
+        {/* 絞り込み・検索・並び替え */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            {([
+              ["all", `すべて ${overdue.length + dueThisMonth.length + completedThisMonth.length + upcoming.length}`],
+              ["overdue", `期限超過 ${overdue.length}`],
+              ["due", `今月対象 ${dueThisMonth.length}`],
+              ["done", `完了 ${completedThisMonth.length}`],
+              ["upcoming", `今後 ${upcoming.length}`],
+            ] as const).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setStatusFilter(k)} aria-pressed={statusFilter === k}
+                className={`px-3 py-1.5 border-r last:border-r-0 border-gray-200 ${statusFilter === k ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="名前・フリガナ・住所で検索"
+            className="flex-1 min-w-[12rem] border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-emerald-400" />
+          <label className="flex items-center gap-1 text-sm text-gray-600">
+            並び替え
+            <select value={sortKey} onChange={e => setSortKey(e.target.value as typeof sortKey)}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white outline-none focus:border-emerald-400">
+              <option value="due">予定月順</option>
+              <option value="kana">名前 (50音順)</option>
+              <option value="address">住所</option>
+              <option value="level">要介護度 (重い順)</option>
+              <option value="last">前回の記録日 (古い順)</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {loading ? (
@@ -257,41 +312,43 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
         <p className="text-sm text-gray-400 text-center py-16">レンタル中の利用者がいません</p>
       ) : (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {overdue.length > 0 && (
+          {show("overdue") && overdue.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-red-500 mb-2">期限超過</h3>
+              <h3 className="text-xs font-semibold text-red-500 mb-2">期限超過 ({overdue.length}名)</h3>
               <div className="space-y-1">
-                {overdue.map(({ client, nextDue }) => (
-                  <RowCard key={client.id} client={client} nextDue={nextDue} color="red"
+                {overdue.map(({ client, nextDue, lastRecord }) => (
+                  <RowCard key={client.id} client={client} nextDue={nextDue} last={lastRecord} color="red"
                     onRecord={() => setFormClient(client)} />
                 ))}
               </div>
             </section>
           )}
 
+          {(show("due") || show("done")) && (
           <section>
             <h3 className="text-xs font-semibold text-amber-600 mb-2">
               {selectedMonth.replace("-", "年")}月の対象者
-              {dueThisMonth.length === 0 && <span className="ml-2 font-normal text-gray-400">（なし）</span>}
+              {(show("due") ? dueThisMonth.length : 0) + (show("done") ? completedThisMonth.length : 0) === 0 && <span className="ml-2 font-normal text-gray-400">（なし）</span>}
             </h3>
             <div className="space-y-1">
-              {dueThisMonth.map(({ client, nextDue }) => (
-                <RowCard key={client.id} client={client} nextDue={nextDue} color="amber"
+              {show("due") && dueThisMonth.map(({ client, nextDue, lastRecord }) => (
+                <RowCard key={client.id} client={client} nextDue={nextDue} last={lastRecord} color="amber"
                   onRecord={() => setFormClient(client)} />
               ))}
-              {completedThisMonth.map(({ client, doneThisMonth: rec, nextDue }) => (
+              {show("done") && completedThisMonth.map(({ client, doneThisMonth: rec, nextDue }) => (
                 <RowCard key={client.id} client={client} rec={rec} nextDue={nextDue} color="emerald"
                   onRecord={() => { setOpenRecord(rec ?? null); setFormClient(client); }} />
               ))}
             </div>
           </section>
+          )}
 
-          {upcoming.length > 0 && (
+          {show("upcoming") && upcoming.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-gray-500 mb-2">今後の予定</h3>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">今後の予定 ({upcoming.length}名)</h3>
               <div className="space-y-1">
-                {upcoming.map(({ client, nextDue }) => (
-                  <RowCard key={client.id} client={client} nextDue={nextDue} color="gray"
+                {upcoming.map(({ client, nextDue, lastRecord }) => (
+                  <RowCard key={client.id} client={client} nextDue={nextDue} last={lastRecord} color="gray"
                     onRecord={() => setFormClient(client)} />
                 ))}
               </div>
