@@ -85,20 +85,21 @@ import { getUnreadCount } from "@/lib/notifications";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "overtime" | "attendance" | "renovation" | "notifications" | "settings";
+type Tab = "home" | "orders" | "equipment" | "clients" | "client-usage" | "monitoring" | "meeting-notes" | "demo-units" | "billing" | "documents" | "doc-tasks" | "staff" | "overtime" | "attendance" | "renovation" | "notifications" | "settings";
 
 // ホーム(メニュー一覧)画面
 function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: (t: Tab) => void }) {
   // メニューが増えたので大項目で分類する (2026-11-11 user 依頼)
   type Item = { id: Tab; icon: React.ElementType; label: string; desc: string };
   const groups: { title: string; items: Item[] }[] = [
-    { title: "利用者・レンタル", items: [
-      { id: "clients", icon: Users, label: "利用者別", desc: "利用者ごとの情報・履歴" },
+    { title: "発注", items: [
       { id: "orders", icon: ClipboardList, label: "発注管理", desc: "福祉用具の発注・納品・レンタル" },
       { id: "demo-units", icon: Package, label: "デモ機管理", desc: "特定福祉用具のデモ貸出状況" },
       { id: "renovation", icon: Hammer, label: "住宅改修", desc: "訪問〜役所提出までの進行状況・粗利集計" },
     ] },
-    { title: "書類・記録", items: [
+    { title: "利用者", items: [
+      { id: "clients", icon: Users, label: "利用者管理", desc: "基本情報・介護保険・公費・口座の閲覧と編集" },
+      { id: "client-usage", icon: Package, label: "利用状況", desc: "使っている用具・月別の提供票と実績・履歴" },
       { id: "documents", icon: FileText, label: "書類", desc: "利用者の書類管理" },
       { id: "doc-tasks", icon: FileWarning, label: "書類タスク", desc: "期限・不足書類の管理" },
       { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
@@ -316,9 +317,10 @@ export default function TenantPage({
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === "home" && <HomeMenu tenantName={tenantName} onNavigate={setActiveTab} />}
-        {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("clients"); }} />}
+        {activeTab === "orders" && <OrdersTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onDirtyChange={setOrdersDirty} onSwitchToClient={(clientId) => { setClientTabTarget(clientId); setActiveTab("client-usage"); }} />}
         {activeTab === "equipment" && <EquipmentTab tenantId={tenantId} />}
-        {activeTab === "clients" && <ClientsTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} initialKeidoGroup={clientTabKeidoGroup} onClearInitialClient={() => { setClientTabTarget(null); setClientTabKeidoGroup(null); }} />}
+        {activeTab === "client-usage" && <ClientsTab key="usage" mode="usage" tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} onClearInitialClient={() => { setClientTabTarget(null); setClientTabKeidoGroup(null); }} />}
+        {activeTab === "clients" && <ClientsTab key="manage" mode="manage" tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOfficeViewAllChange={handleOfficeViewModeChange} initialClientId={clientTabTarget} initialKeidoGroup={clientTabKeidoGroup} onClearInitialClient={() => { setClientTabTarget(null); setClientTabKeidoGroup(null); }} />}
         {activeTab === "monitoring" && <MonitoringTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} />}
         {activeTab === "doc-tasks" && <DocTasksTab tenantId={tenantId} currentOfficeId={currentOfficeId} officeViewAll={officeViewAll} onOpenDocuments={(clientId, docTaskId, expectedDocType) => { setDocsTabTarget(clientId ? { clientId, docTaskId, expectedDocType } : null); setActiveTab("documents"); }} />}
         {activeTab === "billing" && <BillingTab tenantId={tenantId} currentOfficeId={currentOfficeId} onOpenExceptionGrant={(clientId, group) => { setClientTabTarget(clientId); setClientTabKeidoGroup(group); setActiveTab("clients"); }} />}
@@ -340,7 +342,8 @@ export default function TenantPage({
             { id: "orders", icon: ClipboardList, label: "発注管理" },
             { id: "documents", icon: FileText, label: "書類" },
             { id: "doc-tasks", icon: FileWarning, label: "書類タスク" },
-            { id: "clients", icon: Users, label: "利用者別" },
+            { id: "clients", icon: Users, label: "利用者管理" },
+            { id: "client-usage", icon: Package, label: "利用状況" },
             { id: "staff", icon: Users, label: "職員" },
             { id: "monitoring", icon: ClipboardCheck, label: "モニタリング" },
             { id: "billing", icon: CreditCard, label: "請求" },

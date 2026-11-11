@@ -39,7 +39,7 @@ import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
 
-export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, initialKeidoGroup, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; initialKeidoGroup?: string | null; onClearInitialClient?: () => void }) {
+export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, initialKeidoGroup, onClearInitialClient }: { /** manage=利用者管理 (基本情報・保険・公費・口座) / usage=利用状況 (使っている用具・実績) */ mode?: "manage" | "usage"; tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; initialKeidoGroup?: string | null; onClearInitialClient?: () => void }) {
   const perOfficeIds = usePerOfficeIds(); // 事業所別保険 (lib/insurance/office-scope.ts)
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -449,6 +449,7 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
         currentOfficeId={currentOfficeId}
         initialViewMode={selectedClientInitialViewMode}
         initialKeidoGroup={selectedClientInitialKeidoGroup}
+        mode={mode}
         hospitalizations={hospitalizations}
         onBack={() => { setSelectedClient(null); setSelectedClientInitialViewMode(undefined); setSelectedClientInitialKeidoGroup(null); }}
       />
@@ -2871,9 +2872,11 @@ function ClientDetail({
   currentOfficeId,
   initialViewMode,
   initialKeidoGroup,
+  mode = "manage",
   hospitalizations,
   onBack,
 }: {
+  mode?: "manage" | "usage";
   client: Client;
   allOrderItems: OrderItem[];
   equipment: Equipment[];
@@ -2892,7 +2895,7 @@ function ClientDetail({
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "bank" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : "usage");
+  const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "bank" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : mode === "usage" ? "usage" : "basic");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   // 月別の表示: 一覧 / 提供票 (日ごとの貸与日。ほのぼのの提供票と同じ見え方) (2026-11-11)
@@ -3750,7 +3753,9 @@ function ClientDetail({
 
       {/* トップタブ */}
       <div className="bg-white border-b border-gray-200 px-4 flex gap-0 shrink-0">
-        {([["usage","利用状況"],["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"],["bank","口座"],["keido","福祉用具 例外給付"]] as [typeof topTab, string][]).map(([t, label]) => (
+        {((mode === "usage"
+          ? [["usage","利用状況"]]
+          : [["basic","基本情報"],["insurance","介護保険"],["kouhi","公費"],["bank","口座"],["keido","福祉用具 例外給付"]]) as [typeof topTab, string][]).map(([t, label]) => (
           <button key={t} onClick={() => setTopTab(t)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${topTab === t ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>
             {label}
