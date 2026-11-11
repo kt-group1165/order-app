@@ -420,6 +420,10 @@ export type ClientPublicExpense = {
   id: string;
   tenant_id: string;
   client_id: string;
+  /** 行の持ち主の事業所 (事業所別保険。NULL = 事業所未定) */
+  office_id?: string | null;
+  copied_from_id?: string | null;
+  office_source?: string | null;
   hohei_code: string | null;       // 法制コード
   futan_sha_number: string | null; // 負担者番号
   jukyu_sha_number: string | null; // 受給者番号

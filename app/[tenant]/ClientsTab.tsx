@@ -33,10 +33,12 @@ import {
   type Office, type ClientOfficeAssignment,
 } from "@/lib/offices";
 import { getMaxUserNumber } from "@kt/shared/user-number";
+import { usePerOfficeIds, isPerOffice, ownerKind, copyRowForOffice } from "@/lib/insurance/office-scope";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
 
 export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, onOfficeViewAllChange, initialClientId, initialKeidoGroup, onClearInitialClient }: { tenantId: string; currentOfficeId: string | null; officeViewAll: boolean; onOfficeViewAllChange?: (value: boolean) => void; initialClientId?: string | null; initialKeidoGroup?: string | null; onClearInitialClient?: () => void }) {
+  const perOfficeIds = usePerOfficeIds(); // 事業所別保険 (lib/insurance/office-scope.ts)
   const [clients, setClients] = useState<Client[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1342,11 +1344,14 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
             const clientId = clientIdByUserNumber.get(r.user_number)!;
             const { data: existingRecords } = await supabase
               .from("client_insurance_records")
-              .select("id, effective_date")
+              .select("id, effective_date, office_id")
               .eq("tenant_id", tenantId)
               .eq("client_id", clientId);
             const existingByDate = new Map<string, string>();
-            for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null }>) {
+            // ★ 事業所別保険: per_office の事業所では 自事業所の行だけを上書き対象にする (他事業所の行は触らない)
+            const perOfficeHere = isPerOffice(currentOfficeId, perOfficeIds);
+            for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null; office_id: string | null }>) {
+              if (perOfficeHere && rec.office_id !== currentOfficeId) continue;
               existingByDate.set(rec.effective_date ?? "", rec.id);
             }
             for (const ins of r.insurance) {
@@ -1363,11 +1368,13 @@ export default function ClientsTab({ tenantId, currentOfficeId, officeViewAll, o
                 care_manager_id: insManagerId,
               };
               const exId = existingByDate.get(effectiveDate ?? "");
+              // 新しく作る行は 入力した画面の事業所の行 (事業所別保険。事業所未選択なら NULL = 事業所未定)
+              const insertPayload = { ...payload, office_id: currentOfficeId ?? null, office_source: currentOfficeId ? "manual" : null };
               if (exId) {
                 const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
                 if (!upErr) insuranceAdded++;
               } else {
-                const { error: insErr } = await supabase.from("client_insurance_records").insert(payload);
+                const { error: insErr } = await supabase.from("client_insurance_records").insert(insertPayload);
                 if (!insErr) {
                   insuranceAdded++;
                   existingByDate.set(effectiveDate ?? "", "newly-inserted");
@@ -3034,6 +3041,9 @@ function ClientDetail({
     memo: "", // client_memos から流し込む
   });
   // 保険情報（複数レコード）
+  // ★ 事業所別保険: per_office の事業所では 自事業所の行だけが請求に使われる。他事業所・事業所未定の行は参考 (複写できる)
+  const perOfficeIds = usePerOfficeIds();
+  const perOfficeHere = isPerOffice(currentOfficeId, perOfficeIds);
   const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
   const [selectedInsuranceId, setSelectedInsuranceId] = useState<string | null>(null);
   const [insuranceForm, setInsuranceForm] = useState<Omit<ClientInsuranceRecord, "id" | "tenant_id" | "client_id" | "created_at"> | null>(null);
@@ -3382,7 +3392,8 @@ function ClientDetail({
           return;
         }
       } else {
-        const { error } = await supabase.from("client_insurance_records").insert({ ...insuranceForm, tenant_id: tenantId, client_id: client.id });
+        const { error } = await supabase.from("client_insurance_records").insert({ ...insuranceForm, tenant_id: tenantId, client_id: client.id,
+          office_id: currentOfficeId ?? null, office_source: currentOfficeId ? "manual" : null });
         if (error) {
           console.warn("client_insurance_records insert failed:", error.message);
           alert(`保険情報の登録に失敗しました: ${error.message}`);
@@ -3397,7 +3408,21 @@ function ClientDetail({
     }
   };
 
+  /** [複写] 他事業所・事業所未定の認定を 自事業所の行として作る (元が後で直っても自動では変わらない) */
+  const handleCopyInsuranceRecord = async (rec: ClientInsuranceRecord) => {
+    if (!currentOfficeId) { alert("事業所を選んでから複写してください。"); return; }
+    if (!confirm(`この認定 (${rec.care_level ?? "要介護度なし"} ${rec.certification_start_date ?? ""}〜${rec.certification_end_date ?? ""}) を この事業所の行として複写しますか？\n複写後は別の行になり、元の行が直っても自動では変わりません。`)) return;
+    const { error } = await supabase.from("client_insurance_records").insert(copyRowForOffice(rec, currentOfficeId));
+    if (error) { console.error("認定の複写失敗:", error.message); alert(`複写に失敗しました: ${error.message}`); return; }
+    await loadItems();
+  };
+
   const handleDeleteInsuranceRecord = async (id: string) => {
+    const target = insuranceRecords.find((r) => r.id === id);
+    if (perOfficeHere && target && target.office_id !== currentOfficeId) {
+      alert("他の事業所 (または事業所未定) の行は この画面から削除できません。この事業所の請求には使われていません。");
+      return;
+    }
     if (!confirm("この保険情報を削除しますか？")) return;
     const { error } = await supabase.from("client_insurance_records").delete().eq("id", id);
     if (error) { alert(`保険情報の削除に失敗しました: ${error.message}`); return; }
@@ -4506,7 +4531,16 @@ function ClientDetail({
                             ? `${rec.certification_start_date} 〜 ${rec.certification_end_date}`
                             : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {perOfficeHere && ownerKind(rec.office_id, currentOfficeId) !== "own" && (
+                            <>
+                              <span className="mr-1.5 px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500" title="この事業所の請求には使われません (参考)">
+                                {ownerKind(rec.office_id, currentOfficeId) === "none" ? "事業所未定" : "他事業所"}
+                              </span>
+                              <button onClick={(e) => { e.stopPropagation(); handleCopyInsuranceRecord(rec); }}
+                                className="mr-1.5 text-[10px] text-emerald-700 border border-emerald-300 px-1.5 py-0.5 rounded hover:bg-emerald-50">複写</button>
+                            </>
+                          )}
                           <button onClick={(e) => { e.stopPropagation(); handleDeleteInsuranceRecord(rec.id); }} className="text-red-300 hover:text-red-500">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                           </button>
@@ -4898,6 +4932,7 @@ function ClientDetail({
             setPeSaving(true);
             const { data, error } = await supabase.from("client_public_expenses").insert({
               tenant_id: tenantId, client_id: client.id, ...pePayload(pf),
+              office_id: currentOfficeId ?? null, office_source: currentOfficeId ? "manual" : null,
             }).select().single();
             setPeSaving(false);
             if (error) { console.error("公費情報の登録失敗:", error.message); alert(`公費情報の登録に失敗しました: ${peErrorText(error.message)}`); return; }
@@ -4922,6 +4957,7 @@ function ClientDetail({
             setPeForm(null);
           };
           const startEdit = (rec: import("@/lib/supabase").ClientPublicExpense) => {
+            if (isOthersPe(rec.id)) { alert("他の事業所 (または事業所未定) の行は編集できません。必要なら [複写] してから この事業所の行を直してください。"); return; }
             setSelectedPeId(rec.id);
             setEditingPeId(rec.id);
             setPeForm({
@@ -4933,7 +4969,19 @@ function ClientDetail({
               self_pay_amount: rec.self_pay_amount ?? null,
             });
           };
+          const isOthersPe = (id: string) => {
+            const r = publicExpenses.find((x) => x.id === id);
+            return perOfficeHere && !!r && r.office_id !== currentOfficeId;
+          };
+          const copyPe = async (rec: import("@/lib/supabase").ClientPublicExpense) => {
+            if (!currentOfficeId) { alert("事業所を選んでから複写してください。"); return; }
+            if (!confirm("この公費を この事業所の行として複写しますか？\n複写後は別の行になり、元の行が直っても自動では変わりません。")) return;
+            const { data, error } = await supabase.from("client_public_expenses").insert(copyRowForOffice(rec, currentOfficeId)).select().single();
+            if (error) { console.error("公費の複写失敗:", error.message); alert(`複写に失敗しました: ${error.message}`); return; }
+            if (data) setPublicExpenses(prev => [data as import("@/lib/supabase").ClientPublicExpense, ...prev]);
+          };
           const deleteRec = async (id: string) => {
+            if (isOthersPe(id)) { alert("他の事業所 (または事業所未定) の行は この画面から削除できません。この事業所の請求には使われていません。"); return; }
             if (!confirm("この公費情報を削除しますか？")) return;
             const { error } = await supabase.from("client_public_expenses").delete().eq("id", id);
             if (error) { alert(`公費情報の削除に失敗しました: ${error.message}`); return; }
@@ -4978,7 +5026,16 @@ function ClientDetail({
                             <td className="px-3 py-2 text-gray-600">{rec.valid_start ?? "—"}</td>
                             <td className="px-3 py-2 text-gray-600">{rec.valid_end ?? "—"}</td>
                             <td className="px-3 py-2 text-gray-600">{rec.confirmed_date ?? "—"}</td>
-                            <td className="px-3 py-2 flex gap-1.5 justify-end">
+                            <td className="px-3 py-2 flex gap-1.5 justify-end items-center">
+                              {perOfficeHere && ownerKind(rec.office_id, currentOfficeId) !== "own" && (
+                                <>
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500" title="この事業所の請求には使われません (参考)">
+                                    {ownerKind(rec.office_id, currentOfficeId) === "none" ? "事業所未定" : "他事業所"}
+                                  </span>
+                                  <button onClick={e => { e.stopPropagation(); copyPe(rec); }}
+                                    className="text-xs text-emerald-700 border border-emerald-300 px-2 py-0.5 rounded hover:bg-emerald-50">複写</button>
+                                </>
+                              )}
                               <button onClick={e => { e.stopPropagation(); startEdit(rec); }}
                                 className="text-xs text-blue-600 border border-blue-200 px-2 py-0.5 rounded hover:bg-blue-50">編集</button>
                               <button onClick={e => { e.stopPropagation(); deleteRec(rec.id); }}
