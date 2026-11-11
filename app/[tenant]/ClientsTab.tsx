@@ -2025,7 +2025,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
 
       <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
         {(viewMode === "list" || viewMode === "insurance") && (
-          <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
+          <div className="flex-1 max-w-xl flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
             <Search size={14} className="text-gray-400 shrink-0" />
             <input
               value={search}
@@ -2285,7 +2285,8 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
             {clients.length === 0 ? "利用者データがありません" : "該当なし"}
           </p>
         ) : (
-          <ul className="divide-y divide-gray-100 min-w-[480px]">
+          /* 広い画面で 名前 と ボタン が両端に離れないよう、一覧は最大幅で中央に寄せる (2026-11-11) */
+          <ul className="divide-y divide-gray-100 min-w-[480px] max-w-6xl mx-auto border-x border-gray-100">
             {filtered.map((client) => {
               const clientOrders = orders.filter(o => o.client_id === client.id);
               const clientOrderIds = new Set(clientOrders.map(o => o.id));
@@ -2311,11 +2312,11 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
                     className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1">
-                      <div className={`w-20 shrink-0 flex items-center gap-0.5 text-sm font-medium ${isHospitalized ? "text-red-700" : "text-gray-800"}`}>
+                      <div className={`w-28 shrink-0 flex items-center gap-0.5 text-sm font-medium ${isHospitalized ? "text-red-700" : "text-gray-800"}`} title={client.name}>
                         <span className="truncate min-w-0">{client.name}</span>
                         {client.is_provisional && <span className="shrink-0 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded">仮</span>}
                       </div>
-                      <span className="w-24 shrink-0 text-xs text-gray-400 truncate">{client.furigana ?? ""}</span>
+                      <span className="w-28 shrink-0 text-xs text-gray-400 truncate" title={client.furigana ?? ""}>{client.furigana ?? ""}</span>
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
                           <span className="text-xs px-1 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">介護</span>
@@ -2349,7 +2350,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
                           </span>
                         );
                       })()}
-                      <span className="flex-1 min-w-0 text-xs text-gray-400 truncate">{client.address ?? ""}</span>
+                      <span className="flex-1 min-w-0 text-xs text-gray-400 truncate" title={client.address ?? ""}>{client.address ?? ""}</span>
                     </div>
                     <ChevronRight size={16} className="text-gray-300 shrink-0" />
                   </button>
@@ -3824,7 +3825,7 @@ function ClientDetail({
         </div>
       ) : topTab === "basic" ? (
         /* 基本情報タブ */
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto py-4 px-[max(1rem,calc((100%-72rem)/2))]">
           <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
@@ -4061,7 +4062,7 @@ function ClientDetail({
           </div>
         </div>
       ) : topTab === "usage" && viewMode === "current" ? (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto py-4 px-[max(1rem,calc((100%-72rem)/2))] space-y-4">
           {/* Summary */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-emerald-50 rounded-xl p-3 text-center">
@@ -4373,7 +4374,7 @@ function ClientDetail({
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto py-4 px-[max(1rem,calc((100%-72rem)/2))] space-y-4">
             {monthlyItems.length > 0 && (
               <div className="flex justify-end gap-2">
                 {sortToggle()}
@@ -4451,7 +4452,7 @@ function ClientDetail({
         </div>
       ) : viewMode === "docs" ? (
         /* 書類タブ */
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto py-4 px-[max(1rem,calc((100%-72rem)/2))] space-y-3">
           {/* 作成ボタン */}
           <div className="flex gap-2">
             <button
@@ -4887,7 +4888,7 @@ function ClientDetail({
         })()
       ) : viewMode === "rental_history" ? (
         /* レンタル履歴タブ */
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto py-4 px-[max(1rem,calc((100%-72rem)/2))] space-y-4">
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-gray-500">レンタル履歴</h3>

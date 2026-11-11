@@ -986,7 +986,8 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
         {clientGroups.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-16">発注データがありません</p>
         ) : (
-          <div>
+          /* 広い画面で 利用者名 と 件数・ボタン が両端に離れないよう最大幅で中央に寄せる (2026-11-11) */
+          <div className="max-w-6xl mx-auto bg-white border-x border-gray-100 min-h-full">
             {clientGroups.map((group) => {
               const hasVisible = group.orders.some((o) =>
                 showEnded ? true : o.items.some((i) => i.status !== "cancelled" && i.status !== "terminated")
