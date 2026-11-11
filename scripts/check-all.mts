@@ -48,6 +48,7 @@ const CHECKS: Check[] = [
   //   ★ 実データは 0 件だが ★ 壊れたデータは 増えてはいけないので ★ 0 を維持する検査。
   { name: "order-items-integrity", script: "check:order-items-integrity", why: "★ order_items の壊れたデータ 5 種 (期間の逆転・開始日null・未来すぎ・価格0・数量0)" },
   // ★ 2026-11-09 新設 (FY-H)。負担割合を月ごとに解決する純関数 (order/kaigo の 2 ファイル同一・固定データ・負のコントロール)。
+  { name: "insurance-office", script: "check:insurance-office", why: "★ 事業所別保険: per_office は自事業所の認定・公費だけ / shared は per_office の行を外す (純関数・負のコントロール付き。実データの「自事業所の行なし」は一覧のみ)" },
   { name: "cert-month-parity", script: "check:cert-month-parity", why: "★ 負担割合の月ごとの解決 (負担割合証の期間・認定行への fallback・kaigo の copay 置き換え。純関数・DB なし)" },
   // ★ 2026-11-09 新設 (FY-H)。表が未作成の間は ほのぼの CSV をメモリ上で見込みとして数える (出どころ=csv)。
   { name: "futan-period", script: "check:futan-period", why: "★ 負担割合証の期間と月ごとの給付率 (食い違い・証なしで請求。基準値方式)", slow: true,

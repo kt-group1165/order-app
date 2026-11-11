@@ -28,6 +28,7 @@
     "check:all": "tsx scripts/check-all.mts",
     "check:cert-month-parity": "tsx scripts/cert-month-parity.mts",
     "check:futan-period": "tsx scripts/futan-period-check.mts",
+    "check:insurance-office": "tsx scripts/insurance-office-check.mts",
     "check:renovation-docs": "tsx scripts/renovation-estimate-verify.mts",
     "check:doc-checklist": "tsx scripts/doc-checklist-verify.mts",
     "check:rental-report": "tsx scripts/rental-report-verify.mts",
