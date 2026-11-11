@@ -16,7 +16,7 @@ import { groupPausesByItem } from "@/lib/fukuyoguPauses";
 type Kind = "介護" | "自費" | "特価自費" | null;
 
 export default function RentalDayGrid({
-  clientId, items, yearMonth, kindOf, priceOf, nameOf,
+  clientId, items, yearMonth, kindOf, priceOf, nameOf, categoryOf,
 }: {
   clientId: string;
   items: OrderItem[];
@@ -24,6 +24,8 @@ export default function RentalDayGrid({
   kindOf: (item: OrderItem) => Kind;
   priceOf: (item: OrderItem) => number;
   nameOf: (item: OrderItem) => string;
+  /** 種目 (介護保険の用具に札で出す) */
+  categoryOf?: (item: OrderItem) => string | null;
 }) {
   const [hosp, setHosp] = useState<DateRange[]>([]);
   const [pauses, setPauses] = useState<Map<string, DateRange[]>>(new Map());
@@ -125,6 +127,7 @@ export default function RentalDayGrid({
                   <td className={`sticky left-0 z-10 bg-white border border-gray-300 px-1.5 py-0.5 border-l-4 ${self ? "border-l-orange-400" : "border-l-emerald-400"}`}>
                     <div className="flex items-center gap-1 min-w-0 w-[14rem]">
                       {self && <span className="text-[9px] px-1 rounded bg-orange-100 text-orange-700 shrink-0">{k}</span>}
+                      {!self && categoryOf?.(item) && <span className="text-[9px] px-1 rounded border border-gray-300 bg-gray-50 text-gray-600 shrink-0">{categoryOf(item)}</span>}
                       <span className="truncate" title={nameOf(item)}>{nameOf(item)}</span>
                     </div>
                   </td>

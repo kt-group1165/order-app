@@ -3375,6 +3375,7 @@ function ClientDetail({
     });
   })();
 
+  const categoryOf = (i: OrderItem) => equipment.find((e) => e.product_code === i.product_code)?.category?.trim() || null;
   const categoryRank = (i: OrderItem) => {
     const cat = equipment.find((e) => e.product_code === i.product_code)?.category ?? "";
     const code = FUKUYOGU_SERVICE_CODES[cat.normalize("NFKC").trim()];
@@ -3521,9 +3522,15 @@ function ClientDetail({
         </td>
         {/* 用具名 */}
         <td className="py-2 pr-2 max-w-0">
-          <span className={`block truncate text-sm font-medium ${dim ? "text-gray-600" : "text-gray-800"}`}>
-            {equipName(item.product_code)}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            {/* 介護保険の用具は 種目 (手すり・特殊寝台 等) の札を付ける (2026-11-11) */}
+            {!selfPay && categoryOf(item) && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 bg-gray-50 text-gray-600 whitespace-nowrap shrink-0">{categoryOf(item)}</span>
+            )}
+            <span className={`truncate text-sm font-medium ${dim ? "text-gray-600" : "text-gray-800"}`}>
+              {equipName(item.product_code)}
+            </span>
+          </div>
         </td>
         {/* レンタル価格 */}
         <td className="py-2 pr-3 w-[7rem] whitespace-nowrap text-right">
@@ -4386,6 +4393,7 @@ function ClientDetail({
                 kindOf={rentalKind}
                 priceOf={(i) => getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0}
                 nameOf={(i) => equipment.find((e) => e.product_code === i.product_code)?.name ?? i.product_code}
+                categoryOf={categoryOf}
               />
             ) : (() => {
               const activeMonthly = sortedMonthlyItems.filter((i) => i.status !== "terminated");
