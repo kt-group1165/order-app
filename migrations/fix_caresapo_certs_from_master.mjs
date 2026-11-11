@@ -53,6 +53,7 @@ const MASTER_FILES = [
 const FROM_END = "2026-04-01";
 const INCLUDE_SHARED = argv.includes("--include-shared");
 const WITH_END = argv.includes("--with-end-date");
+const EXTEND_END = argv.includes("--extend-end-only");
 let EXEC_LOCK = null;
 
 const parseLine = (l) => (l.match(/("([^"]*)"|[^,]*)(,|$)/g) || []).map((s) => s.replace(/,$/, "").replace(/^"|"$/g, ""));
@@ -94,7 +95,14 @@ function loadMaster() {
 
 async function plan(sb) {
   const master = loadMaster();
-  const clients = await selectAll(sb, "clients", "id,name,user_number", (q) => q.eq("tenant_id", TENANT).eq("office_id", CS).is("deleted_at", null));
+  const own = await selectAll(sb, "clients", "id,name,user_number", (q) => q.eq("tenant_id", TENANT).eq("office_id", CS).is("deleted_at", null));
+  // ★ 2026-11-11: --include-shared のときは clients.office_id が空/他でも ケアサポの割当がある人を含める (五位渕 和・松尾 光子・安田 八重子)
+  const clients = [...own];
+  if (INCLUDE_SHARED) {
+    const have = new Set(own.map((c) => c.id));
+    const asg = [...new Set((await selectAll(sb, "client_office_assignments", "id,client_id", (q) => q.eq("office_id", CS))).map((a) => a.client_id))].filter((id) => !have.has(id));
+    for (const c of chunks(asg, 150)) clients.push(...await selectAll(sb, "clients", "id,name,user_number", (q) => q.in("id", c).is("deleted_at", null)));
+  }
   const ids = clients.map((c) => c.id);
   const other = new Set();
   for (const c of chunks(ids, 150)) {
@@ -122,13 +130,15 @@ async function plan(sb) {
       notes.push(`  要介護度だけ違う (直さない): ${c.name} ${r.certification_start_date} DB ${r.care_level} / マスタ ${mk.level}`);
     }
     if (!patch) continue;
-    if (kind.startsWith("B") && !WITH_END) {
+    // --extend-end-only: B のうち 終了日を延ばすものだけ直す (縮めると請求の空白を作るが、延ばすのは安全)
+    if (kind.startsWith("B") && EXTEND_END && mk.end > r.certification_end_date) kind = "B 認定終了を延ばす";
+    else if (kind.startsWith("B") && !WITH_END) {
       notes.push(`  [B 認定終了・--with-end-date が無いので直さない] ${c.name} ${r.certification_start_date} ${r.certification_end_date} → ${mk.end}${other.has(r.client_id) ? " (共有)" : ""}`);
       continue;
     }
     const before = Object.fromEntries(Object.keys(patch).map((k) => [k, r[k] ?? null]));
     const op = { kind, client: c, rec: r, before, patch };
-    (other.has(r.client_id) && !(INCLUDE_SHARED && kind.startsWith("A")) ? shared : ops).push(op);
+    (other.has(r.client_id) && !(INCLUDE_SHARED && (kind.startsWith("A") || kind === "B 認定終了を延ばす")) ? shared : ops).push(op);
   }
   return { ops, shared, notes };
 }
