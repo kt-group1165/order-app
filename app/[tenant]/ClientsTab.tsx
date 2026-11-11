@@ -2886,6 +2886,8 @@ function ClientDetail({
 }) {
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
   const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
+  // 表示用: 発注の支払区分そのまま (特価自費 を区別するため。orderPaymentMap は帳票用に 2 値へ畳んでいる)
+  const [orderPaymentRaw, setOrderPaymentRaw] = useState<Record<string, string>>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3249,6 +3251,7 @@ function ClientDetail({
           else payMap[o.id] = "介護";
         });
         setOrderPaymentMap(payMap);
+        setOrderPaymentRaw(Object.fromEntries(ordersData.map((o: { id: string; payment_type: string }) => [o.id, o.payment_type])));
         // 第2バッチ：order_items 取得後に price_history も並列
         const { data: items } = await supabase.from("order_items").select("*").in("order_id", orderIds);
         const loaded = items ?? [];
@@ -3469,13 +3472,22 @@ function ClientDetail({
   };
 
   // 用具行共通（ステータス変更ボタン付き）- table行として使用
-  const ItemCard = ({ item, dim = false, priceOverride }: { item: OrderItem; dim?: boolean; priceOverride?: number }) => (
+  // レンタル中は 介護 / 自費 を見分けられるようにする (2026-11-11 user 依頼)。
+  // 支払区分は 明細 (order_items.payment_type) を優先し、無ければ 発注 (orders.payment_type)
+  const rentalKind = (item: OrderItem): "介護" | "自費" | "特価自費" | null => {
+    const pt = item.payment_type ?? orderPaymentRaw[item.order_id] ?? null;
+    return pt === "自費" || pt === "特価自費" || pt === "介護" ? pt : null;
+  };
+  const ItemCard = ({ item, dim = false, priceOverride }: { item: OrderItem; dim?: boolean; priceOverride?: number }) => {
+    const kind = item.status === "rental_started" ? rentalKind(item) : null;
+    const selfPay = kind === "自費" || kind === "特価自費";
+    return (
     <Fragment>
       <tr className={dim ? "opacity-75" : ""}>
-        {/* ステータス（左ボーダー付き） */}
-        <td className={`pl-2 py-2 w-[5.5rem] border-l-4 ${dim ? "border-gray-200" : "border-emerald-400"}`}>
-          <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${STATUS_COLOR[item.status]}`}>
-            {STATUS_LABEL[item.status]}
+        {/* ステータス（左ボーダー付き）。自費レンタルは橙で区別 */}
+        <td className={`pl-2 py-2 w-[6.5rem] border-l-4 ${dim ? "border-gray-200" : selfPay ? "border-orange-400" : "border-emerald-400"}`}>
+          <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${kind ? (selfPay ? "bg-orange-100 text-orange-700" : "bg-emerald-100 text-emerald-700") : STATUS_COLOR[item.status]}`}>
+            {kind ? (kind === "介護" ? "介護レンタル" : kind === "特価自費" ? "特価自費" : "自費レンタル") : STATUS_LABEL[item.status]}
           </span>
         </td>
         {/* 用具名 */}
@@ -3548,7 +3560,8 @@ function ClientDetail({
         </tr>
       )}
     </Fragment>
-  );
+    );
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -4289,7 +4302,11 @@ function ClientDetail({
               <p className="text-base font-semibold text-gray-800">
                 {yearMonth.replace("-", "年")}月
               </p>
-              <p className="text-xs text-gray-400">{monthlyItems.filter(i => i.status !== "terminated").length}点レンタル中</p>
+              <p className="text-xs text-gray-400">{(() => {
+                const act = monthlyItems.filter(i => i.status !== "terminated");
+                const self = act.filter(i => { const k = rentalKind(i); return k === "自費" || k === "特価自費"; }).length;
+                return self > 0 ? `${act.length}点レンタル中 (介護 ${act.length - self} / 自費 ${self})` : `${act.length}点レンタル中`;
+              })()}</p>
             </div>
             <button onClick={() => changeYearMonth(1)} className="p-2 hover:bg-gray-100 rounded-xl">
               <ChevronRight size={18} className="text-gray-500" />
