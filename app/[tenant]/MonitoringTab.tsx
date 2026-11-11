@@ -706,9 +706,25 @@ function MonitoringFormModal({
       });
   }, [client.id, tenantId]);
 
+  /** 問題の種類 (問題なし と排他)。チェックを付けると「問題なし」が外れ、全部外すと「問題なし」に戻る */
+  const ISSUE_FIELDS = ["has_malfunction", "has_deterioration", "needs_replacement", "has_usage_issue"] as const;
   const updateCheck = (idx: number, field: keyof MonitoringItemCheck, value: boolean) => {
-    setItemChecks(prev => prev.map((c, i) => i === idx ? { ...c, [field]: value } : c));
+    setItemChecks(prev => prev.map((c, i) => {
+      if (i !== idx) return c;
+      if (field === "no_issue") {
+        return value
+          ? { ...c, no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false, has_usage_issue: false }
+          : { ...c, no_issue: false };
+      }
+      const next = { ...c, [field]: value };
+      const anyIssue = ISSUE_FIELDS.some((f) => next[f]);
+      return { ...next, no_issue: !anyIssue };
+    }));
   };
+  const setAllNoIssue = () => setItemChecks(prev => prev.map(c => ({
+    ...c, no_issue: true, has_malfunction: false, has_deterioration: false, needs_replacement: false, has_usage_issue: false,
+  })));
+  const issueCount = itemChecks.filter(c => !c.no_issue).length;
 
   const handleSave = async () => {
     setSaving(true);
@@ -727,7 +743,12 @@ function MonitoringFormModal({
         goal_comment: goalComment || null,
         status: "completed",
       }).select().single();
-      if (error || !rec) { console.error(error); return; }
+      if (error || !rec) {
+        console.error("モニタリング記録の保存失敗:", error?.message);
+        alert(`保存に失敗しました: ${error?.message ?? "記録が返ってきませんでした"}`);
+        return;
+      }
+      const itemErrors: string[] = [];
       for (const check of itemChecks) {
         const { error: itemError } = await supabase.from("monitoring_items").insert({
           monitoring_id: rec.id,
@@ -743,8 +764,9 @@ function MonitoringFormModal({
           needs_replacement: check.needs_replacement,
           has_usage_issue: check.has_usage_issue,
         });
-        if (itemError) console.error("monitoring_items insert failed:", itemError.message);
+        if (itemError) { console.error("monitoring_items insert failed:", itemError.message); itemErrors.push(`${check.equipment_name}: ${itemError.message}`); }
       }
+      if (itemErrors.length) alert(`記録は保存しましたが、用具の確認 ${itemErrors.length} 件の保存に失敗しました:\n${itemErrors.join("\n")}`);
       setSavedId(rec.id);
       onSaved();
     } finally {
@@ -814,140 +836,164 @@ function MonitoringFormModal({
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 shrink-0">
-        <button onClick={onClose}><ChevronLeft size={20} className="text-gray-500" /></button>
-        <div className="flex-1">
-          <h2 className="font-semibold text-gray-800">モニタリング記録</h2>
-          <p className="text-xs text-gray-400">{client.name}　{client.care_level}</p>
+      <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 shrink-0">
+        <button onClick={onClose} className="p-1 -ml-1 rounded-lg hover:bg-gray-100" aria-label="戻る"><ChevronLeft size={22} className="text-gray-500" /></button>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-lg font-bold text-gray-800">モニタリング記録</h2>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
+            <span className="font-semibold text-gray-800">{client.name}</span>
+            {(insuranceRecord?.care_level ?? client.care_level) && (
+              <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">{insuranceRecord?.care_level ?? client.care_level}</span>
+            )}
+            {(insuranceRecord?.certification_start_date || insuranceRecord?.certification_end_date) && (
+              <span className="text-xs text-gray-500">認定 {insuranceRecord?.certification_start_date ?? ""}〜{insuranceRecord?.certification_end_date ?? ""}</span>
+            )}
+            {client.care_manager_org && <span className="text-xs text-gray-500">担当居宅 {client.care_manager_org}</span>}
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
         <div className="max-w-4xl mx-auto w-full space-y-4">
-        {/* 基本情報 */}
-        <div className="bg-gray-50 rounded-xl p-3 space-y-2">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">基本情報</p>
-          <div className="grid grid-cols-2 gap-2">
+        {/* 1 基本情報 */}
+        <section className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="flex items-center gap-2 text-base font-bold text-gray-800 mb-3">
+            <span className="w-6 h-6 rounded-full bg-emerald-500 text-white text-sm flex items-center justify-center">1</span>基本情報
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
-              <label className="text-xs text-gray-500 block mb-1">訪問日</label>
+              <label className="text-sm font-medium text-gray-600 block mb-1">訪問日</label>
               <input type="date" value={visitDate} onChange={e => setVisitDate(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
             </div>
             <div>
-              <label className="text-xs text-gray-500 block mb-1">対象月</label>
+              <label className="text-sm font-medium text-gray-600 block mb-1">対象月</label>
               <input type="month" value={tm} onChange={e => setTm(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
             </div>
             <div>
-              <label className="text-xs text-gray-500 block mb-1">報告日</label>
+              <label className="text-sm font-medium text-gray-600 block mb-1">報告日</label>
               <input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
             </div>
             <div>
-              <label className="text-xs text-gray-500 block mb-1">担当者</label>
-              <input value={staffName} onChange={e => setStaffName(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400" />
+              <label className="text-sm font-medium text-gray-600 block mb-1">担当者</label>
+              <input value={staffName} onChange={e => setStaffName(e.target.value)} placeholder="氏名"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* 用具チェック */}
-        <div className="bg-gray-50 rounded-xl p-3 space-y-2">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">用具チェック</p>
+        {/* 2 用具の確認 */}
+        <section className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h3 className="flex items-center gap-2 text-base font-bold text-gray-800">
+              <span className="w-6 h-6 rounded-full bg-emerald-500 text-white text-sm flex items-center justify-center">2</span>用具の確認
+              <span className="text-sm font-normal text-gray-500">{itemChecks.length} 点{issueCount > 0 && <span className="ml-1 text-red-600 font-semibold">／ 要対応 {issueCount} 点</span>}</span>
+            </h3>
+            {itemChecks.length > 0 && (
+              <button type="button" onClick={setAllNoIssue}
+                className="text-sm text-emerald-700 border border-emerald-300 bg-emerald-50 px-3 py-1.5 rounded-lg hover:bg-emerald-100">
+                全部 問題なし
+              </button>
+            )}
+          </div>
           {itemChecks.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-4">レンタル中の用具がありません</p>
+            <p className="text-base text-gray-400 text-center py-6">レンタル中の用具がありません</p>
           )}
+          <div className="space-y-2">
           {itemChecks.map((check, idx) => {
             const eq = equipment.find(e => e.product_code === check.product_code);
             const displayName = eq?.name ?? check.equipment_name;
             const displayCategory = eq?.category ?? check.category;
+            const chip = (field: keyof MonitoringItemCheck, label: string, on: string) => {
+              const active = !!check[field];
+              return (
+                <button type="button" key={field} onClick={() => updateCheck(idx, field, !active)} aria-pressed={active}
+                  className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${active ? on : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                  {active ? "✓ " : ""}{label}
+                </button>
+              );
+            };
             return (
-              <div key={check.order_item_id} className="bg-white rounded-lg px-3 py-2 flex items-center gap-2">
-                <span className="text-[10px] text-gray-400 w-14 shrink-0 truncate">{displayCategory}</span>
-                <span className="text-xs text-gray-800 font-medium flex-1 min-w-0 truncate">{displayName}</span>
-                <div className="flex items-center gap-2 shrink-0">
-                  <label className="flex items-center gap-0.5 cursor-pointer">
-                    <input type="checkbox" checked={check.no_issue}
-                      onChange={e => updateCheck(idx, "no_issue", e.target.checked)}
-                      className="w-3.5 h-3.5 accent-emerald-500" />
-                    <span className="text-[10px] text-gray-600">問題なし</span>
-                  </label>
-                  <label className="flex items-center gap-0.5 cursor-pointer">
-                    <input type="checkbox" checked={check.has_malfunction}
-                      onChange={e => updateCheck(idx, "has_malfunction", e.target.checked)}
-                      className="w-3.5 h-3.5 accent-red-500" />
-                    <span className="text-[10px] text-gray-600">不具合</span>
-                  </label>
-                  <label className="flex items-center gap-0.5 cursor-pointer">
-                    <input type="checkbox" checked={check.has_deterioration}
-                      onChange={e => updateCheck(idx, "has_deterioration", e.target.checked)}
-                      className="w-3.5 h-3.5 accent-amber-500" />
-                    <span className="text-[10px] text-gray-600">劣化</span>
-                  </label>
-                  <label className="flex items-center gap-0.5 cursor-pointer">
-                    <input type="checkbox" checked={check.needs_replacement}
-                      onChange={e => updateCheck(idx, "needs_replacement", e.target.checked)}
-                      className="w-3.5 h-3.5 accent-blue-500" />
-                    <span className="text-[10px] text-gray-600">交換</span>
-                  </label>
-                  <label className="flex items-center gap-0.5 cursor-pointer" title="使用状況上の問題（チェック＝あり／未チェック＝問題なし）">
-                    <input type="checkbox" checked={check.has_usage_issue}
-                      onChange={e => updateCheck(idx, "has_usage_issue", e.target.checked)}
-                      className="w-3.5 h-3.5 accent-purple-500" />
-                    <span className="text-[10px] text-gray-600">使用状況上の問題</span>
-                  </label>
+              <div key={check.order_item_id}
+                className={`rounded-lg border px-3 py-2.5 flex flex-col md:flex-row md:items-center gap-2 ${check.no_issue ? "border-gray-200 bg-white" : "border-red-200 bg-red-50"}`}>
+                <div className="flex-1 min-w-0">
+                  {displayCategory && <div className="text-xs text-gray-500">{displayCategory}{check.quantity > 1 ? `　× ${check.quantity}` : ""}</div>}
+                  <div className="text-base text-gray-800 font-medium break-words">{displayName}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  {chip("no_issue", "問題なし", "bg-emerald-500 border-emerald-500 text-white")}
+                  <span className="mx-0.5 text-gray-300">|</span>
+                  {chip("has_malfunction", "不具合", "bg-red-500 border-red-500 text-white")}
+                  {chip("has_deterioration", "劣化", "bg-amber-500 border-amber-500 text-white")}
+                  {chip("needs_replacement", "交換", "bg-blue-500 border-blue-500 text-white")}
+                  {chip("has_usage_issue", "使い方の問題", "bg-purple-500 border-purple-500 text-white")}
                 </div>
               </div>
             );
           })}
-        </div>
+          </div>
+        </section>
 
-        {/* 利用目標の達成状況 */}
-        <div className="bg-gray-50 rounded-xl p-3 space-y-3">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">利用目標の達成状況</p>
-          <div>
-            <label className="text-xs text-gray-500 block mb-1">達成状況</label>
-            <select value={goalAchievement} onChange={e => setGoalAchievement(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 bg-white">
-              <option value="">未選択</option>
-              <option value="達成">達成</option>
-              <option value="一部達成">一部達成</option>
-              <option value="未達成">未達成</option>
-            </select>
+        {/* 3 目標の達成 */}
+        <section className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <h3 className="flex items-center gap-2 text-base font-bold text-gray-800">
+            <span className="w-6 h-6 rounded-full bg-emerald-500 text-white text-sm flex items-center justify-center">3</span>利用目標の達成状況
+          </h3>
+          <div className="grid grid-cols-3 gap-2">
+            {([["達成", "bg-emerald-500 border-emerald-500"], ["一部達成", "bg-amber-500 border-amber-500"], ["未達成", "bg-red-500 border-red-500"]] as const).map(([v, on]) => (
+              <button type="button" key={v} onClick={() => setGoalAchievement(goalAchievement === v ? "" : v)} aria-pressed={goalAchievement === v}
+                className={`py-2.5 rounded-lg border text-base font-semibold transition-colors ${goalAchievement === v ? `${on} text-white` : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"}`}>
+                {v}
+              </button>
+            ))}
           </div>
           <div>
-            <label className="text-xs text-gray-500 block mb-1">達成状況コメント</label>
+            <label className="text-sm font-medium text-gray-600 block mb-1">達成状況の説明</label>
             <textarea value={goalComment} onChange={e => setGoalComment(e.target.value)}
               rows={2}
-              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-y"
               placeholder="例: 屋内移動の自立を維持できている" />
           </div>
-        </div>
+        </section>
 
-        {/* コメント */}
-        <div className="bg-gray-50 rounded-xl p-3 space-y-3">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">コメント</p>
+        {/* 4 コメント */}
+        <section className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+          <h3 className="flex items-center gap-2 text-base font-bold text-gray-800">
+            <span className="w-6 h-6 rounded-full bg-emerald-500 text-white text-sm flex items-center justify-center">4</span>コメント
+          </h3>
+          {lastRecord?.report_comment && (
+            <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-sm font-medium text-gray-600">前回 ({lastRecord.target_month ?? lastRecord.visit_date ?? ""}) の報告コメント</span>
+                <button type="button" onClick={() => setReportComment(reportComment ? `${reportComment}\n${lastRecord.report_comment}` : (lastRecord.report_comment ?? ""))}
+                  className="text-sm text-emerald-700 border border-emerald-300 bg-white px-2.5 py-1 rounded-lg hover:bg-emerald-50">今回に写す</button>
+              </div>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{lastRecord.report_comment}</p>
+            </div>
+          )}
           <div>
-            <label className="text-xs text-gray-500 block mb-1">継続・必要性</label>
+            <label className="text-sm font-medium text-gray-600 block mb-1">報告コメント</label>
+            <textarea value={reportComment} onChange={e => setReportComment(e.target.value)}
+              rows={5}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-y"
+              placeholder="訪問して確認したこと・本人や家族の様子・用具の使い方など" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-600 block mb-1">継続の必要性</label>
             <textarea value={continuityComment} onChange={e => setContinuityComment(e.target.value)}
               rows={2}
-              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none" />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-y" />
           </div>
           <div>
-            <label className="text-xs text-gray-500 block mb-1">報告コメント</label>
-            <textarea value={reportComment} onChange={e => setReportComment(e.target.value)}
-              rows={4}
-              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
-              placeholder="モニタリング内容を入力..." />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 block mb-1">前回コメント（引継ぎ）</label>
+            <label className="text-sm font-medium text-gray-600 block mb-1">前回コメント（引継ぎ・帳票に載る欄）</label>
             <textarea value={previousComment} onChange={e => setPreviousComment(e.target.value)}
-              rows={3}
-              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm outline-none focus:border-emerald-400 resize-none"
+              rows={2}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-y"
               placeholder="前回のコメントが自動入力されます" />
           </div>
-        </div>
+        </section>
         </div>
       </div>
 
