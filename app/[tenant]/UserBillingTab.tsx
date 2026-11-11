@@ -872,7 +872,8 @@ export default function UserBillingTab({
 
           {/* テーブル */}
           <div className="flex-1 overflow-auto">
-            <table className="min-w-full text-xs border-collapse">
+            {/* 横長対策: 全幅に引き伸ばさず最大幅で止める (利用者名と請求額が離れすぎないように) */}
+            <table className="w-full max-w-[1100px] text-xs border-collapse tabular-nums">
               <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
                 <tr>
                   <th className="px-2 py-1.5 border border-gray-300 text-center w-10">対象</th>
@@ -998,7 +999,7 @@ export default function UserBillingTab({
 
           {/* フッタ: 総合計 + 選択行詳細 */}
           <div className="border-t border-gray-300 bg-gray-50 px-3 py-2 shrink-0 text-xs">
-            <div className="flex flex-wrap gap-x-6 gap-y-1 text-gray-700">
+            <div className="flex flex-wrap gap-x-6 gap-y-1 text-gray-700 tabular-nums">
               <span>
                 件数合計 <span className="font-mono font-semibold">{totals.count.toLocaleString()}</span>
               </span>
@@ -1015,7 +1016,7 @@ export default function UserBillingTab({
                 <span className="font-mono font-semibold">¥{totals.confirmedSum.toLocaleString()}</span>
               </span>
             </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-gray-600">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-gray-600 tabular-nums">
               <span>
                 合計金額 <span className="font-mono">¥{selectedSummary.amount.toLocaleString()}</span>
               </span>

@@ -290,7 +290,8 @@ function MonthlyInfoTab({
           <span className="text-xs text-gray-500 ml-2">{sortedRows.length} 件</span>
         </div>
         <div className="flex-1 overflow-auto">
-          <table className="min-w-full text-xs border-collapse">
+          {/* 横長対策: 全幅に引き伸ばさず最大幅で止める (列が間延びしないように) */}
+          <table className="w-full max-w-[1400px] text-xs border-collapse tabular-nums">
             <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
               <tr>
                 <th className="px-2 py-1.5 border border-gray-300 text-left">保険変更</th>
@@ -1623,7 +1624,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               className="border border-red-400 rounded bg-red-50 px-2.5 py-1 text-red-700 font-semibold hover:bg-red-100">過誤で確定</button>
           </>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        {/* 横長対策: 右端寄せ (ml-auto) をやめ、月切替の隣にまとめて並べる */}
+        <div className="w-px h-5 bg-gray-300 mx-1" />
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleSaveFlags}
             disabled={savingFlags || !isDirty}
@@ -1722,7 +1725,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             {/* 行 (ヘッダーは sticky にしてスクロール内へ配置。本文とスクロールバー幅を共有し列を一致させる) */}
             <div className="flex-1 overflow-y-auto">
             {/* ヘッダー行: 対象 / 申請中 / 状態 / 提出月 / 請求月 / サービス事業所 / 被保険者番号 / 利用者名 / 月遅 / 返戻 / 過誤 */}
-            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
+            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
               <div className="px-1 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
@@ -1759,7 +1762,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                   const [ry, rm] = row.month.split("-").map(Number);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
+                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
                       <div className="px-1 py-2" />
                       <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
@@ -1812,7 +1815,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_1fr_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
+                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
@@ -1988,13 +1991,14 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               }
               return (
                 <div className="border-t border-gray-300 bg-gray-50 px-3 py-2 shrink-0 text-[11px] text-gray-700">
-                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-1.5">
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-1.5 tabular-nums">
                     <span>合計件数 <strong className="font-mono">{totalCount.toLocaleString()}</strong></span>
                     <span>合計単位数 <strong className="font-mono">{totalUnits.toLocaleString()}</strong></span>
                     <span>国保件数 <strong className="font-mono">{kokuhoCount.toLocaleString()}</strong></span>
                     <span>国保対象単位数 <strong className="font-mono">{kokuhoUnits.toLocaleString()}</strong></span>
                   </div>
-                  <div className="border border-gray-300 rounded bg-white px-2 py-1.5 grid grid-cols-3 gap-x-4 gap-y-1">
+                  {/* 横長対策: 3列の金額欄を全幅に広げず最大幅で止める */}
+                  <div className="border border-gray-300 rounded bg-white px-2 py-1.5 grid grid-cols-3 gap-x-4 gap-y-1 max-w-3xl tabular-nums">
                     <span>特定介護請求額 <strong className="font-mono">—</strong></span>
                     <span>軽減額 <strong className="font-mono">—</strong></span>
                     <span>保険単位額 <strong className="font-mono">{insuranceUnitAmount.toLocaleString()}</strong></span>
@@ -2535,7 +2539,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         </div>
         <button onClick={toThisMonth} className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">本日の月へ</button>
         <span className="border border-blue-500 rounded bg-blue-100 px-2.5 py-1 text-blue-800 font-semibold">介護保険レンタル</span>
-        <div className="ml-auto flex items-center gap-2">
+        {/* 横長対策: 件数・CSV出力も右端に飛ばさず並べる */}
+        <div className="flex items-center gap-2">
           <span className="text-gray-500 text-xs">{rows.length} 件</span>
           <button onClick={exportCSV}
             className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
@@ -2558,10 +2563,10 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
             >
               内訳 {showPnlDetail ? "▲" : "▼"}
             </button>
-            <span className="text-[10px] text-gray-400 ml-auto">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
+            <span className="text-[10px] text-gray-400">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
           </div>
           {showPnlDetail && (
-            <div className="px-3 pb-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+            <div className="px-3 pb-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs max-w-6xl tabular-nums">
               {/* 商品別 (売上上位20) */}
               <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
                 <p className="px-3 py-1.5 font-semibold text-gray-600 border-b border-slate-100">商品別（売上上位20）</p>
