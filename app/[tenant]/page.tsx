@@ -89,44 +89,63 @@ type Tab = "home" | "orders" | "equipment" | "clients" | "monitoring" | "meeting
 
 // ホーム(メニュー一覧)画面
 function HomeMenu({ tenantName, onNavigate }: { tenantName: string; onNavigate: (t: Tab) => void }) {
-  const items: { id: Tab; icon: React.ElementType; label: string; desc: string }[] = [
-    { id: "orders", icon: ClipboardList, label: "発注管理", desc: "福祉用具の発注・納品・レンタル" },
-    { id: "clients", icon: Users, label: "利用者別", desc: "利用者ごとの情報・履歴" },
-    { id: "documents", icon: FileText, label: "書類", desc: "利用者の書類管理" },
-    { id: "doc-tasks", icon: FileWarning, label: "書類タスク", desc: "期限・不足書類の管理" },
-    { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
-    { id: "staff", icon: Users, label: "職員", desc: "スタッフ管理" },
-    { id: "overtime", icon: Clock, label: "残業管理", desc: "残業許可申請・承認・残業時間管理表" },
-    { id: "attendance", icon: CalendarClock, label: "出勤簿", desc: "日次の出退勤入力・月次残業時間の集計" },
-    { id: "meeting-notes", icon: ClipboardCheck, label: "担当者会議録", desc: "サービス担当者会議の要点(第4表)" },
-    { id: "demo-units", icon: Package, label: "デモ機管理", desc: "特定福祉用具のデモ貸出状況" },
-    { id: "renovation", icon: Hammer, label: "住宅改修", desc: "訪問〜役所提出までの進行状況・粗利集計" },
-    { id: "billing", icon: CreditCard, label: "請求", desc: "月次請求・売上帳票・損益" },
-    { id: "equipment", icon: Package, label: "用具マスタ", desc: "用具・価格・卸の管理" },
-    { id: "settings", icon: Settings, label: "設定", desc: "会社情報・卸会社・各種マスタ" },
+  // メニューが増えたので大項目で分類する (2026-11-11 user 依頼)
+  type Item = { id: Tab; icon: React.ElementType; label: string; desc: string };
+  const groups: { title: string; items: Item[] }[] = [
+    { title: "利用者・レンタル", items: [
+      { id: "clients", icon: Users, label: "利用者別", desc: "利用者ごとの情報・履歴" },
+      { id: "orders", icon: ClipboardList, label: "発注管理", desc: "福祉用具の発注・納品・レンタル" },
+      { id: "demo-units", icon: Package, label: "デモ機管理", desc: "特定福祉用具のデモ貸出状況" },
+      { id: "renovation", icon: Hammer, label: "住宅改修", desc: "訪問〜役所提出までの進行状況・粗利集計" },
+    ] },
+    { title: "書類・記録", items: [
+      { id: "documents", icon: FileText, label: "書類", desc: "利用者の書類管理" },
+      { id: "doc-tasks", icon: FileWarning, label: "書類タスク", desc: "期限・不足書類の管理" },
+      { id: "monitoring", icon: ClipboardCheck, label: "モニタリング", desc: "モニタリング記録" },
+      { id: "meeting-notes", icon: ClipboardCheck, label: "担当者会議録", desc: "サービス担当者会議の要点(第4表)" },
+    ] },
+    { title: "請求", items: [
+      { id: "billing", icon: CreditCard, label: "請求", desc: "月次請求・売上帳票・損益" },
+    ] },
+    { title: "職員・勤怠", items: [
+      { id: "staff", icon: Users, label: "職員", desc: "スタッフ管理" },
+      { id: "attendance", icon: CalendarClock, label: "出勤簿", desc: "日次の出退勤入力・月次残業時間の集計" },
+      { id: "overtime", icon: Clock, label: "残業管理", desc: "残業許可申請・承認・残業時間管理表" },
+    ] },
+    { title: "マスタ・設定", items: [
+      { id: "equipment", icon: Package, label: "用具マスタ", desc: "用具・価格・卸の管理" },
+      { id: "settings", icon: Settings, label: "設定", desc: "会社情報・卸会社・各種マスタ" },
+    ] },
   ];
   return (
     <div className="h-full overflow-y-auto bg-gray-50 p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <div className="mb-4">
           <h2 className="text-lg font-bold text-gray-800">{tenantName}</h2>
           <p className="text-xs text-gray-400">メニューを選択してください</p>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {items.map(({ id, icon: Icon, label, desc }) => (
-            <button
-              key={id}
-              onClick={() => onNavigate(id)}
-              className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 text-left hover:border-emerald-300 hover:shadow transition-all flex flex-col gap-2"
-            >
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
-                <Icon size={20} className="text-emerald-600" />
+        <div className="space-y-5">
+          {groups.map((g) => (
+            <section key={g.title}>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2 pl-1 border-l-4 border-emerald-400">&nbsp;{g.title}</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {g.items.map(({ id, icon: Icon, label, desc }) => (
+                  <button
+                    key={id}
+                    onClick={() => onNavigate(id)}
+                    className="bg-white rounded-xl border border-gray-200 shadow-sm px-3 py-2.5 text-left hover:border-emerald-300 hover:shadow transition-all flex items-center gap-3"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+                      <Icon size={18} className="text-emerald-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800">{label}</p>
+                      <p className="text-[11px] text-gray-400 leading-snug line-clamp-2">{desc}</p>
+                    </div>
+                  </button>
+                ))}
               </div>
-              <div>
-                <p className="text-sm font-semibold text-gray-800">{label}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5 leading-snug">{desc}</p>
-              </div>
-            </button>
+            </section>
           ))}
         </div>
       </div>
