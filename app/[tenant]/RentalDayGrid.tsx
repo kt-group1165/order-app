@@ -93,21 +93,27 @@ export default function RentalDayGrid({
       {warn.map((w) => (
         <p key={w} className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">{w}</p>
       ))}
-      <div className="overflow-x-auto bg-white rounded-xl shadow-sm">
-        <table className="text-[11px] border-collapse min-w-full">
+      {/* ほのぼのの提供票に合わせて詰めた表: 左に 用具・数量・単位数・日割区分・回数、右に 1〜末日 (2026-11-11) */}
+      <div className="overflow-x-auto">
+        <table className="text-[11px] leading-tight border-collapse bg-white border border-gray-300 w-max">
           <thead>
-            <tr className="bg-gray-50 text-gray-600">
-              <th className="sticky left-0 z-10 bg-gray-50 border-b border-r border-gray-200 px-2 py-1 text-left font-semibold min-w-[12rem]">用具</th>
+            <tr className="bg-gray-100 text-gray-600">
+              <th rowSpan={2} className="sticky left-0 z-10 bg-gray-100 border border-gray-300 px-1.5 font-semibold text-left w-[15rem]">サービス内容 (用具)</th>
+              <th rowSpan={2} className="border border-gray-300 px-1 font-semibold">数量</th>
+              <th rowSpan={2} className="border border-gray-300 px-1 font-semibold">単位数</th>
+              <th rowSpan={2} className="border border-gray-300 px-1 font-semibold">日割<br />区分</th>
+              <th rowSpan={2} className="border border-gray-300 px-1 font-semibold">回数</th>
               {days.map((d) => (
-                <th key={d} className={`border-b border-gray-200 w-6 px-0 py-1 font-normal text-center ${dow(d) === 0 ? "text-rose-500" : dow(d) === 6 ? "text-blue-500" : ""} ${d === 16 ? "border-l-2 border-l-gray-300" : ""}`}>
-                  <div className="tabular-nums">{d}</div>
-                  <div className="text-[9px]">{DOW[dow(d)]}</div>
-                  {hospMask[d] && <div className="text-[9px] text-rose-600 font-semibold" title="入院中">入</div>}
+                <th key={d} className={`border border-gray-300 w-5 min-w-[1.25rem] px-0 font-normal tabular-nums ${dow(d) === 0 ? "text-rose-500 bg-rose-50" : dow(d) === 6 ? "text-blue-500 bg-blue-50" : ""} ${d === 16 ? "border-l-2 border-l-gray-500" : ""}`}>{d}</th>
+              ))}
+            </tr>
+            <tr className="bg-gray-100 text-gray-500">
+              {days.map((d) => (
+                <th key={d} className={`border border-gray-300 px-0 font-normal text-[10px] ${dow(d) === 0 ? "text-rose-500 bg-rose-50" : dow(d) === 6 ? "text-blue-500 bg-blue-50" : ""} ${d === 16 ? "border-l-2 border-l-gray-500" : ""}`}
+                  title={hospMask[d] ? "入院中" : undefined}>
+                  {hospMask[d] ? <span className="text-rose-600 font-semibold">入</span> : DOW[dow(d)]}
                 </th>
               ))}
-              <th className="border-b border-l border-gray-200 px-2 py-1 font-semibold text-center">回数</th>
-              <th className="border-b border-gray-200 px-2 py-1 font-semibold text-center">日割区分</th>
-              <th className="border-b border-gray-200 px-2 py-1 font-semibold text-right">単位数</th>
             </tr>
           </thead>
           <tbody>
@@ -115,28 +121,27 @@ export default function RentalDayGrid({
               const k = kindOf(item);
               const self = k === "自費" || k === "特価自費";
               return (
-                <tr key={item.id} className="border-b border-dashed border-gray-200">
-                  <td className={`sticky left-0 z-10 bg-white border-r border-gray-200 px-2 py-1 border-l-4 ${self ? "border-l-orange-400" : "border-l-emerald-400"}`}>
-                    <div className="flex items-center gap-1 min-w-0">
-                      <span className={`text-[10px] px-1.5 rounded-full shrink-0 ${self ? "bg-orange-100 text-orange-700" : "bg-emerald-100 text-emerald-700"}`}>{k ?? "—"}</span>
-                      <span className="truncate max-w-[14rem]" title={nameOf(item)}>{nameOf(item)}</span>
+                <tr key={item.id} className="hover:bg-yellow-50">
+                  <td className={`sticky left-0 z-10 bg-white border border-gray-300 px-1.5 py-0.5 border-l-4 ${self ? "border-l-orange-400" : "border-l-emerald-400"}`}>
+                    <div className="flex items-center gap-1 min-w-0 w-[14rem]">
+                      {self && <span className="text-[9px] px-1 rounded bg-orange-100 text-orange-700 shrink-0">{k}</span>}
+                      <span className="truncate" title={nameOf(item)}>{nameOf(item)}</span>
                     </div>
                   </td>
+                  <td className="border border-gray-300 px-1 text-center tabular-nums">{item.quantity || 1}</td>
+                  <td className="border border-gray-300 px-1 text-right tabular-nums" title={`月額 ¥${priceOf(item).toLocaleString()} / 満額 ${fullUnits} 単位`}>{units.toLocaleString()}</td>
+                  <td className={`border border-gray-300 px-1 text-center ${kubun === "半額" ? "text-amber-700 font-semibold" : ""}`}>{kubun}</td>
+                  <td className="border border-gray-300 px-1 text-center tabular-nums">{count}</td>
                   {days.map((d) => {
                     const on = mask[d];
                     const off = inPeriod[d] && !on; // 貸与期間内だが 休止・入院で除いた日
                     return (
-                      <td key={d} className={`text-center tabular-nums py-1 ${d === 16 ? "border-l-2 border-l-gray-300" : ""} ${on ? (self ? "bg-orange-50 text-orange-700" : "bg-emerald-50 text-emerald-700") : off ? "bg-gray-100 text-gray-400" : ""}`}
+                      <td key={d} className={`border border-gray-200 px-0 text-center tabular-nums ${d === 16 ? "border-l-2 border-l-gray-500" : ""} ${off ? "bg-gray-100 text-gray-400" : dow(d) === 0 ? "bg-rose-50/60" : dow(d) === 6 ? "bg-blue-50/60" : ""}`}
                         title={off ? (pausedDay(d) ? "休止" : "入院") : undefined}>
                         {on ? "1" : off ? (pausedDay(d) ? "休" : "入") : ""}
                       </td>
                     );
                   })}
-                  <td className="text-center border-l border-gray-200 px-2 tabular-nums">{count}</td>
-                  <td className={`text-center px-2 ${kubun === "半額" ? "text-amber-700 font-semibold" : "text-gray-600"}`}>{kubun}</td>
-                  <td className="text-right px-2 tabular-nums whitespace-nowrap" title={`月額 ¥${priceOf(item).toLocaleString()} / 満額 ${fullUnits} 単位${(item.quantity || 1) > 1 ? ` × 数量 ${item.quantity}` : ""}`}>
-                    {units.toLocaleString()}
-                  </td>
                 </tr>
               );
             })}
@@ -147,9 +152,10 @@ export default function RentalDayGrid({
               if (rs.length === 0) return null;
               return (
                 <tr key={g} className="bg-gray-50 font-semibold">
-                  <td className="sticky left-0 z-10 bg-gray-50 px-2 py-1 border-r border-gray-200">{g === "介護" ? "介護レンタル 合計" : "自費レンタル 合計"}</td>
-                  <td colSpan={nDays + 2} />
-                  <td className="text-right px-2 tabular-nums whitespace-nowrap">{rs.reduce((s, r) => s + r.units, 0).toLocaleString()} 単位</td>
+                  <td className="sticky left-0 z-10 bg-gray-50 border border-gray-300 px-1.5 py-0.5">{g === "介護" ? "介護 合計" : "自費 合計"}</td>
+                  <td className="border border-gray-300" />
+                  <td className="border border-gray-300 px-1 text-right tabular-nums whitespace-nowrap">{rs.reduce((s, r) => s + r.units, 0).toLocaleString()}</td>
+                  <td colSpan={2 + nDays} className="border border-gray-300 px-1 text-gray-500 font-normal">単位</td>
                 </tr>
               );
             })}
