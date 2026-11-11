@@ -17,6 +17,9 @@
  *   --db-cache <json>       DRY RUN で DB の控えを使う (無ければ 1 回読んで保存。--refresh で読み直す。--execute は常に読み直す)
  *   --pause-mode single|split  月内の休止の表し方 (既定 single = 1 明細のまま notes に休止期間 / split = 休止の前後で 2 明細)
  *   --remove-db-only        提供票 (4〜10月) に無い DB の明細を削除する (★ 既定は計画に出すだけで消さない)
+ *   --skip-users 14400,…    提供票の利用者番号を扱わない (DB の明細も消さない)。2026-11-11: 風戸 芳子 (14400) は自費 2 台が DB に別コード
+ *                           (EQ-001524/1526) で居て、そのまま入れると二重になるため外した
+ *   --disambiguate-by-billing  略称・単位が同じで TAIS が複数ある用具を、ほのぼのの請求 (KDS0031) の TAIS で決める (2026-11-11 user 承認)
  *
  * ── 方針 (user 承認 2026-11-09) ─────────────────────────────────────────────
  *   ・入力 = 提供票 (実績行) + 用具マスタ + 利用者マスタ。★ KDS0031 (請求の出力) は最後の答え合わせにだけ使う (循環させない)
@@ -92,6 +95,8 @@ const { getPriceForMonth } = await import("../lib/equipment");
 const EXECUTE = argv.includes("--execute");
 const REMOVE_DB_ONLY = argv.includes("--remove-db-only");
 const PAUSE_MODE = opt("--pause-mode") ?? "single";
+const DISAMBIGUATE_BY_BILLING = argv.includes("--disambiguate-by-billing"); // ★ 2026-11-11 user 承認 (下の注記)
+const SKIP_USERS = new Set((opt("--skip-users") ?? "").split(",").map((s) => s.trim()).filter(Boolean));
 if (!["single", "split"].includes(PAUSE_MODE)) { console.error("--pause-mode は single|split"); process.exit(1); }
 const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
 const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
@@ -311,7 +316,8 @@ async function main() {
   const months = [...new Set(all.map((r) => r.ym))].sort();
   for (let i = 1; i < months.length; i++) if (monthIdx(months[i]) - monthIdx(months[i - 1]) !== 1) throw new Error(`★ 提供票の月が飛んでいる ${months[i - 1]} → ${months[i]}`);
   const FIRST = months[0], LAST = months[months.length - 1];
-  const rows = all.filter((r) => r.pa === "実績");
+  const rows = all.filter((r) => r.pa === "実績" && !SKIP_USERS.has(r.userNo));
+  if (SKIP_USERS.size) console.log(`--skip-users: 提供票の利用者番号 ${[...SKIP_USERS].join(",")} は扱わない`);
   const R = { map: new Report(), users: new Report(), link: new Report(), plan: new Report(), db: new Report(), warn: new Report() };
 
   // 利用者マスタ (介護保険) → 利用者番号 → (保険者, 被保番)
@@ -400,6 +406,50 @@ async function main() {
         r.mrow = res.pre.filter((x) => x.tais === hit[0]).sort((a, b) => Number(a.stop) - Number(b.stop))[0];
       }
     }
+  }
+  // ★ 2026-11-11 (user 承認): --disambiguate-by-billing — 略称・単位が同じで TAIS が複数ある用具 (サイズ違い等) は、
+  //   提供票に TAIS が無いので決められない。ほのぼのの請求 (明細書明細付 KDS0031・処理R8-04〜) に その人・その提供月に出た
+  //   TAIS のうち、同じ月の他の行で使っていないものが候補に 1 つだけなら それにする。値 (単位・日数・期間) は提供票のまま。
+  //   使うのは「どの商品か」の手がかりだけ (請求の出力を入力に使う例外。user 2026-11-11)。
+  if (DISAMBIGUATE_BY_BILLING) {
+    const billed = new Map(); // `${氏名}|${YYYY-MM}` → Map<TAIS, 件数>
+    const kdsFiles = [];
+    for (const d of readdirSync(FUKUYOGU).filter((x) => /^\d{6}$/.test(x))) {
+      const dir = join(FUKUYOGU, d, "ほのぼのから");
+      if (!existsSync(dir)) continue;
+      for (const f of readdirSync(dir).filter((x) => /^KDS0031_.*\.csv$/i.test(x))) kdsFiles.push(join(dir, f));
+    }
+    for (const p of kdsFiles) {
+      const K = readSjis(p);
+      sourceFiles.push({ path: relPath(p), sha256: sha256(p), rows: K.rows.length, kind: "明細書明細付 (用具の特定にだけ使う)" });
+      for (const x of K.rows) {
+        if (x[61] !== "明細情報レコード" || !x[73]) continue;
+        const k = `${nfkc(x[12]).replace(/\s/g, "")}|${x[1].replace("/", "-")}`;
+        if (!billed.has(k)) billed.set(k, new Map());
+        billed.get(k).set(x[73], (billed.get(k).get(x[73]) ?? 0) + 1);
+      }
+    }
+    const masterRowOf = (t) => Object.values(masters).filter(Boolean).flatMap((m) => m.rows).find((x) => x.tais === t) ?? null;
+    for (const [, grp] of groupBy(rows, (r) => `${r.userNo}|${r.ym}`)) {
+      const open = grp.filter((r) => !r.tais && (r.how === "複数" || r.how === "類似が複数") && r.cands?.length);
+      if (!open.length) continue;
+      const left = new Map(billed.get(`${nfkc(grp[0].name).replace(/\s/g, "")}|${grp[0].ym}`) ?? []);
+      for (const r of grp) if (r.tais && left.get(r.tais)) left.set(r.tais, left.get(r.tais) - 1);
+      for (const r of open) {
+        const opts = r.cands.filter((t) => (left.get(t) ?? 0) > 0);
+        const sameItem = open.filter((o) => o.item === r.item && !o.tais).length;
+        const total = opts.reduce((s, t) => s + left.get(t), 0);
+        if (opts.length === 1 || (opts.length > 1 && total === sameItem)) {
+          const t = opts.sort()[0];
+          r.tais = t; r.how = `${r.how} → 請求 (明細書明細付) の TAIS で特定`; r.mrow = masterRowOf(t);
+          left.set(t, left.get(t) - 1);
+        } else {
+          R.warn.add("請求の TAIS でも用具を決められない", { 氏名: r.name, 月: r.ym, 用具: r.item, 候補: r.cands, 請求に残る: Object.fromEntries([...left].filter(([, n]) => n > 0)) });
+        }
+      }
+    }
+  }
+  for (const r of rows) {
     // ★ 2026-11-09: 保険事業所の行で 概算単位 0 は 自費レンタル欄が空でも 0 円の付属 = 自費 (介護 0 円 172 件になった)
     r.zeroUnits = r.src !== "自費" && !r.jihiFlag && r.units === 0;
     r.payType = r.src === "自費" || r.jihiFlag || r.zeroUnits ? "自費" : "介護";
