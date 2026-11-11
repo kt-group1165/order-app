@@ -30,7 +30,7 @@ export type ClientRow = {
   postal_code?: string | null; address?: string | null; phone?: string | null; mobile?: string | null; status?: string | null;
 };
 export type InsRow = {
-  id: string; client_id: string; effective_date: string | null; insurer_number: string | null; insured_number: string | null;
+  id: string; client_id: string; office_id?: string | null; effective_date: string | null; insurer_number: string | null; insured_number: string | null;
   care_level: string | null; certification_start_date: string | null; certification_end_date: string | null;
   benefit_rate: string | null; certification_status: string | null; care_office_id: string | null;
   care_office_number: string | null; birth_date: string | null;
@@ -38,7 +38,7 @@ export type InsRow = {
   [col: string]: unknown;
 };
 export type KohiRow = {
-  id: string; client_id: string; hohei_code: string | null; futan_sha_number: string | null;
+  id: string; client_id: string; office_id?: string | null; hohei_code: string | null; futan_sha_number: string | null;
   jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null;
 };
 export type OrderRow = { id: string; client_id: string | null; office_id: string | null; payment_type: string | null; status: string | null };
@@ -194,10 +194,10 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
   console.log("DB 読込 (READ ONLY)...");
   const snap: Snapshot = {
     fetchedAt: new Date().toISOString(), month,
-    offices: await all<OfficeRow>("offices", "id,name,business_number"),
+    offices: await all<OfficeRow>("offices", "id,name,business_number,insurance_scope"),
     clients: await all<ClientRow>("clients", "id,user_number,name,furigana,birth_date,gender,care_level,insurer_number,insured_number,benefit_rate,certification_start_date,certification_end_date,care_office_id,office_id,deleted_at,postal_code,address,phone,mobile,status"),
-    ins: await all<InsRow>("client_insurance_records", "id,client_id,effective_date,insurer_number,insured_number,care_level,certification_start_date,certification_end_date,benefit_rate,certification_status,care_office_id,care_office_number,birth_date,insurer_name,certification_date,issued_date,insurance_confirmed_date,qualification_date,insurance_valid_start,insurance_valid_end,limit_period_start,limit_period_end,service_limit_amount,care_manager,care_manager_org,care_office_name,service_restriction,service_memo"),
-    kohi: await all<KohiRow>("client_public_expenses", "id,client_id,hohei_code,futan_sha_number,jukyu_sha_number,valid_start,valid_end"),
+    ins: await all<InsRow>("client_insurance_records", "id,client_id,office_id,effective_date,insurer_number,insured_number,care_level,certification_start_date,certification_end_date,benefit_rate,certification_status,care_office_id,care_office_number,birth_date,insurer_name,certification_date,issued_date,insurance_confirmed_date,qualification_date,insurance_valid_start,insurance_valid_end,limit_period_start,limit_period_end,service_limit_amount,care_manager,care_manager_org,care_office_name,service_restriction,service_memo"),
+    kohi: await all<KohiRow>("client_public_expenses", "id,client_id,office_id,hohei_code,futan_sha_number,jukyu_sha_number,valid_start,valid_end"),
     orders: await all<OrderRow>("orders", "id,client_id,office_id,payment_type,status"),
     items: await all<ItemRow>("order_items", "id,order_id,product_code,status,payment_type,rental_start_date,rental_end_date,quantity,cancelled_at,rental_price"),
     equipment: await all<EqRow>("equipment_master", "id,product_code,tais_code,name,category,kind,rental_price"),
@@ -237,7 +237,13 @@ export type DbLine = { itemId: string; tais: string; code: string | null; unitPe
  *   明細 項10 日数 は呼出側で fukuyoguRentalDaysInMonth(…, model.pausesOf(itemId)) に渡す。
  */
 export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: string, libs: Libs,
-  pausesByItem: Map<string, { from: string; to: string | null }[]> = new Map()) {
+  pausesByItem: Map<string, { from: string; to: string | null }[]> = new Map(),
+  /**
+   * ★ 2026-11-11 事業所別保険 (DESIGN_INSURANCE_PER_OFFICE.md): perOffice=true は その事業所を per_office に
+   *   切り替えたときの BillingTab と同じ = 認定・公費は office_id = 自事業所 の行だけ、clients の列は使わない。
+   *   false (既定) は shared。perOfficeIds を渡すと shared でも per_office の事業所の行を外す (規則 3)
+   */
+  scope: { perOffice?: boolean; perOfficeIds?: readonly string[] } = {}) {
   const pausesOf = (itemId: string) => pausesByItem.get(itemId) ?? [];
   const { halfMonthUnits, halfMonthFlags, hospitalizationRanges, fukuyoguServiceCode, getPriceForMonth, pickCertForMonth, certFieldsForDensou, careLevelCodeForDensou } = libs;
   const clientById = new Map(snap.clients.map((c) => [c.id, c]));
@@ -247,12 +253,15 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
   const ordersById = new Map(snap.orders.map((o) => [o.id, o]));
   const overrideByItem = new Map(snap.overrides.map((o) => [o.order_item_id, o.units_override]));
   const lateFlag = new Set(snap.late.map((l) => l.client_id));
+  const perOffice = !!scope.perOffice;
+  const otherPer = new Set((scope.perOfficeIds ?? []).filter((id) => id !== officeId));
+  const inScope = (r: { office_id?: string | null }) => perOffice ? r.office_id === officeId : !(r.office_id && otherPer.has(r.office_id));
   const insByClient = new Map<string, InsRow[]>();
-  for (const r of snap.ins) { if (!insByClient.has(r.client_id)) insByClient.set(r.client_id, []); insByClient.get(r.client_id)!.push(r); }
+  for (const r of snap.ins.filter(inScope)) { if (!insByClient.has(r.client_id)) insByClient.set(r.client_id, []); insByClient.get(r.client_id)!.push(r); }
   const hospByClient = new Map<string, HospRow[]>();
   for (const h of snap.hosp) { if (!hospByClient.has(h.client_id)) hospByClient.set(h.client_id, []); hospByClient.get(h.client_id)!.push(h); }
   const kohiByClient = new Map<string, KohiRow[]>();
-  for (const k of snap.kohi) { if (!kohiByClient.has(k.client_id)) kohiByClient.set(k.client_id, []); kohiByClient.get(k.client_id)!.push(k); }
+  for (const k of snap.kohi.filter(inScope)) { if (!kohiByClient.has(k.client_id)) kohiByClient.set(k.client_id, []); kohiByClient.get(k.client_id)!.push(k); }
 
   const [Y, M] = MONTH.split("-").map(Number);
   const monthStartS = `${MONTH}-01`;
@@ -331,13 +340,14 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
     const rec = pickIns(cid);
     if (rec?.certification_status === "申請中") autoLate.add(cid);
     const c = clientById.get(cid);
-    if (c && !careLevelCodeForDensou(certFieldsForDensou(c, rec).careLevel)) { noCareLevel.add(cid); autoLate.add(cid); }
+    const cc = perOffice ? { care_level: null, certification_start_date: null, certification_end_date: null } : c;
+    if (cc && !careLevelCodeForDensou(certFieldsForDensou(cc, rec).careLevel)) { noCareLevel.add(cid); autoLate.add(cid); }
   }
   const isLate = (cid: string) => autoLate.has(cid) || lateFlag.has(cid);
   const dbTargets = [...dbLines.keys()]; // 明細が 1 行でも乗る利用者 (BillingTab は details 0 の人を出さない)
 
   return {
-    clientById, eqByCode, careOfficeNo, ordersById, overrideByItem, lateFlag, insByClient, hospByClient, kohiByClient,
+    clientById, eqByCode, careOfficeNo, ordersById, overrideByItem, lateFlag, insByClient, hospByClient, kohiByClient, perOffice,
     monthStartS, monthEndS, isActive, unitsOf, pickIns, pickKohi, pausesOf,
     officeClients, dbLines, dbSkipped, activeOtherScope, activeCount, ceilingCheckDiffers, autoLate, noCareLevel, isLate, dbTargets,
   };

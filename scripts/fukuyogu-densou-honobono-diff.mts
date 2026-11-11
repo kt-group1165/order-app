@@ -47,7 +47,7 @@ import {
   buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
   type FukuyoguSeikyuRow, type FukuyoguDetailLine,
 } from "../lib/kokuho-densou/build";
-import { pickCertForMonth, certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
+import { certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
 import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
 import { serviceClient, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
 
@@ -263,7 +263,12 @@ async function main() {
   const office = snap.offices.find((o) => (o.business_number ?? "").replace(/-/g, "") === PROVIDER_BN);
   if (!office) throw new Error(`offices に business_number=${PROVIDER_BN} が無い`);
   const pausesByItem = await loadPauses();
-  const model = buildBillingModel(snap, MONTH, office.id, libs, pausesByItem);
+  // ★ 2026-11-11 事業所別保険: --as-per-office で「この事業所を per_office に切り替えたら」を模擬する
+  //   (offices.insurance_scope が per_office ならそれだけで per_office として組む)
+  const perOffice = process.argv.includes("--as-per-office") || (office as { insurance_scope?: string }).insurance_scope === "per_office";
+  const perOfficeIds = snap.offices.filter((o) => (o as { insurance_scope?: string }).insurance_scope === "per_office").map((o) => o.id);
+  if (perOffice) console.log("  ★ 事業所別保険: per_office として組む (認定・公費・負担割合証は office_id = この事業所の行だけ。clients の列は使わない)");
+  const model = buildBillingModel(snap, MONTH, office.id, libs, pausesByItem, { perOffice, perOfficeIds });
   const { clientById, careOfficeNo, dbLines, isLate, pickKohi, ordersById } = model;
   const itemById = new Map(snap.items.map((i) => [i.id, i]));
   // 計画作成区分 (care_offices.plan_kubun。migrations/care_offices_plan_kubun.sql)。スナップショットに無い列なので都度読む。
@@ -342,19 +347,25 @@ async function main() {
     }
     const k = pickKohi(cid);
     const kohi = k ? { hobetsu: k.hohei_code!, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number } : null;
+    const certsOf = (xs: BenefitCertRow[]) => perOffice ? xs.filter((x) => (x as { office_id?: string | null }).office_id === office.id) : xs;
     const benefitRaw = benefitBy
-      ? (() => { const r = resolveBenefitForMonth(model.insByClient.get(cid) ?? [], benefitBy.get(cid) ?? [], model.monthStartS, model.monthEndS); return r.benefitRate != null ? String(r.benefitRate) : c.benefit_rate; })()
+      ? (() => { const r = resolveBenefitForMonth(model.insByClient.get(cid) ?? [], certsOf(benefitBy.get(cid) ?? []), model.monthStartS, model.monthEndS); return r.benefitRate != null ? String(r.benefitRate) : (perOffice ? null : c.benefit_rate); })()
       : c.benefit_rate;
+    // BillingTab の densouCertOf と同じ: per_office は自事業所の認定行だけ (番号・担当居宅も)。shared は clients の列
+    const rec = model.pickIns(cid);
+    const dc = perOffice
+      ? { ...certFieldsForDensou({ care_level: null, certification_start_date: null, certification_end_date: null }, rec),
+          insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
+      : { ...certFieldsForDensou(c, rec), insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null, careOfficeId: c.care_office_id };
     const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: benefitRaw, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
     periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, derivePeriod((rentalsByClient.get(cid) ?? []).map(toP), billed.map(toP), MONTH));
     rows.push({
-      userName: c.name, insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null,
+      userName: c.name, insurerNumber: dc.insurerNumber, insuredNumber: dc.insuredNumber,
       birthDate: c.birth_date, gender: c.gender,
       // 要介護度・認定期間 = 当月に有効な認定レコード優先 (BillingTab と同じ lib/kokuho-densou/cert-for-month.ts)
-      ...certFieldsForDensou(c, pickCertForMonth(model.insByClient.get(cid) ?? [], model.monthStartS, model.monthEndS,
-        { insurerNumber: c.insurer_number, insuredNumber: c.insured_number })),
-      careOfficeNumber: c.care_office_id ? (careOfficeNo.get(c.care_office_id) || null) : null,
-      carePlanKubun: c.care_office_id ? planKubunById.get(c.care_office_id) ?? null : null,
+      careLevel: dc.careLevel, certStart: dc.certStart, certEnd: dc.certEnd,
+      careOfficeNumber: dc.careOfficeId ? (careOfficeNo.get(dc.careOfficeId) || null) : null,
+      carePlanKubun: dc.careOfficeId ? planKubunById.get(dc.careOfficeId) ?? null : null,
       copayRate: amt.copayRate, details,
       totalUnits: amt.billedUnits, limitTargetUnits: amt.actualUnits, planUnits: amt.planUnits, totalCost: amt.totalCost,
       cmMissing: cmUnitsByClient.size > 0 && !cmUnitsByClient.has(cid),
