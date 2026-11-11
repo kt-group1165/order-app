@@ -34,6 +34,7 @@ import {
 } from "@/lib/offices";
 import { getMaxUserNumber } from "@kt/shared/user-number";
 import { usePerOfficeIds, isPerOffice, ownerKind, copyRowForOffice } from "@/lib/insurance/office-scope";
+import RentalDayGrid from "./RentalDayGrid";
 import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
@@ -2894,6 +2895,8 @@ function ClientDetail({
   const [topTab, setTopTab] = useState<"usage" | "basic" | "insurance" | "kouhi" | "bank" | "keido">(initialKeidoGroup ? "keido" : initialViewMode === "insurance" ? "insurance" : "usage");
   const [insuranceSubTab, setInsuranceSubTab] = useState<"care" | "medical">("care");
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
+  // 月別の表示: 一覧 / 提供票 (日ごとの貸与日。ほのぼのの提供票と同じ見え方) (2026-11-11)
+  const [monthlyView, setMonthlyView] = useState<"list" | "grid">("list");
   const [editingBasic, setEditingBasic] = useState(false);
   const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
@@ -4314,8 +4317,29 @@ function ClientDetail({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {monthlyItems.length > 0 && (
+              <div className="flex justify-end">
+                <span className="inline-flex rounded-full border border-gray-300 overflow-hidden bg-white text-xs">
+                  {([["list", "一覧"], ["grid", "提供票・実績"]] as const).map(([k, label]) => (
+                    <button key={k} type="button" onClick={() => setMonthlyView(k)}
+                      className={`px-3 py-1 ${monthlyView === k ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+                      {label}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            )}
             {monthlyItems.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-8">この月のレンタルはありません</p>
+            ) : monthlyView === "grid" ? (
+              <RentalDayGrid
+                clientId={client.id}
+                items={monthlyItems}
+                yearMonth={yearMonth}
+                kindOf={rentalKind}
+                priceOf={(i) => getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0}
+                nameOf={(i) => equipment.find((e) => e.product_code === i.product_code)?.name ?? i.product_code}
+              />
             ) : (() => {
               const activeMonthly = monthlyItems.filter((i) => i.status !== "terminated");
               const terminatedMonthly = monthlyItems.filter((i) => i.status === "terminated");
