@@ -458,6 +458,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   // ★ CM 指示単位数 (2026-11-09): 利用者ごと・月ごと。入力があればその単位数までを保険請求し 超過は保険外 (全額自己負担)。
   //   保存は入力欄を離れたとき即時 (月遅/返戻フラグの「保存」ボタンとは別)。表が未適用なら全員 実績で請求し、理由を画面に出す。
   const [cmUnits, setCmUnits] = useState<Map<string, number>>(new Map()); // key: client_id
+  const [cmEntered, setCmEntered] = useState<Set<string>>(new Set()); // その月に値がある client_id (事業所で値が割れた人も含む)
   const [cmUnitsNotice, setCmUnitsNotice] = useState<string | null>(null);
   const [cmUnitsAvailable, setCmUnitsAvailable] = useState(true);
   const [cmSavingId, setCmSavingId] = useState<string | null>(null);
@@ -623,6 +624,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     getCmUnits(tenantId, billingMonth, currentOfficeId).then((r) => {
       if (cancelled) return;
       setCmUnits(r.byClient);
+      setCmEntered(r.entered);
       setCmUnitsAvailable(r.available);
       setCmUnitsNotice(r.message);
     });
@@ -648,6 +650,11 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         const m = new Map(prev);
         if (units == null) m.delete(clientId); else m.set(clientId, units);
         return m;
+      });
+      setCmEntered((prev) => {
+        const s = new Set(prev);
+        if (units == null) s.delete(clientId); else s.add(clientId);
+        return s;
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1055,6 +1062,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         totalUnits: amt.billedUnits,
         limitTargetUnits: amt.actualUnits,
         planUnits: amt.planUnits,
+        // ★ その月に CM 指示単位数が 1 件でも入っていれば、未入力の人は月遅れ扱い (build.ts の注記)
+        cmMissing: cmEntered.size > 0 && !cmEntered.has(client.id),
         totalCost,
         insuranceAmount,
         userAmount,
@@ -1396,6 +1405,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           totalUnits: amt.billedUnits,
           limitTargetUnits: amt.actualUnits,
           planUnits: amt.planUnits,
+          cmMissing: cmLoad.entered.size > 0 && !cmLoad.entered.has(client.id),
           totalCost,
           insuranceAmount,
           userAmount: amt.userAmount,
@@ -1707,7 +1717,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               <div className="px-2 py-2 border-l border-gray-200">サービス事業所</div>
               <div className="px-2 py-2 border-l border-gray-200">被保険者番号</div>
               <div className="px-2 py-2 border-l border-gray-200">利用者名</div>
-              <div className="px-1 py-2 border-l border-gray-200 text-center" title="ケアマネが給付管理で割り付けた単位数。入れるとその単位数までを保険請求し、超えた分は保険外 (全額自己負担)。空欄 = 実績で請求">CM指示単位</div>
+              <div className="px-1 py-2 border-l border-gray-200 text-center" title="ケアマネが給付管理で割り付けた単位数。入れるとその単位数までを保険請求し、超えた分は保険外 (全額自己負担)。空欄 = 月次情報 (給付管理) 未着として伝送から外す (その月に 1 名も入力が無いときは実績で請求)">CM指示単位</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">月遅</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">返戻</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">過誤</div>
@@ -1869,7 +1879,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                               placeholder={cmUnitsAvailable ? "" : "未適用"}
                               onBlur={e => handleCmUnitsCommit(client.id, e.currentTarget.value)}
                               onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                              title={!cmUnitsAvailable ? (cmUnitsNotice ?? "") : over > 0 ? `CM 指示単位数で頭打ち: 実績 ${actual} 単位 → 保険請求 ${cm} 単位 / 超過 ${over} 単位 (${(over * 10).toLocaleString()}円) は保険外 (全額自己負担)` : "空欄 = 実績で請求"}
+                              title={!cmUnitsAvailable ? (cmUnitsNotice ?? "") : over > 0 ? `CM 指示単位数で頭打ち: 実績 ${actual} 単位 → 保険請求 ${cm} 単位 / 超過 ${over} 単位 (${(over * 10).toLocaleString()}円) は保険外 (全額自己負担)` : "空欄 = 月次情報 (給付管理) 未着 → 伝送から外す (月遅れ扱い)。その月に 1 名も入力が無いときは実績で請求"}
                               className={`w-full text-[11px] text-right font-mono border rounded px-1 py-0.5 bg-white disabled:bg-gray-100 ${over > 0 ? "border-orange-400 text-orange-700 font-semibold" : "border-gray-300 text-gray-700"}`}
                             />
                             {over > 0 && <div className="text-[9px] text-orange-700 leading-tight mt-0.5">頭打ち −{over.toLocaleString()}</div>}

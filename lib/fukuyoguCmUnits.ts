@@ -28,6 +28,11 @@ export type FukuyoguCmUnitRow = {
 export type CmUnitsLoad = {
   /** client_id → 単位数 */
   byClient: Map<string, number>;
+  /**
+   * その月に 1 件でも値がある利用者 (事業所で値が割れて byClient に入らない人も含む)。
+   * 伝送で「月次情報 未入力 = 月遅れ扱い」を判定するのに使う (build.ts の cmMissing)
+   */
+  entered: Set<string>;
   /** 表が読めたか (false = 未適用・権限なし・通信エラー。全員「入力なし」扱い) */
   available: boolean;
   /** 読めなかった理由 / 事業所未選択で複数の値がある等の注意 (画面に出す) */
@@ -55,7 +60,7 @@ export async function getCmUnits(tenantId: string, month: string, officeId: stri
         ? "CM 指示単位数の表 (fukuyogu_cm_units) が未適用です — migrations/fukuyogu_cm_units.sql を適用するまで、全員 実績で請求します"
         : `CM 指示単位数を読めませんでした (${error.message}) — 全員 実績で請求します`;
       console.error("fukuyogu_cm_units 読込失敗:", error.code, error.message);
-      return { byClient, available: false, message: why };
+      return { byClient, entered: new Set(), available: false, message: why };
     }
     rows.push(...(data ?? []));
     if (!data || data.length < 1000) break;
@@ -72,6 +77,7 @@ export async function getCmUnits(tenantId: string, month: string, officeId: stri
   }
   return {
     byClient,
+    entered: new Set(seen.keys()),
     available: true,
     message: conflicted.length
       ? `事業所によって CM 指示単位数が違う利用者が ${conflicted.length} 名います — 事業所を選ぶとその事業所の値で頭打ちします (全事業所表示では実績で請求)`

@@ -209,6 +209,11 @@ export interface FukuyoguSeikyuRow {
   limitTargetUnits?: number | null;
   /** 10 項9 計画単位数 (CM 指示単位数)。省略時は totalUnits */
   planUnits?: number | null;
+  /**
+   * その月の CM 指示単位数 (月次情報 = 給付管理) が この人だけ未入力。true なら伝送から外す (月遅れ扱い)。
+   * 呼び出し側は「その月・その事業所に 1 件でも入力がある」ときだけ true にする (全員未入力の月は実績で請求)。
+   */
+  cmMissing?: boolean;
   /** 費用総額 (円。頭打ち後の単位数 × 10。保険外は含まない) */
   totalCost: number;
   /** 保険請求額 (円) */
@@ -335,6 +340,15 @@ export function buildFukuyoguDensou(
     if (r.kohiTandoku || r.planUnits !== 0) return true;
     warnings.push(
       `${r.userName}: CM 指示単位数が 0 のため伝送から除外しました (実績 ${r.limitTargetUnits ?? r.totalUnits} 単位は保険外・全額利用者負担)`,
+    );
+    return false;
+  }).filter((r) => {
+    // ★ 2026-11-11 (user 承認): CM 指示単位数 (月次情報 = 給付管理) が その月に無い人は出さない (月遅れ扱い)。
+    //   ほのぼのは月次情報に行がある人だけ請求している (2026-09: 請求 1,138 名中 1,136 名が該当・例外は被保番変更の 2 名 /
+    //   2026-08: 1,131 名中 1,130 名)。給付管理票が届く前に出すと国保連で突合できず返戻になる。
+    if (r.kohiTandoku || !r.cmMissing) return true;
+    warnings.push(
+      `${r.userName}: CM 指示単位数 (月次情報) が未入力のため伝送から除外しました (${r.totalCost.toLocaleString()}円・月遅れ扱い) — 給付管理の単位数が届いたら入力して翌月以降に請求`,
     );
     return false;
   });

@@ -282,11 +282,16 @@ async function main() {
   const cmUnitsByClient = new Map<string, number>();
   {
     const env = readEnv();
-    const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/fukuyogu_cm_units?select=client_id,units&tenant_id=eq.${TENANT}&office_id=eq.${office.id}&service_month=eq.${MONTH}`, {
-      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
-    });
-    if (res.ok) for (const r of (await res.json()) as { client_id: string; units: number }[]) cmUnitsByClient.set(r.client_id, r.units);
-    else console.log(`  ⚠ fukuyogu_cm_units を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 表が未適用なら CM 指示単位数は全員 入力なし (実績で請求) として組む`);
+    // ★ 2026-11-11: 1000 行で切れていた (PostgREST の上限)。order=id で全ページ読む
+    for (let from = 0; ; from += 1000) {
+      const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/fukuyogu_cm_units?select=client_id,units&tenant_id=eq.${TENANT}&office_id=eq.${office.id}&service_month=eq.${MONTH}&order=id&offset=${from}&limit=1000`, {
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+      });
+      if (!res.ok) { console.log(`  ⚠ fukuyogu_cm_units を読めない (${res.status} ${(await res.text()).slice(0, 120)}) — 表が未適用なら CM 指示単位数は全員 入力なし (実績で請求) として組む`); cmUnitsByClient.clear(); break; }
+      const rows = (await res.json()) as { client_id: string; units: number }[];
+      for (const r of rows) cmUnitsByClient.set(r.client_id, r.units);
+      if (rows.length < 1000) break;
+    }
     console.log(`  CM 指示単位数: ${cmUnitsByClient.size} 名 (${MONTH})`);
   }
   // ★ 負担割合証 (FY-H)。表があれば表、無ければ BillingTab と同じく clients.benefit_rate (--benefit-from-csv で CSV を代わりに)
@@ -352,6 +357,7 @@ async function main() {
       carePlanKubun: c.care_office_id ? planKubunById.get(c.care_office_id) ?? null : null,
       copayRate: amt.copayRate, details,
       totalUnits: amt.billedUnits, limitTargetUnits: amt.actualUnits, planUnits: amt.planUnits, totalCost: amt.totalCost,
+      cmMissing: cmUnitsByClient.size > 0 && !cmUnitsByClient.has(cid),
       insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
       kohiHobetsu: amt.kohiHobetsu, kohiFutansha: kohi?.futansha ?? null, kohiJukyusha: kohi?.jukyusha ?? null,
       kohiAmount: amt.kohiAmount, kohiTandoku: amt.kohiTandoku,
