@@ -549,7 +549,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
             ) : clientLoading ? (
               <div className="flex h-full items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
             ) : (
-              <div className="p-4 space-y-4">
+              // 広い画面で書類の行が横に伸びないよう、右パネルの中身は中央寄せで幅を抑える
+              <div className="p-4 space-y-4 max-w-6xl mx-auto w-full">
                 {companyInfoMissing.length > 0 && (
                   <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                     書類の会社欄に未設定の項目があります（{companyInfoMissing.join("・")}）。設定 → 会社情報 で、この事業所の値を入れてください。
@@ -573,7 +574,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                     <p className="text-xs font-semibold text-red-700">書類タスク</p>
                     {(docIndex?.tasksByClient.get(selectedClient.id) ?? []).map((t) => (
                       <div key={t.id} className="flex items-center gap-2 text-xs text-red-800">
-                        <span className="flex-1">{EXPECTED_DOC_TYPE_LABELS[t.expected_doc_type] ?? t.expected_doc_type}　<span className="text-red-500">{t.trigger_label ?? ""}{t.due_date ? `　期限 ${t.due_date}` : ""}</span></span>
+                        {/* ボタンを右端に飛ばさず書類名のすぐ横に置く */}
+                        <span className="min-w-0">{EXPECTED_DOC_TYPE_LABELS[t.expected_doc_type] ?? t.expected_doc_type}　<span className="text-red-500">{t.trigger_label ?? ""}{t.due_date ? `　期限 ${t.due_date}` : ""}</span></span>
                         {t.expected_doc_type !== "supplier_email" && (
                           <button
                             onClick={() => { setPendingDocTaskId(t.id); setPendingExpectedDocType(t.expected_doc_type); openCreate(t.expected_doc_type); }}
@@ -689,7 +691,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                           この利用者宛ての受信ケアプランはありません
                         </p>
                       ) : (
-                        <div className="space-y-2">
+                        // 短いカードなので広い画面では 2 列に並べる
+                        <div className="grid md:grid-cols-2 gap-2">
                           {groups.map((g) => (
                             <div
                               key={g.key}

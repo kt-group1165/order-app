@@ -192,6 +192,8 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
         <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">職員がいません</div>
       ) : (
         <div className="flex-1 overflow-y-auto p-3">
+          {/* 5列だけの表なので広い画面では中央寄せで幅を抑える (間延び防止) */}
+          <div className="max-w-5xl mx-auto w-full">
           <table className="w-full text-sm bg-white">
             <thead className="bg-gray-50 text-xs text-gray-600">
               <tr>
@@ -224,6 +226,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

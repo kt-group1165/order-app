@@ -332,7 +332,7 @@ export default function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: 
 
   const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-400";
   const chipCls = (active: boolean) =>
-    `px-2.5 py-1 rounded-full text-xs whitespace-nowrap border transition-colors ${
+    `px-2 py-0.5 rounded-full text-xs whitespace-nowrap border transition-colors ${
       active ? "bg-emerald-500 text-white border-emerald-500" : "bg-white text-gray-600 border-gray-200 hover:border-emerald-300"
     }`;
 
@@ -350,8 +350,11 @@ export default function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: 
       </div>
 
       {/* サブタブ + フィルタ: 事業所 / (貸出状況: ステータス・カテゴリ) / (台帳管理: 追加・廃棄済み表示) */}
-      <div className="bg-white border-b border-gray-100 px-4 py-2 shrink-0 space-y-2">
-        <div className="flex items-center gap-2 flex-wrap">
+      {/* 2 行のフィルタを ラベル列固定の 1 パネルにまとめ、一覧と同じ幅で中央寄せ */}
+      <div className="bg-white border-b border-gray-100 px-4 py-2 shrink-0">
+        <div className="max-w-4xl mx-auto w-full grid grid-cols-[3.5rem_1fr] gap-x-2 gap-y-1.5 items-center">
+        <span className="text-[11px] text-gray-400">表示</span>
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <div className="flex items-center gap-1">
             {([["status", "貸出状況"], ["master", "台帳管理"]] as const).map(([id, label]) => (
               <button key={id} onClick={() => setSubTab(id)}
@@ -393,13 +396,17 @@ export default function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: 
           )}
         </div>
         {subTab === "status" && categories.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
+          <>
+          <span className="text-[11px] text-gray-400">カテゴリ</span>
+          <div className="flex items-center gap-1 flex-wrap min-w-0">
             <button onClick={() => setCategoryFilter("")} className={chipCls(categoryFilter === "")}>全カテゴリ</button>
             {categories.map((c) => (
               <button key={c} onClick={() => setCategoryFilter(c)} className={chipCls(categoryFilter === c)}>{c}</button>
             ))}
           </div>
+          </>
         )}
+        </div>
       </div>
 
       {/* 一覧 (カテゴリごとにグループ表示) */}
@@ -503,7 +510,7 @@ export default function DemoUnitsTab({ tenantId, currentOfficeId }: { tenantId: 
                         onClick={() => openHistory(u)}
                         className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 flex items-center gap-3 cursor-pointer hover:border-emerald-300 transition-colors">
                         <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
-                          <span className="text-xs font-mono text-gray-500 shrink-0">{u.unit_no || "―"}</span>
+                          <span className="text-xs font-mono text-gray-500 shrink-0 w-14 truncate">{u.unit_no || "―"}</span>
                           <span className="text-sm font-medium text-gray-800 truncate">{u.product_name}</span>
                           {u.color && <span className="text-xs text-gray-400 shrink-0">{u.color}</span>}
                           {!officeFilter && u.office_id && (

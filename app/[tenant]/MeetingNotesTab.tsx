@@ -237,11 +237,14 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
                   onClick={() => startEdit(n)}
                   title="クリックで編集"
                   className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 flex items-center justify-between cursor-pointer hover:border-emerald-300 transition-colors">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-sm font-medium text-gray-800 truncate">{n.client_name || "(利用者名なし)"}<span className="font-normal text-gray-400 ml-0.5">様</span></span>
-                    {n.office_label && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 shrink-0">{n.office_label}</span>}
-                    {n.meeting_date && <span className="text-xs text-gray-500 shrink-0">開催日: {n.meeting_date}</span>}
-                    {n.created_date && <span className="text-xs text-gray-400 shrink-0">作成: {n.created_date}</span>}
+                  {/* 固定幅の列にして行ごとに縦が揃うようにする (狭い画面では折り返す) */}
+                  <div className="flex items-center gap-x-3 gap-y-0.5 min-w-0 flex-wrap md:flex-nowrap">
+                    <span className="text-sm font-medium text-gray-800 truncate md:w-44 md:shrink-0">{n.client_name || "(利用者名なし)"}<span className="font-normal text-gray-400 ml-0.5">様</span></span>
+                    <span className="md:w-28 md:shrink-0 min-w-0 truncate">
+                      {n.office_label && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">{n.office_label}</span>}
+                    </span>
+                    <span className="text-xs text-gray-500 shrink-0 md:w-36">{n.meeting_date && <>開催日: {n.meeting_date}</>}</span>
+                    <span className="text-xs text-gray-400 shrink-0 md:w-32">{n.created_date && <>作成: {n.created_date}</>}</span>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
@@ -371,7 +374,9 @@ export default function MeetingNotesTab({ tenantId, currentOfficeId, currentOffi
           </div>
         </div>
         <div className="flex-1 min-w-0 overflow-auto p-4">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 overflow-x-auto">
+          {/* 書類の枠は A4 横相当の幅で中央寄せ (全画面時に枠だけ横に伸びないように) */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 overflow-x-auto max-w-[1100px] mx-auto">
+
           <div id="meeting-note-print-content" style={{ fontFamily: "'Meiryo','MS PGothic',sans-serif", color: "#111", minWidth: "960px" }}>
             {/* 1行目: 第4表 / タイトル / 作成年月日 */}
             <div style={{ display: "flex", alignItems: "flex-start", marginBottom: "14px" }}>

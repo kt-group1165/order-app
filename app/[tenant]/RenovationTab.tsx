@@ -451,8 +451,9 @@ function DelayedView({
     return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">予定日を過ぎた工程はありません</div>;
   }
   return (
+    // 6 列の表なので広い画面では中央寄せで幅を抑える (進行表は工程が多いので全幅のまま)
     <div className="flex-1 overflow-y-auto overflow-x-auto p-3">
-      <table className="w-full min-w-[760px] text-sm bg-white">
+      <table className="w-full max-w-6xl mx-auto min-w-[760px] text-sm bg-white">
         <thead className="bg-gray-50 text-xs text-gray-600">
           <tr>
             <th className="text-left px-3 py-2 w-20">遅延</th>
@@ -507,7 +508,9 @@ function SummaryView({
     return <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">この年度の案件はありません</div>;
   }
   return (
+    // 数値 7 列の集計表は全幅だと数字が右端に離れて読みにくいので中央寄せで幅を抑える
     <div className="flex-1 overflow-y-auto overflow-x-auto p-3">
+      <div className="max-w-4xl mx-auto w-full">
       <table className="w-full min-w-[620px] text-sm bg-white">
         <thead className="bg-gray-50 text-xs text-gray-600">
           <tr>
@@ -554,6 +557,7 @@ function SummaryView({
           (件数には含まれます)。金額を入力すると粗利・仕入率に反映されます。
         </p>
       )}
+      </div>
     </div>
   );
 }
