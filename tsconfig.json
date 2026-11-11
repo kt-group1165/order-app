@@ -33,6 +33,7 @@
   "exclude": [
     "node_modules",
     "scripts/attendance-calc-parity.mts",
+    "scripts/cert-month-parity.mts",
     "scripts/fukuyogu-densou-check.mts"
   ]
 }
