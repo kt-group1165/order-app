@@ -34,6 +34,7 @@ import {
 } from "@/lib/offices";
 import { getMaxUserNumber } from "@kt/shared/user-number";
 import { usePerOfficeIds, isPerOffice, ownerKind, copyRowForOffice } from "@/lib/insurance/office-scope";
+import { FUKUYOGU_SERVICE_CODES } from "@/lib/kokuho-densou/build";
 import RentalDayGrid from "./RentalDayGrid";
 import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
 
@@ -2900,6 +2901,8 @@ function ClientDetail({
   const [viewMode, setViewMode] = useState<"current" | "monthly" | "docs" | "rental_history">("current");
   // 月別の表示: 一覧 / 提供票 (日ごとの貸与日。ほのぼのの提供票と同じ見え方) (2026-11-11)
   const [monthlyView, setMonthlyView] = useState<"list" | "grid">("list");
+  // 用具の並び: 種目順 (既定。サービスコード 171001〜1013 の順) / レンタル開始順 (2026-11-11)
+  const [itemSort, setItemSort] = useState<"category" | "start">("category");
   const [editingBasic, setEditingBasic] = useState(false);
   const [basicForm, setBasicForm] = useState({ name: client.name, furigana: client.furigana ?? "", phone: client.phone ?? "", mobile: client.mobile ?? "", address: client.address ?? "", gender: client.gender ?? "", care_manager: client.care_manager ?? "", care_manager_org: client.care_manager_org ?? "", care_office_id: client.care_office_id ?? "", care_manager_id: client.care_manager_id ?? "", referrer_org: client.referrer_org ?? "", memo: "", is_facility: client.is_facility ?? false });
   const [basicSaving, setBasicSaving] = useState(false);
@@ -3372,7 +3375,27 @@ function ClientDetail({
     });
   })();
 
-  const activeItems = clientItems.filter((i) => i.status === "rental_started");
+  const categoryRank = (i: OrderItem) => {
+    const cat = equipment.find((e) => e.product_code === i.product_code)?.category ?? "";
+    const code = FUKUYOGU_SERVICE_CODES[cat.normalize("NFKC").trim()];
+    return code ? Number(code) : 999999;
+  };
+  const sortItems = (list: OrderItem[]) => [...list].sort((a, b) =>
+    itemSort === "start"
+      ? (a.rental_start_date ?? "9999").localeCompare(b.rental_start_date ?? "9999") || categoryRank(a) - categoryRank(b)
+      : categoryRank(a) - categoryRank(b) || (a.rental_start_date ?? "9999").localeCompare(b.rental_start_date ?? "9999"));
+  const sortToggle = () => (
+    <span className="inline-flex rounded-full border border-gray-300 overflow-hidden bg-white text-xs">
+      {([["category", "種目順"], ["start", "レンタル開始順"]] as const).map(([k, label]) => (
+        <button key={k} type="button" onClick={() => setItemSort(k)}
+          className={`px-3 py-1 ${itemSort === k ? "bg-gray-700 text-white" : "text-gray-600 hover:bg-gray-100"}`}>
+          {label}
+        </button>
+      ))}
+    </span>
+  );
+  const sortedMonthlyItems = sortItems(monthlyItems);
+  const activeItems = sortItems(clientItems.filter((i) => i.status === "rental_started"));
   const orderedItems = clientItems.filter((i) => i.status === "ordered");
   const deliveredItems = clientItems.filter((i) => ["delivered", "trial"].includes(i.status));
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -4074,7 +4097,10 @@ function ClientDetail({
             <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100 mb-3">
               {assignmentOffices.length === 0 ? (
                 <p className="text-xs text-gray-400 text-center py-4">事業所が登録されていません</p>
-              ) : assignmentOffices.map((o) => {
+              ) : assignmentOffices
+                // 他事業所は 利用中のところだけ出す (利用の無い事業所は並べない。2026-11-11)
+                .filter((o) => o.id === currentOfficeId || clientAssignments.some((a) => a.office_id === o.id && a.end_date === null))
+                .map((o) => {
                 const activeAssignment = clientAssignments.find((a) => a.office_id === o.id && a.end_date === null);
                 const isActive = !!activeAssignment;
                 return (
@@ -4284,7 +4310,10 @@ function ClientDetail({
           )}
           {activeItems.length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-gray-500 mb-2">レンタル中</h3>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-semibold text-gray-500">レンタル中</h3>
+                {sortToggle()}
+              </div>
               <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{activeItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
             </section>
           )}
@@ -4323,7 +4352,8 @@ function ClientDetail({
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {monthlyItems.length > 0 && (
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                {sortToggle()}
                 <span className="inline-flex rounded-full border border-gray-300 overflow-hidden bg-white text-xs">
                   {([["list", "一覧"], ["grid", "提供票・実績"]] as const).map(([k, label]) => (
                     <button key={k} type="button" onClick={() => setMonthlyView(k)}
@@ -4339,15 +4369,15 @@ function ClientDetail({
             ) : monthlyView === "grid" ? (
               <RentalDayGrid
                 clientId={client.id}
-                items={monthlyItems}
+                items={sortedMonthlyItems}
                 yearMonth={yearMonth}
                 kindOf={rentalKind}
                 priceOf={(i) => getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0}
                 nameOf={(i) => equipment.find((e) => e.product_code === i.product_code)?.name ?? i.product_code}
               />
             ) : (() => {
-              const activeMonthly = monthlyItems.filter((i) => i.status !== "terminated");
-              const terminatedMonthly = monthlyItems.filter((i) => i.status === "terminated");
+              const activeMonthly = sortedMonthlyItems.filter((i) => i.status !== "terminated");
+              const terminatedMonthly = sortedMonthlyItems.filter((i) => i.status === "terminated");
               const getHistoricalPrice = (item: OrderItem) =>
                 getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? item.rental_price ?? 0;
               const activeTotal = activeMonthly.reduce((s, i) => s + getHistoricalPrice(i), 0);
