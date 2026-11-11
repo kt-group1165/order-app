@@ -132,6 +132,8 @@ async function plan(sb) {
       Object.assign(row, {
         office_id: CS, copied_from_id: src.id, office_source: "import_record",
         care_level: g.level ?? src.care_level, certification_status: g.status ?? src.certification_status,
+        // ★ effective_date も認定開始日に (元の行のままだと同じ元から作った 2 世代が同値になり、新旧が逆に選ばれる。fix_caresapo_rows_effective_date.mjs)
+        effective_date: g.start,
         certification_start_date: g.start, certification_end_date: g.end ?? src.certification_end_date,
       });
       ops.push({ client: c, src: src.id, gen: g, row });
