@@ -322,8 +322,10 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
     <div className="flex flex-col h-full">
       {subTabBar}
       {/* Search + Import */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
-        <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
+      {/* 横長対策: ツールバー・一覧は max-w-6xl で中央寄せ (検索欄が 1900px まで伸びないように) */}
+      <div className="bg-white border-b border-gray-100 px-3 py-2 shrink-0">
+      <div className="max-w-6xl mx-auto w-full flex flex-wrap gap-2">
+        <div className="flex-1 min-w-[12rem] flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
           <Search size={14} className="text-gray-400 shrink-0" />
           <input
             value={search}
@@ -417,8 +419,10 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
           </button>
         )}
       </div>
+      </div>
 
-      <div className="px-3 py-2 bg-white border-b border-gray-100 shrink-0 space-y-2">
+      <div className="px-3 py-2 bg-white border-b border-gray-100 shrink-0">
+      <div className="max-w-6xl mx-auto w-full space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-xs text-gray-400 mr-1">{filtered.length}件</p>
           {/* 並び替えボタン */}
@@ -451,6 +455,7 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
           <p className="text-[10px] text-gray-400 mt-0.5">CSV順のとき行をドラッグして並び替え可能</p>
         )}
       </div>
+      </div>
 
       {/* List */}
       {loading ? (
@@ -464,7 +469,7 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
               {equipment.length === 0 ? "用具データがありません。CSVからインポートしてください。" : "該当なし"}
             </p>
           ) : (
-            <table className="min-w-[860px] w-full table-fixed bg-white text-left">
+            <table className="min-w-[860px] max-w-6xl mx-auto w-full table-fixed bg-white text-left">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="pl-3 py-2 text-xs font-semibold text-gray-500 w-[5.5rem]">種目</th>
@@ -811,7 +816,9 @@ function EquipmentDetail({
   return (
     <div className="flex flex-col h-full">
       {/* ヘッダー */}
-      <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 shrink-0">
+      {/* 横長対策: 編集ボタンが右端に飛ばないよう本文と同じ幅に揃える */}
+      <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
+      <div className="max-w-3xl mx-auto w-full flex items-center gap-3">
         <button onClick={isEditing && !isNew ? handleCancel : onBack}>
           <ChevronLeft size={20} className="text-gray-500" />
         </button>
@@ -827,11 +834,12 @@ function EquipmentDetail({
           </button>
         )}
       </div>
+      </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {isEditing ? (
-          /* 編集フォーム */
-          <>
+          /* 編集フォーム — 横長対策: 幅を max-w-3xl に抑え、短い項目は 2 列に */
+          <div className="max-w-3xl mx-auto w-full space-y-3">
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">用具名 *</label>
               <input
@@ -864,6 +872,7 @@ function EquipmentDetail({
                 </button>
               </div>
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               { label: "TAISコード", value: taisCode, setter: setTaisCode, placeholder: "例：07-0001-01", type: "text" },
               { label: "カテゴリ", value: category, setter: setCategory, placeholder: "例：ベッド", type: "text" },
@@ -879,7 +888,9 @@ function EquipmentDetail({
                 />
               </div>
             ))}
+            </div>
             {/* レンタル価格 + 改定日 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">レンタル価格（円/月）</label>
               <input
@@ -900,6 +911,8 @@ function EquipmentDetail({
               />
               <p className="text-[11px] text-gray-400 mt-1">価格を変更した場合のみ履歴に記録されます</p>
             </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               { label: "全国平均価格（円）", value: nationalAvg, setter: setNationalAvg, placeholder: "例：12000", type: "number" },
               { label: "限度額（円）", value: priceLimit, setter: setPriceLimit, placeholder: "例：18000", type: "number" },
@@ -915,6 +928,7 @@ function EquipmentDetail({
                 />
               </div>
             ))}
+            </div>
             {[
               { label: "選定理由", value: selectionReason, setter: setSelectionReason },
               { label: "提案理由", value: proposalReason, setter: setProposalReason },
@@ -1059,7 +1073,7 @@ function EquipmentDetail({
                 {error}
               </div>
             )}
-          </>
+          </div>
         ) : (
           /* 表示モード */
           <>
@@ -1239,7 +1253,9 @@ function EquipmentDetail({
 
       {/* 編集時フッター */}
       {isEditing && (
-        <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0 flex gap-2">
+        <div className="px-4 pb-6 pt-3 border-t border-gray-100 shrink-0">
+        {/* 横長対策: 保存/キャンセルをフォームと同じ幅に */}
+        <div className="max-w-3xl mx-auto w-full flex gap-2">
           <button
             onClick={handleCancel}
             className="flex-1 py-3 rounded-xl border border-gray-200 text-sm text-gray-600 font-medium"
@@ -1254,6 +1270,7 @@ function EquipmentDetail({
             {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
             保存
           </button>
+        </div>
         </div>
       )}
     </div>
@@ -1412,8 +1429,9 @@ function ImportModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end z-50">
-      <div className="bg-white w-full rounded-t-2xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
+      {/* 横長対策: 下から出るシートを広い画面では max-w-3xl に */}
+      <div className="bg-white w-full max-w-3xl rounded-t-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
           <h3 className="font-semibold text-gray-800">用具CSVインポート</h3>
           <button onClick={onClose}>
@@ -1717,8 +1735,9 @@ function SupplierPriceUpdateModal({
     : effectiveMonth;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end z-50">
-      <div className="bg-white w-full rounded-t-2xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
+      {/* 横長対策: 広い画面では max-w-3xl のシートに (差分行の左右が離れすぎないように) */}
+      <div className="bg-white w-full max-w-3xl rounded-t-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
           <h3 className="font-semibold text-gray-800">卸別価格取込</h3>
           <button onClick={onClose}>

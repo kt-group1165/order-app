@@ -268,7 +268,8 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
             ))}
           </div>
           {/* 検索 */}
-          <div className="flex-1 min-w-[8rem] flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
+          {/* 横長対策: 検索欄は max-w-md まで (件数を右端に飛ばさず操作群の隣に置く) */}
+          <div className="flex-1 min-w-[8rem] max-w-md flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
             <Search size={14} className="text-gray-400 shrink-0" />
             <input
               value={search}
@@ -331,7 +332,7 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
               </button>
             </>
           )}
-          <span className="text-xs text-gray-400 shrink-0 ml-auto">
+          <span className="text-xs text-gray-400 shrink-0">
             {view === "list" ? filtered.length : pivotFiltered.length}件
           </span>
         </div>
@@ -345,7 +346,8 @@ export default function CeilingPriceTab({ tenantId }: { tenantId: string }) {
             {filtered.length === 0 ? (
               <p className="text-gray-400 text-center py-16 text-sm">該当データがありません</p>
             ) : (
-              <table className="w-full text-xs">
+              /* 横長対策: 取込一覧は 7 列だけなので max-w-6xl に抑える (推移ピボットは横に長いので全幅のまま) */
+              <table className="w-full max-w-6xl text-xs">
                 <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10">
                   <tr>
                     <th className="px-3 py-2 text-left font-semibold">商品コード(TAIS)</th>

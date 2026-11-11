@@ -270,7 +270,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
         <div className="bg-white border-b border-gray-100 px-4 py-3 shrink-0">
           <h2 className="font-semibold text-gray-800">設定</h2>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* 横長対策: メニューは max-w-3xl で中央寄せ (矢印が右端に飛ばないように) */}
+        <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl mx-auto w-full space-y-4">
           {/* 事業所切替セクション */}
           {settingsOffices.length > 0 && (
             <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3">
@@ -330,6 +332,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
             ))}
           </div>
         </div>
+        </div>
       </div>
     );
   }
@@ -340,7 +343,8 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="会社情報" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="bg-white rounded-xl p-4 space-y-3">
+          {/* 横長対策: フォームは max-w-3xl、短い項目は 2 列 */}
+          <div className="bg-white rounded-xl p-4 space-y-3 max-w-3xl mx-auto w-full">
             <div>
               <label className="text-xs text-gray-500 block mb-1">どの事業所の会社情報か</label>
               <select value={companyScope} onChange={(e) => setCompanyScope(e.target.value)}
@@ -363,8 +367,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
                 書類に必要なのに空の項目: {companyMissing.join("・")}
               </p>
             )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {companyFields.map(({ key, label, placeholder }) => (
-              <div key={key}>
+              <div key={key} className={key === "company_address" || key === "invoice_number" ? "sm:col-span-2" : ""}>
                 <label className="text-xs text-gray-500 block mb-1">{label}</label>
                 <input
                   value={company[key]}
@@ -374,9 +379,11 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
                 />
               </div>
             ))}
+            </div>
             <p className="text-xs font-semibold text-gray-400 pt-2 border-t border-gray-100">重要事項説明書用</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {importantMattersFields.map(({ key, label, placeholder }) => (
-              <div key={key}>
+              <div key={key} className={key === "service_area" ? "sm:col-span-2" : ""}>
                 <label className="text-xs text-gray-500 block mb-1">{label}</label>
                 <input
                   value={company[key]}
@@ -386,6 +393,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
                 />
               </div>
             ))}
+            </div>
             <div>
               <label className="text-xs text-gray-500 block mb-1">職員体制（常勤 / 非常勤）</label>
               <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -420,7 +428,10 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="自事業所管理" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <OfficeManagementSection tenantId={tenantId} />
+          {/* 横長対策: 一覧は max-w-4xl で中央寄せ */}
+          <div className="max-w-4xl mx-auto w-full">
+            <OfficeManagementSection tenantId={tenantId} />
+          </div>
         </div>
       </div>
     );
@@ -431,7 +442,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     return (
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="卸会社マスタ" onBack={() => setSettingsPage("menu")} />
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* 横長対策: 卸の入力欄が全幅に伸びないよう max-w-3xl */}
+        <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl mx-auto w-full space-y-3">
           {/* 新規追加 */}
           <div className="bg-white rounded-xl p-4 space-y-2 border border-emerald-100">
             <p className="text-sm font-semibold text-gray-800">卸会社を追加</p>
@@ -487,6 +500,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
             </div>
           ))}
         </div>
+        </div>
       </div>
     );
   }
@@ -497,7 +511,10 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="居宅事業所マスタ" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <CareOfficeSection tenantId={tenantId} />
+          {/* 横長対策: 一覧は max-w-4xl で中央寄せ (編集/削除が右端に飛ばないように) */}
+          <div className="max-w-4xl mx-auto w-full">
+            <CareOfficeSection tenantId={tenantId} />
+          </div>
         </div>
       </div>
     );
@@ -508,7 +525,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     return (
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="AI使用状況・料金" onBack={() => setSettingsPage("menu")} />
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {/* 横長対策: 広い画面では 2 列 (音声 / カナ変換) に並べ、各カードの幅を抑える */}
+        <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-5xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <div>
             <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">🎤 音声認識（Google Speech-to-Text）</h2>
             <SpeechUsageSection tenantId={tenantId} />
@@ -517,6 +536,7 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
             <h2 className="text-sm font-semibold text-gray-700 mb-2 px-1">🤖 AIカナ変換（OpenAI gpt-4o-mini）</h2>
             <OpenAIUsageSection tenantId={tenantId} />
           </div>
+        </div>
         </div>
       </div>
     );
@@ -527,11 +547,13 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="データ再取込" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-4xl mx-auto w-full">
           {DATA_REIMPORT_ENABLED ? (
             <DataReimportSection tenantId={tenantId} />
           ) : (
             <p className="text-sm text-gray-600">この機能は停止しています (介護側と共有の保険情報を全件消すため)。</p>
           )}
+          </div>
         </div>
       </div>
     );
@@ -543,7 +565,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="軽度者例外給付 市町村ルール" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <ExceptionInsurerRulesSection tenantId={tenantId} />
+          <div className="max-w-5xl mx-auto w-full">
+            <ExceptionInsurerRulesSection tenantId={tenantId} />
+          </div>
         </div>
       </div>
     );
@@ -555,7 +579,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
       <div className="flex flex-col h-full bg-gray-50">
         <PageHeader title="契約書・重要事項の文面" onBack={() => setSettingsPage("menu")} />
         <div className="flex-1 overflow-y-auto p-4">
-          <ContractTemplateSection tenantId={tenantId} />
+          <div className="max-w-4xl mx-auto w-full">
+            <ContractTemplateSection tenantId={tenantId} />
+          </div>
         </div>
       </div>
     );
@@ -566,7 +592,9 @@ export default function SettingsTab({ tenantId, currentOfficeId, officeViewAll, 
     <div className="flex flex-col h-full bg-gray-50">
       <PageHeader title="個別援助計画書テンプレート" onBack={() => setSettingsPage("menu")} />
       <div className="flex-1 overflow-y-auto p-4">
-        <CarePlanTemplateSection tenantId={tenantId} />
+        <div className="max-w-4xl mx-auto w-full">
+          <CarePlanTemplateSection tenantId={tenantId} />
+        </div>
       </div>
     </div>
   );

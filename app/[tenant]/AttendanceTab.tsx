@@ -1047,7 +1047,8 @@ export default function AttendanceTab({
             </span>
           )}
 
-          <div className="ml-auto flex items-center gap-3 text-[11px] text-gray-500 tabular-nums">
+          {/* 横長対策: 実労働・有給は右端に飛ばさず「消費」の隣に区切り線付きで並べる */}
+          <div className="pl-3 border-l border-gray-300/70 flex items-center gap-3 flex-wrap text-[11px] text-gray-500 tabular-nums">
             <span>実労働 {formatHM(summary.total_work)}</span>
             <span>有給 {summary.total_paid_leave_days} 日</span>
             {isHonbu && (

@@ -231,7 +231,8 @@ function RequestListView({ rows, onReload }: { rows: OvertimeRequest[]; onReload
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-auto p-3">
-      <table className="w-full min-w-[640px] text-sm bg-white">
+      {/* 横長対策: 申請一覧は max-w-6xl で中央寄せ */}
+      <table className="w-full min-w-[640px] max-w-6xl mx-auto text-sm bg-white">
         <thead className="bg-gray-50 text-xs text-gray-600">
           <tr>
             <th className="text-left px-3 py-2">対象日</th>
@@ -324,11 +325,13 @@ function ApprovalView({ rows, isAdmin, onReload }: { rows: OvertimeRequest[]; is
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+    // 横長対策: 承認カードは max-w-4xl (承認/却下ボタンが右端に飛ばないように)
+    <div className="flex-1 overflow-y-auto p-3">
+    <div className="max-w-4xl mx-auto w-full space-y-2">
       {rows.map((r) => (
         <div key={r.id} className="bg-white border border-gray-200 rounded-lg p-3">
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold text-gray-800">{r.member_name} — {r.target_date}</div>
               <div className="text-xs text-gray-500 mt-0.5">
                 {r.overtime_start_time.slice(0, 5)}〜{r.overtime_end_time.slice(0, 5)} ({minutesLabel(r.planned_minutes)})
@@ -372,6 +375,7 @@ function ApprovalView({ rows, isAdmin, onReload }: { rows: OvertimeRequest[]; is
           )}
         </div>
       ))}
+    </div>
     </div>
   );
 }
@@ -443,8 +447,10 @@ function SummaryView({ rows, onReload }: { rows: OvertimeRequest[]; onReload: ()
   }
 
   return (
+    // 横長対策: 4 列の集計表なので max-w-4xl で中央寄せ
     <div className="flex-1 overflow-y-auto p-3">
-      <div className="mb-3 flex items-center gap-2">
+    <div className="max-w-4xl mx-auto w-full">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <label className="text-xs text-gray-600">対象月</label>
         <select
           value={effMonth ?? ""}
@@ -518,6 +524,7 @@ function SummaryView({ rows, onReload }: { rows: OvertimeRequest[]; onReload: ()
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
