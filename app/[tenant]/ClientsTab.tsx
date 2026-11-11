@@ -36,6 +36,7 @@ import { getMaxUserNumber } from "@kt/shared/user-number";
 import { usePerOfficeIds, isPerOffice, ownerKind, copyRowForOffice } from "@/lib/insurance/office-scope";
 import { FUKUYOGU_SERVICE_CODES } from "@/lib/kokuho-densou/build";
 import RentalDayGrid from "./RentalDayGrid";
+import { categoryChipClass } from "@/lib/fukuyogu-category-color";
 import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
@@ -3524,9 +3525,12 @@ function ClientDetail({
         <td className="py-2 pr-2 max-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
             {/* 介護保険の用具は 種目 (手すり・特殊寝台 等) の札を付ける (2026-11-11) */}
-            {!selfPay && categoryOf(item) && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 bg-gray-50 text-gray-600 whitespace-nowrap shrink-0">{categoryOf(item)}</span>
-            )}
+            {/* 札の欄は自費の行でも同じ幅を取り、用具名の頭をそろえる */}
+            <span className="w-[6.5rem] shrink-0 flex">
+              {!selfPay && categoryOf(item) && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap truncate max-w-full ${categoryChipClass(categoryOf(item))}`}>{categoryOf(item)}</span>
+              )}
+            </span>
             <span className={`truncate text-sm font-medium ${dim ? "text-gray-600" : "text-gray-800"}`}>
               {equipName(item.product_code)}
             </span>

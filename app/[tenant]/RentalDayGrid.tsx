@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase, type OrderItem } from "@/lib/supabase";
 import { rentalDayMask, halfMonthFlags, halfMonthUnits, type DateRange } from "@/lib/half-month-units";
 import { groupPausesByItem } from "@/lib/fukuyoguPauses";
+import { categoryChipClass } from "@/lib/fukuyogu-category-color";
 
 type Kind = "介護" | "自費" | "特価自費" | null;
 
@@ -126,8 +127,11 @@ export default function RentalDayGrid({
                 <tr key={item.id} className="hover:bg-yellow-50">
                   <td className={`sticky left-0 z-10 bg-white border border-gray-300 px-1.5 py-0.5 border-l-4 ${self ? "border-l-orange-400" : "border-l-emerald-400"}`}>
                     <div className="flex items-center gap-1 min-w-0 w-[14rem]">
-                      {self && <span className="text-[9px] px-1 rounded bg-orange-100 text-orange-700 shrink-0">{k}</span>}
-                      {!self && categoryOf?.(item) && <span className="text-[9px] px-1 rounded border border-gray-300 bg-gray-50 text-gray-600 shrink-0">{categoryOf(item)}</span>}
+                      <span className="w-[5.5rem] shrink-0 flex">
+                        {self
+                          ? <span className="text-[9px] px-1 rounded bg-orange-100 text-orange-700">{k}</span>
+                          : categoryOf?.(item) && <span className={`text-[9px] px-1 rounded border truncate max-w-full ${categoryChipClass(categoryOf(item))}`}>{categoryOf(item)}</span>}
+                      </span>
                       <span className="truncate" title={nameOf(item)}>{nameOf(item)}</span>
                     </div>
                   </td>
