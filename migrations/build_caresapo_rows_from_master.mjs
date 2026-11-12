@@ -107,7 +107,7 @@ async function plan(sb) {
   for (const c of chunks(ids, 150)) rows.push(...await selectAll(sb, "client_insurance_records", "*", (q) => q.in("client_id", c)));
   const byClient = new Map();
   for (const r of rows) { if (!byClient.has(r.client_id)) byClient.set(r.client_id, []); byClient.get(r.client_id).push(r); }
-  const ops = [], missing = [], noMaster = [], approx = [];
+  const ops = [], missing = [], noMaster = [], approx = [], keptCertified = [];
   for (const c of clients) {
     const rs = byClient.get(c.id) ?? [];
     if (rs.some((r) => r.office_id === CS)) continue; // ケアサポの行が 1 行でもあれば対象外 (② で作った・既存)
@@ -129,9 +129,14 @@ async function plan(sb) {
       if (!src) { missing.push(`${c.name} ${g.insured} ${g.start}〜${g.end ?? ""} ${g.level ?? ""} (同じ被保番の行が無い)`); continue; }
       if (!exact) approx.push(`${c.name} ${g.insured} マスタ ${g.start} ← 元の行 ${src.certification_start_date}`);
       const row = Object.fromEntries(Object.entries(src).filter(([k]) => !SKIP_COLS.has(k)));
+      // ★ 2026-11-13: マスタの「申請中」は 更新申請中の印 (その期間も ほのぼのは請求している)。
+      //   要介護度がある or 元の行が認定済み なら 認定済み で作る (申請中で作ると BillingTab が月遅れ扱いにする)。
+      //   2026-11-11 の実行 (batch 0c46125e) では 吉田 絢子・箱﨑 国昭 の 2 行が 認定済み → 申請中 で作られていた
+      const masterApplying = g.status === "申請中" && (g.level || src.certification_status === "認定済み");
+      if (masterApplying) keptCertified.push(`${c.name} ${g.start}〜${g.end ?? ""} ${g.level ?? src.care_level ?? ""}`);
       Object.assign(row, {
         office_id: CS, copied_from_id: src.id, office_source: "import_record",
-        care_level: g.level ?? src.care_level, certification_status: g.status ?? src.certification_status,
+        care_level: g.level ?? src.care_level, certification_status: masterApplying ? "認定済み" : g.status ?? src.certification_status,
         // ★ effective_date も認定開始日に (元の行のままだと同じ元から作った 2 世代が同値になり、新旧が逆に選ばれる。fix_caresapo_rows_effective_date.mjs)
         effective_date: g.start,
         certification_start_date: g.start, certification_end_date: g.end ?? src.certification_end_date,
@@ -139,7 +144,7 @@ async function plan(sb) {
       ops.push({ client: c, src: src.id, gen: g, row });
     }
   }
-  return { ops, missing, noMaster, approx };
+  return { ops, missing, noMaster, approx, keptCertified };
 }
 
 async function execute(sb, ops) {
@@ -201,13 +206,16 @@ async function revert(sb, batchId) {
 const sb = await makeSb();
 if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv });
 if (REVERT) { await revert(sb, REVERT); process.exit(0); }
-const { ops, missing, noMaster, approx } = await plan(sb);
+const { ops, missing, noMaster, approx, keptCertified } = await plan(sb);
 const people = new Map();
 for (const o of ops) { const k = `${o.client.name} (${o.client.user_number})`; people.set(k, [...(people.get(k) ?? []), `${o.gen.start}〜${o.gen.end ?? ""} ${o.gen.level ?? ""} ${o.gen.status ?? ""}`]); }
 console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  作る ${ops.length} 行 / ${people.size} 名`);
 for (const [k, v] of people) console.log(`  - ${k}: ${v.join(" / ")}`);
 console.log(`\n開始日が違う行を元にした世代 ${approx.length} (開始日はマスタの値):`);
 for (const m of approx) console.log(`  - ${m}`);
+console.log(`
+マスタは申請中だが 認定済み で作る世代 (申請中 = 更新申請中の印・下げない) ${keptCertified.length}:`);
+for (const m of keptCertified) console.log(`  - ${m}`);
 console.log(`\n元の行が見つからず作らない世代 ${missing.length}:`);
 for (const m of missing) console.log(`  - ${m}`);
 console.log(`\nケアサポの行が無く 利用者マスタにも認定が無い (2026-04 以降) 人 ${noMaster.length}: ${noMaster.join(", ")}`);

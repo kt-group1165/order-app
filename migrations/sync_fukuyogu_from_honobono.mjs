@@ -709,6 +709,12 @@ async function main() {
           for (const col of INS_COLS) {
             const v = g.row[col];
             if (v == null || v === "") continue;
+            // ★ 2026-11-13: 認定済み → 申請中 には下げない。ほのぼのの「申請中」は 更新申請中の印で、その期間も請求している
+            //   (5 名で 4〜9 月の KDS と照合して確認)。下げると BillingTab が月遅れ扱いにして 当方だけ請求を止めてしまう
+            if (col === "certification_status" && ex.certification_status === "認定済み" && v === "申請中") {
+              R.insurance.add("認定済み → 申請中 には下げない (ほのぼのの申請中 = 更新申請中の印)", { ...s.ex, 認定: `${ex.care_level ?? ""}/${g.row.certification_start_date}〜${g.row.certification_end_date}` });
+              continue;
+            }
             if (normFor(col, ex[col] ?? null) !== normFor(col, v)) { patch[col] = v; before[col] = ex[col] ?? null; }
           }
           if (g.row.care_office_id && ex.care_office_id !== g.row.care_office_id) { patch.care_office_id = g.row.care_office_id; patch.care_office_number = g.row.care_office_number; before.care_office_id = ex.care_office_id; before.care_office_number = ex.care_office_number ?? null; }

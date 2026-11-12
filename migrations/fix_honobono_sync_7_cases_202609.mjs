@@ -497,7 +497,12 @@ async function main() {
         if (!exr) { inserts.push(g); continue; }
         used.add(exr.id);
         const patch = {}, before = {};
-        for (const col of INS_COLS) { const v = g.row[col]; if (v == null || v === "") continue; if (normFor(col, exr[col] ?? null) !== normFor(col, v)) { patch[col] = v; before[col] = exr[col] ?? null; } }
+        for (const col of INS_COLS) {
+          const v = g.row[col]; if (v == null || v === "") continue;
+          // ★ 2026-11-13: 認定済み → 申請中 には下げない (ほのぼのの申請中 = 更新申請中の印。sync_fukuyogu_from_honobono.mjs と同じ)
+          if (col === "certification_status" && exr.certification_status === "認定済み" && v === "申請中") { console.log(`  認定済み → 申請中 には下げない: ${ex?.氏名 ?? exr.client_id} ${g.row.certification_start_date}〜${g.row.certification_end_date}`); continue; }
+          if (normFor(col, exr[col] ?? null) !== normFor(col, v)) { patch[col] = v; before[col] = exr[col] ?? null; }
+        }
         if (Object.keys(patch).length) applyOp(cs, { table: "client_insurance_records", action: shared ? "observe" : "update", id: exr.id, before, patch, src: g.src, ref: ex, why: "同じ認定開始日の行を ほのぼのの値に更新" });
       }
       inserts.sort((a, b) => a.row.certification_start_date.localeCompare(b.row.certification_start_date));

@@ -39,6 +39,7 @@ import { FUKUYOGU_SERVICE_CODES } from "@/lib/kokuho-densou/build";
 import RentalDayGrid from "./RentalDayGrid";
 import { categoryChipClass } from "@/lib/fukuyogu-category-color";
 import ClientBankAccountsPanel from "./ClientBankAccountsPanel";
+import { certStatusFromHonobono, mayOverwriteCertStatus } from "@/lib/insurance/certStatus";
 
 // ─── Clients Tab ─────────────────────────────────────────────────────────────
 
@@ -925,7 +926,8 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           insurance_valid_end: ymdCol("保険証有効終了日"),
           benefit_rate: data.benefit_rate ?? null,
           care_level: data.care_level ?? null,
-          certification_status: cols[col("認定状況")]?.trim() || null,
+          // ★ 申請中 でも要介護度があれば 認定済み (ほのぼのの申請中 = 更新申請中の印。lib/insurance/certStatus.ts)
+          certification_status: certStatusFromHonobono(cols[col("認定状況")], data.care_level),
           certification_date: ymdCol("認定年月日"),
           certification_start_date: data.certification_start_date ?? null,
           certification_end_date: data.certification_end_date ?? null,
@@ -1362,15 +1364,17 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
             const clientId = clientIdByUserNumber.get(r.user_number)!;
             const { data: existingRecords } = await supabase
               .from("client_insurance_records")
-              .select("id, effective_date, office_id")
+              .select("id, effective_date, office_id, certification_status")
               .eq("tenant_id", tenantId)
               .eq("client_id", clientId);
             const existingByDate = new Map<string, string>();
+            const existingStatus = new Map<string, string | null>(); // id → 今の認定状況 (認定済み → 申請中 に下げないため)
             // ★ 事業所別保険: per_office の事業所では 自事業所の行だけを上書き対象にする (他事業所の行は触らない)
             const perOfficeHere = isPerOffice(currentOfficeId, perOfficeIds);
-            for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null; office_id: string | null }>) {
+            for (const rec of (existingRecords ?? []) as Array<{ id: string; effective_date: string | null; office_id: string | null; certification_status: string | null }>) {
               if (perOfficeHere && rec.office_id !== currentOfficeId) continue;
               existingByDate.set(rec.effective_date ?? "", rec.id);
+              existingStatus.set(rec.id, rec.certification_status);
             }
             for (const ins of r.insurance) {
               const effectiveDate = (ins.certification_start_date as string | null) || null;
@@ -1389,7 +1393,13 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
               // 新しく作る行は 入力した画面の事業所の行 (事業所別保険。事業所未選択なら NULL = 事業所未定)
               const insertPayload = { ...payload, office_id: currentOfficeId ?? null, office_source: currentOfficeId ? "manual" : null };
               if (exId) {
-                const { error: upErr } = await supabase.from("client_insurance_records").update(payload).eq("id", exId);
+                // ★ 認定済み → 申請中 には下げない (下げると請求画面が月遅れ扱いにする)
+                const upPayload: Record<string, unknown> = { ...payload };
+                if (!mayOverwriteCertStatus(existingStatus.get(exId), (ins.certification_status as string | null))) {
+                  delete upPayload.certification_status;
+                  console.warn(`[CSV取込] 認定済み → 申請中 には下げません (利用者番号 ${r.user_number} / 認定開始 ${effectiveDate ?? "-"})`);
+                }
+                const { error: upErr } = await supabase.from("client_insurance_records").update(upPayload).eq("id", exId);
                 if (!upErr) insuranceAdded++;
               } else {
                 const { error: insErr } = await supabase.from("client_insurance_records").insert(insertPayload);

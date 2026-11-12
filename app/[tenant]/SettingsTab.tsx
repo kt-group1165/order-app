@@ -17,6 +17,7 @@ import { getCareOffices, upsertCareOffice, deleteCareOffice, getCareManagers, ad
 import { getSpeechUsageSummary, type SpeechUsageSummary } from "@/lib/speechUsage";
 import { getOpenAIUsageSummary, type OpenAIUsageSummary } from "@/lib/openaiUsage";
 import ExceptionInsurerRulesSection from "./ExceptionInsurerRulesSection";
+import { certStatusFromHonobono } from "@/lib/insurance/certStatus";
 
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
@@ -1571,7 +1572,8 @@ function parseReimportCsv(buf: ArrayBuffer): { clients: Map<string, ReimportClie
       insurer_number: iInsurer >= 0 ? n(r[iInsurer]) : null,
       issued_date: iIssued >= 0 ? nYmd(r[iIssued]) : null,
       qualification_date: iQual >= 0 ? nYmd(r[iQual]) : null,
-      certification_status: iCertStatus >= 0 ? n(r[iCertStatus]) : null,
+      // ★ 申請中 でも要介護度があれば 認定済み (ほのぼのの申請中 = 更新申請中の印。lib/insurance/certStatus.ts)
+      certification_status: certStatusFromHonobono(iCertStatus >= 0 ? n(r[iCertStatus]) : null, iCareLevel >= 0 ? n(r[iCareLevel]) : null),
       care_level: iCareLevel >= 0 ? n(r[iCareLevel]) : null,
       certification_date: iCertDate >= 0 ? nYmd(r[iCertDate]) : null,
       certification_start_date: iCertStart >= 0 ? nYmd(r[iCertStart]) : null,
