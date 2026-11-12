@@ -10,7 +10,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { supabase, type OrderItem } from "@/lib/supabase";
-import { rentalDayMask, halfMonthFlags, halfMonthUnits, type DateRange } from "@/lib/half-month-units";
+import { rentalDayMask, halfMonthFlags, rentalMonthUnits, type DateRange, type ProrationMode } from "@/lib/half-month-units";
+import { saveProration } from "@/lib/orderItemProration";
 import { groupPausesByItem } from "@/lib/fukuyoguPauses";
 import { categoryChipClass } from "@/lib/fukuyogu-category-color";
 
@@ -31,6 +32,10 @@ export default function RentalDayGrid({
   const [hosp, setHosp] = useState<DateRange[]>([]);
   const [pauses, setPauses] = useState<Map<string, DateRange[]>>(new Map());
   const [warn, setWarn] = useState<string[]>([]);
+  // ★ 算定方法 (2026-11-12): 既定は自動 (半月按分)。介護の明細は この月だけ 日割り に変えられる (order_item_proration)
+  const [proration, setProration] = useState<Map<string, ProrationMode>>(new Map());
+  const [prorationReady, setProrationReady] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const itemIdsKey = items.map((i) => i.id).sort().join(",");
   useEffect(() => {
@@ -53,13 +58,43 @@ export default function RentalDayGrid({
           pz = groupPausesByItem(p.data ?? []);
         }
       }
+      const pr = new Map<string, ProrationMode>();
+      let prOk = true;
+      if (ids.length > 0) {
+        const q = await supabase.from("order_item_proration").select("order_item_id, mode").eq("month", yearMonth).in("order_item_id", ids);
+        if (q.error) {
+          prOk = false;
+          console.error("日割り設定の読込失敗:", q.error.message);
+          msgs.push(/order_item_proration/.test(q.error.message) || q.error.code === "PGRST205" || q.error.code === "42P01"
+            ? "日割りの設定表が未適用のため、半月按分の自動で表示しています (日割りへの変更はできません)"
+            : `日割りの設定を読めませんでした (${q.error.message}) — 半月按分の自動で表示しています`);
+        } else {
+          for (const r of q.data ?? []) if (r.mode === "daily") pr.set(r.order_item_id, "daily");
+        }
+      }
       if (cancelled) return;
+      setProration(pr);
+      setProrationReady(prOk);
       setHosp((h.data ?? []).map((r: { admission_date: string; discharge_date: string | null }) => ({ from: r.admission_date, to: r.discharge_date })));
       setPauses(pz);
       setWarn(msgs);
     })();
     return () => { cancelled = true; };
-  }, [clientId, itemIdsKey]);
+  }, [clientId, itemIdsKey, yearMonth]);
+
+  const changeProration = async (item: OrderItem, mode: ProrationMode) => {
+    setSavingId(item.id);
+    try {
+      await saveProration(item.tenant_id, item.id, yearMonth, mode);
+      setProration((prev) => { const m = new Map(prev); if (mode === "daily") m.set(item.id, "daily"); else m.delete(item.id); return m; });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(msg);
+      alert(msg);
+    } finally {
+      setSavingId(null);
+    }
+  };
 
   const [y, m] = yearMonth.split("-").map(Number);
   const nDays = new Date(y, m, 0).getDate();
@@ -85,10 +120,12 @@ export default function RentalDayGrid({
     };
     const { firstHalf: first, secondHalf: second } = halfMonthFlags(item.rental_start_date, item.rental_end_date, yearMonth, ex);
     const count = mask.filter(Boolean).length;
-    const kubun = first && second ? "全額" : first || second ? "半額" : "—";
+    const mode: ProrationMode = proration.get(item.id) ?? "auto";
+    const autoKubun = first && second ? "全額" : first || second ? "半額" : "—";
+    const kubun = mode === "daily" ? `日割(${nDays}日)` : autoKubun;
     const fullUnits = Math.round(priceOf(item) / 10);
-    const units = halfMonthUnits(fullUnits, first, second) * (item.quantity || 1);
-    return { item, mask, inPeriod, pausedDay, count, kubun, fullUnits, units };
+    const units = rentalMonthUnits(fullUnits, item.rental_start_date, item.rental_end_date, yearMonth, ex, mode) * (item.quantity || 1);
+    return { item, mask, inPeriod, pausedDay, count, kubun, autoKubun, mode, fullUnits, units };
   });
 
   return (
@@ -120,7 +157,7 @@ export default function RentalDayGrid({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ item, mask, inPeriod, pausedDay, count, kubun, fullUnits, units }) => {
+            {rows.map(({ item, mask, inPeriod, pausedDay, count, kubun, autoKubun, mode, fullUnits, units }) => {
               const k = kindOf(item);
               const self = k === "自費" || k === "特価自費";
               return (
@@ -137,7 +174,18 @@ export default function RentalDayGrid({
                   </td>
                   <td className="border border-gray-300 px-1 text-center tabular-nums">{item.quantity || 1}</td>
                   <td className="border border-gray-300 px-1 text-right tabular-nums" title={`月額 ¥${priceOf(item).toLocaleString()} / 満額 ${fullUnits} 単位`}>{units.toLocaleString()}</td>
-                  <td className={`border border-gray-300 px-1 text-center ${kubun === "半額" ? "text-amber-700 font-semibold" : ""}`}>{kubun}</td>
+                  <td className={`border border-gray-300 px-0.5 text-center ${mode === "daily" ? "text-violet-700 font-semibold" : kubun === "半額" ? "text-amber-700 font-semibold" : ""}`}>
+                    {self || !prorationReady ? kubun : (
+                      // 介護の明細: 既定 = 自動 (全額/半額)。この月だけ 日割り に変えられる
+                      <select value={mode} disabled={savingId === item.id}
+                        onChange={(e) => changeProration(item, e.target.value as ProrationMode)}
+                        title="自動 = 前半・後半の両方に貸与日があれば全額、片方なら半額 / 日割 = 月額 × 貸与日数 ÷ その月の日数 (この月だけ)"
+                        className={`bg-transparent text-[11px] outline-none cursor-pointer ${mode === "daily" ? "text-violet-700 font-semibold" : kubun === "半額" ? "text-amber-700 font-semibold" : ""}`}>
+                        <option value="auto">{autoKubun}</option>
+                        <option value="daily">日割({nDays}日)</option>
+                      </select>
+                    )}
+                  </td>
                   <td className="border border-gray-300 px-1 text-center tabular-nums">{count}</td>
                   {days.map((d) => {
                     const on = mask[d];
@@ -170,7 +218,7 @@ export default function RentalDayGrid({
         </table>
       </div>
       <p className="text-[10px] text-gray-400 px-1">
-        1 = 貸与日 / 休 = 休止 / 入 = 入院 (どちらも貸与日に数えない)。日割区分は 前半 (1〜15日)・後半 (16日〜) の両方に貸与日があれば全額、片方だけなら半額。単位数 = 月額 ÷ 10 (半額は半分) × 数量。予定と実績は同じ (当システムは実績のみ持つ)。
+        1 = 貸与日 / 休 = 休止 / 入 = 入院 (どちらも貸与日に数えない)。日割区分は 既定で自動 = 前半 (1〜15日)・後半 (16日〜) の両方に貸与日があれば全額、片方だけなら半額。介護の用具は日割区分を押すと この月だけ「日割」に変えられる (単位 = 月額単位 × 貸与日数 ÷ その月の日数、四捨五入)。単位数 = 月額 ÷ 10 (半額は半分) × 数量。予定と実績は同じ (当システムは実績のみ持つ)。
       </p>
     </div>
   );

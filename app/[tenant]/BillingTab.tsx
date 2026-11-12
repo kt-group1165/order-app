@@ -11,7 +11,8 @@ import { HW_KANA } from "./search-utils";
 import { calcMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
 import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
-import { halfMonthUnits, halfMonthFlags, hospitalizationRanges, type DateRange } from "@/lib/half-month-units";
+import { rentalMonthUnits, hospitalizationRanges, type DateRange } from "@/lib/half-month-units";
+import { loadProrations, prorationModeOf, type ProrationLoad } from "@/lib/orderItemProration";
 import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
 
 /** 休止が読めていない間の空 Map (毎回 new すると useMemo の依存が変わり続ける) */
@@ -106,6 +107,7 @@ function MonthlyInfoTab({
   dataLoading,
   priceHistory,
   pausesByItem,
+  prorations,
 }: {
   tenantId: string;
   currentOfficeId: string | null;
@@ -120,6 +122,8 @@ function MonthlyInfoTab({
   priceHistory: EquipmentPriceHistory[];
   /** 貸与の休止期間 (order_item_pauses)。休止日は半月按分の判定から除く */
   pausesByItem: Map<string, DateRange[]>;
+  /** 明細×月の算定方法 (既定 自動=半月按分 / 日割り)。null = 読込中 → 自動 */
+  prorations: ProrationLoad | null;
 }) {
   const [billingMonth, setBillingMonth] = useState(() => {
     const d = new Date();
@@ -192,10 +196,9 @@ function MonthlyInfoTab({
         //   過去月を見ているときは食い違いうる)。InvoiceReceiptModal と同じ経路。
         const price = getPriceForMonth(priceHistory, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
         const base = price ? Math.round(price / 10) : 0;
-        // 半月按分: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts halfMonthFlags)
-        const { firstHalf, secondHalf } = halfMonthFlags(item.rental_start_date, item.rental_end_date, billingMonth,
-          [...hospRanges, ...(pausesByItem.get(item.id) ?? [])]);
-        units = halfMonthUnits(base, firstHalf, secondHalf);
+        // 半月按分 (既定) / 日割り: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts rentalMonthUnits)
+        units = rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, billingMonth,
+          [...hospRanges, ...(pausesByItem.get(item.id) ?? [])], prorationModeOf(prorations, item.id, billingMonth));
       }
       total += units * item.quantity;
     }
@@ -435,6 +438,26 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     return () => { cancelled = true; };
   }, [tenantId]);
   const pausesOf = (itemId: string): DateRange[] => pauses?.byItem.get(itemId) ?? [];
+  // ★ 明細×月の算定方法 (2026-11-12): 既定は半月按分の自動。order_item_proration に行がある月だけ日割り。
+  //   読めないときは 全件 自動 で計算し、伝送の警告に理由を出す (表未適用なら notice)。
+  const [prorations, setProrations] = useState<ProrationLoad | null>(null);
+  const [prorationError, setProrationError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadProrations(tenantId)
+      .then((r) => { if (!cancelled) setProrations(r); })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(msg);
+        if (!cancelled) setProrationError(msg);
+      });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+  const prorationNotice: string | null = prorationError
+    ? `${prorationError} — 全件 半月按分の自動で計算しました`
+    : !prorations
+      ? "日割りの設定をまだ読み込んでいません — 全件 半月按分の自動で計算しました (少し待ってから作り直してください)"
+      : prorations.notice;
   /** 休止が使えないときの警告 (伝送の警告に出す)。null = 読めている */
   const pausesNotice: string | null = !pauses
     ? "貸与の休止期間をまだ読み込んでいません — 休止を除かずに日数・半月按分を計算しました (少し待ってから作り直してください)"
@@ -810,10 +833,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const price = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return base;
-    // 半月按分: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts halfMonthFlags)
-    const { firstHalf, secondHalf } = halfMonthFlags(item.rental_start_date, item.rental_end_date, billingMonth,
-      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)]);
-    return halfMonthUnits(base, firstHalf, secondHalf);
+    // 半月按分 (既定) / 日割り: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts rentalMonthUnits)
+    return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, billingMonth,
+      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)],
+      prorationModeOf(prorations, item.id, billingMonth));
   };
 
   // 指定年月(ym="YYYY-MM")での単位数計算 (返戻・過誤の過去月伝送用)。
@@ -824,9 +847,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const price = getPriceForMonth(priceHistoryAll, item.product_code, ym) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return base;
-    const { firstHalf, secondHalf } = halfMonthFlags(item.rental_start_date, item.rental_end_date, ym,
-      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)]);
-    return halfMonthUnits(base, firstHalf, secondHalf);
+    return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, ym,
+      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)],
+      prorationModeOf(prorations, item.id, ym));
   };
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
@@ -972,6 +995,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     }
     if (kohiModesNotice) preWarnings.push(kohiModesNotice);
     if (pausesNotice) preWarnings.push(pausesNotice);
+    if (prorationNotice) preWarnings.push(prorationNotice);
     for (const { client, items } of billingGroups) {
       const details: FukuyoguDetailLine[] = [];
       // 明細と同じ並びの貸与期間 (月途中の公費の判定・明細の公費対象に使う)
@@ -1347,6 +1371,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       const cmLoad = await getCmUnits(tenantId, ym, currentOfficeId);
       if (cmLoad.message) allWarnings.push(`[${ym}] ${cmLoad.message}`);
       if (pausesNotice) allWarnings.push(`[${ym}] ${pausesNotice}`);
+      if (prorationNotice) allWarnings.push(`[${ym}] ${prorationNotice}`);
       const benefitNoCert: string[] = []; // 負担割合証なしで認定行の給付率を使った利用者 (FY-H)
       const rows: FukuyoguSeikyuRow[] = [];
       for (const { client, items } of entries) {
@@ -1567,6 +1592,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           dataLoading={dataLoading}
           priceHistory={priceHistoryAll}
           pausesByItem={pauses?.byItem ?? EMPTY_PAUSES}
+          prorations={prorations}
         />
       </div>
     );
