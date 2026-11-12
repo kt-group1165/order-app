@@ -4353,6 +4353,15 @@ function ClientDetail({
             )}
           </section>
 
+          {activeItems.length > 0 && (
+            <section>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-semibold text-gray-500">レンタル中</h3>
+                {sortToggle()}
+              </div>
+              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{activeItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
+            </section>
+          )}
           {orderedItems.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">発注済み</h3>
@@ -4363,15 +4372,6 @@ function ClientDetail({
             <section>
               <h3 className="text-xs font-semibold text-gray-500 mb-2">納品済み</h3>
               <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{deliveredItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
-            </section>
-          )}
-          {activeItems.length > 0 && (
-            <section>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-semibold text-gray-500">レンタル中</h3>
-                {sortToggle()}
-              </div>
-              <table className="w-full table-fixed bg-white rounded-xl overflow-hidden shadow-sm text-left"><tbody className="divide-y divide-dashed divide-gray-200">{activeItems.map((i) => <ItemCard key={i.id} item={i} />)}</tbody></table>
             </section>
           )}
           {historyItems.length > 0 && (
