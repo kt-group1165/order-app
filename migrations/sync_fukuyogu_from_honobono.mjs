@@ -998,7 +998,19 @@ async function main() {
   // 流し直し: 前の batch で同じ内容の observe を控え済みなら もう一度は控えない (書込みは前段の比較で自然に「変更なし」になる)
   const ready0 = await provenanceReady(sb);
   if (ready0.ok) {
-    const prior = await selectAll(sb, "data_import_rows", "table_name,row_id,after", (q) => q.eq("tenant_id", TENANT).eq("op", "observe"));
+    // ★ 2026-11-13: offset ページング (order id + range) だと data_import_rows が大きくなって statement timeout になる
+    //   → id のキーセット (id > 前回の最後の id・order id・limit 200) で読む。読む中身・並びは同じ (書き込みロジックは変えない)
+    const prior = [];
+    for (let last = null; ;) {
+      let q = sb.from("data_import_rows").select("id,table_name,row_id,after").eq("tenant_id", TENANT).eq("op", "observe");
+      if (last) q = q.gt("id", last);
+      // 1 回 200 行 (after は jsonb で重く、1,000 行ずつだと 1 回の問い合わせが timeout に掛かる。2026-11-13 実測: 200 行で 0.3 秒)
+      const { data, error } = await q.order("id").limit(200);
+      if (error) throw new Error(`data_import_rows: ${error.message}`);
+      prior.push(...data);
+      if (data.length < 200) break;
+      last = data[data.length - 1].id;
+    }
     const seen = new Set(prior.map((r) => `${r.table_name}:${r.row_id}:${canon(r.after ?? null)}`));
     let skipped = 0;
     for (const st of STEPS) ops[st] = ops[st].filter((o) => { const dup = o.action === "observe" && seen.has(`${o.table}:${o.id}:${canon(o.patch ?? null)}`); if (dup) skipped++; return !dup; });
