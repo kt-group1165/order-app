@@ -839,6 +839,17 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           continue;
         }
         const userNumber = cols[col("利用者番号")]?.trim() || null;
+        // 日付列は YYYY-MM-DD に揃えて保存する。clients の認定日・生年月日は text 列で、ほのぼの CSV の
+        // "2026/1/9" がそのまま入っていた (2026-11-12 実測 711 値・kaigo と共有)。読めない値は黙って消さず
+        // 元の値のまま入れて warn を出す。
+        const ymdCol = (label: string): string | null => {
+          const raw = cols[col(label)]?.trim() || "";
+          if (!raw) return null;
+          const ymd = normalizeYmd(raw);
+          if (ymd) return ymd;
+          console.warn(`[CSV取込] ${label} を日付として読めないため元の値のまま入れます: "${raw}" (利用者番号 ${userNumber ?? "-"})`);
+          return raw;
+        };
         // clients テーブルに保存する項目一式
         const data: ClientData = {
           tenant_id: tenantId,
@@ -853,12 +864,12 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           benefit_rate: cols[col("給付率")]?.trim() || null,
           care_manager: cols[col("ケアマネ名")]?.trim() || null,
           care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
-          // "2026/1/9" のまま入れると 最新判定 (newEnd > oldEnd) の文字列比較が狂うので揃える。読めない値はそのまま
-          certification_end_date: normalizeYmd(cols[col("認定終了日")]) ?? (cols[col("認定終了日")]?.trim() || null),
+          // "2026/1/9" のまま入れると 最新判定 (newEnd > oldEnd) の文字列比較も狂う
+          certification_end_date: ymdCol("認定終了日"),
           // memo は clients から DROP 済。CSV から読んでも保存先がないため省略
           insured_number: cols[col("被保険者番号")]?.trim() || null,
-          birth_date: cols[col("生年月日")]?.trim() || null,
-          certification_start_date: normalizeYmd(cols[col("認定開始日")]) ?? (cols[col("認定開始日")]?.trim() || null),
+          birth_date: ymdCol("生年月日"),
+          certification_start_date: ymdCol("認定開始日"),
           insurer_number: cols[col("保険者番号")]?.trim() || null,
           copay_rate: (() => {
             // 利用者負担割合が直接CSVにあればそれを使う
@@ -907,19 +918,19 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           birth_date: data.birth_date ?? null,
           insurer_number: data.insurer_number ?? null,
           insurer_name: cols[col("保険者名")]?.trim() || null,
-          issued_date: cols[col("交付年月日")]?.trim() || null,
-          insurance_confirmed_date: cols[col("保険証確認日")]?.trim() || null,
-          qualification_date: cols[col("資格取得日")]?.trim() || null,
-          insurance_valid_start: cols[col("保険証有効開始日")]?.trim() || null,
-          insurance_valid_end: cols[col("保険証有効終了日")]?.trim() || null,
+          issued_date: ymdCol("交付年月日"),
+          insurance_confirmed_date: ymdCol("保険証確認日"),
+          qualification_date: ymdCol("資格取得日"),
+          insurance_valid_start: ymdCol("保険証有効開始日"),
+          insurance_valid_end: ymdCol("保険証有効終了日"),
           benefit_rate: data.benefit_rate ?? null,
           care_level: data.care_level ?? null,
           certification_status: cols[col("認定状況")]?.trim() || null,
-          certification_date: cols[col("認定年月日")]?.trim() || null,
+          certification_date: ymdCol("認定年月日"),
           certification_start_date: data.certification_start_date ?? null,
           certification_end_date: data.certification_end_date ?? null,
-          service_limit_period_start: cols[col("居宅適用期間開始")]?.trim() || null,
-          service_limit_period_end: cols[col("居宅適用期間終了")]?.trim() || null,
+          service_limit_period_start: ymdCol("居宅適用期間開始"),
+          service_limit_period_end: ymdCol("居宅適用期間終了"),
           service_limit_amount: amountNum,
           service_memo: cols[col("留意事項")]?.trim() || null,
           service_restriction: cols[col("サービス限定")]?.trim() || null,
