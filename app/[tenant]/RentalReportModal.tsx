@@ -8,6 +8,7 @@ import { saveClientDocument } from "@/lib/documents";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import SendRentalReportModal from "./SendRentalReportModal";
 import RentalReportSheet from "./RentalReportSheet";
+import { useRentalCalcContext } from "@/lib/rentalCalcContext";
 import { USAGE_TYPE_LABELS, detectRentalUsage, rentalReportTitle, type UsageType } from "@/lib/rentalReport";
 
 // ─── Rental Report Modal ─────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ export default function RentalReportModal({
     new Set<UsageType>((initialParams?.selectedUsage ?? []) as UsageType[])
   );
   const [memo, setMemo] = useState(initialParams?.memo ?? "");
+  // 月の算定の材料 (日割り設定・休止・入院)。請求と同じ単位を出すため
+  const calc = useRentalCalcContext(tenantId);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [checkedReqs, setCheckedReqs] = useState<Set<number>>(new Set());
@@ -252,6 +255,7 @@ export default function RentalReportModal({
           equipment={equipment}
           companyInfo={companyInfo}
           priceHistory={priceHistory}
+          calc={calc}
           targetMonth={targetMonth}
           visitDate={visitDate}
           usage={selectedUsage}

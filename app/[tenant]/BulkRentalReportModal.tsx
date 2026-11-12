@@ -6,6 +6,7 @@ import { getAllOrderItemsByTenant } from "@/lib/orders";
 import { todayYmd } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
 import RentalReportSheet from "./RentalReportSheet";
+import { useRentalCalcContext } from "@/lib/rentalCalcContext";
 import { detectRentalUsage, hasMovementInMonth, hasRentalInMonth, rentalReportTitle, type UsageType } from "@/lib/rentalReport";
 
 // 貸与報告書を毎月まとめて作る。対象 = その月に貸与のある人 (全員) か、開始・解約のあった人だけ。
@@ -64,6 +65,8 @@ export default function BulkRentalReportModal({
   const [items, setItems] = useState<OrderItem[] | null>(null);
   const [payMap, setPayMap] = useState<Record<string, { client_id: string; pay: "介護" | "自費" }>>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
+  // 月の算定の材料 (日割り設定・休止・入院)。全員分を 1 回だけ読む
+  const calc = useRentalCalcContext(tenantId);
   const [visitByClient, setVisitByClient] = useState<Map<string, string>>(new Map());
   const [savedClients, setSavedClients] = useState<Set<string>>(new Set());
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -275,6 +278,7 @@ export default function BulkRentalReportModal({
       equipment={equipment}
       companyInfo={companyInfo}
       priceHistory={priceHistory}
+      calc={calc}
       targetMonth={targetMonth}
       visitDate={visitOf(r)}
       reportDate={reportDate}

@@ -2,7 +2,8 @@
 import { OrderItem, Equipment, EquipmentPriceHistory, Client } from "@/lib/supabase";
 import { toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
-import { calcMonthUnits, toShortDate, RPT_TD, RPT_TH, RPT_TABLE } from "./order-item-helpers";
+import { itemMonthUnits, toShortDate, RPT_TD, RPT_TH, RPT_TABLE } from "./order-item-helpers";
+import { excludedOf, modeOf, type RentalCalcContext } from "@/lib/rentalCalcContext";
 import { getPriceForMonth } from "@/lib/equipment";
 import { USAGE_TYPE_LABELS, isReportItem, type UsageType } from "@/lib/rentalReport";
 
@@ -33,8 +34,11 @@ export default function RentalReportSheet({
   checkedReqs,
   onToggleReq,
   onMemoChange,
+  calc = null,
   className = "max-w-4xl mx-auto my-6 bg-white shadow-lg px-10 py-8",
 }: {
+  /** 月の算定の材料 (日割り設定・休止・入院)。無ければ反映せず 半月按分の自動で出す */
+  calc?: RentalCalcContext | null;
   id?: string;
   client: Client;
   items: OrderItem[];
@@ -77,8 +81,11 @@ export default function RentalReportSheet({
   const careItems = reportItems.filter((i) => resolvePayType(i) !== "自費");
   const selfPayItems = reportItems.filter((i) => resolvePayType(i) === "自費");
 
-  const m1Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m1Year, m1Month, histPrice(i.product_code, targetMonth)) ?? 0), 0);
-  const m2Total = careItems.reduce((s, i) => s + (calcMonthUnits(i, m2Year, m2Month, histPrice(i.product_code, m2YM)) ?? 0), 0);
+  // 月の算定単位: 請求・伝送と同じ rentalMonthUnits (日割り設定・入院・休止を反映。calc が無ければ反映せず自動)
+  const unitsAt = (i: OrderItem, ym: string) =>
+    itemMonthUnits(i, ym, histPrice(i.product_code, ym) ?? i.rental_price, excludedOf(calc, client.id, i.id), modeOf(calc, i.id, ym));
+  const m1Total = careItems.reduce((s, i) => s + (unitsAt(i, targetMonth) ?? 0), 0);
+  const m2Total = careItems.reduce((s, i) => s + (unitsAt(i, m2YM) ?? 0), 0);
 
   // 貸与利用項目・訪問日は通常の和暦、表セル内は短縮形式
   const fmtDateFull = (d: string | null | undefined) => (d ? toJapaneseEra(new Date(d + "T00:00:00")) : "");
@@ -182,8 +189,8 @@ export default function RentalReportSheet({
           {careItems.map((item) => {
             const eq = getEq(item.product_code);
             const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
-            const u1 = calcMonthUnits(item, m1Year, m1Month, histPrice(item.product_code, targetMonth));
-            const u2 = calcMonthUnits(item, m2Year, m2Month, histPrice(item.product_code, m2YM));
+            const u1 = unitsAt(item, targetMonth);
+            const u2 = unitsAt(item, m2YM);
             return (
               <tr key={item.id}>
                 <td style={RPT_TD}>{eq?.category ?? ""}</td>

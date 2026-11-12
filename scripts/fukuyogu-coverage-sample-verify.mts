@@ -155,27 +155,20 @@ console.log("\n═══ C6 貸与期間の逆転 (同月内: 開始2026-12-20 >
   console.log(`     単位数=${units} (計算は落ちない。fukuyogu-coverage-checkの「逆転」因子として計上される)`);
 }
 
-console.log("\n═══ C8 貸与期間の逆転 (開始2027-01-10 > 終了2026-12-20。calcMonthUnitsの「満額」分岐を狙い撃ち) ═══");
+console.log("\n═══ C8 貸与期間の逆転 (開始2027-01-10 > 終了2026-12-20。旧 calcMonthUnits の「満額」分岐を狙い撃ち) ═══");
 {
   const item = await getItem(c8.id);
   eq("★ hasBrokenRentalDates が true を返す", hasBrokenRentalDates(item as never), true);
   // BillingTab.tsx の実際の請求生成 (generateTransferData) が使う inline getUnits 相当
   const unitsForDensou = computeUnits(item, [], 12000);
-  // order-item-helpers.ts の calcMonthUnits (InvoiceReceiptModal=利用者向け請求書・領収書 が使う、★別経路)
-  const { calcMonthUnits } = await import("../app/[tenant]/order-item-helpers");
-  const unitsForInvoice = calcMonthUnits(item as never, y, m, 12000) ?? 0;
+  // order-item-helpers.ts の itemMonthUnits (InvoiceReceiptModal=利用者向け請求書・領収書 が使う)。
+  // ★ 2026-11-12: 旧 calcMonthUnits (この形で満額を返していた) を削除し rentalMonthUnits に寄せた → 伝送と同じ 0
+  const { itemMonthUnits } = await import("../app/[tenant]/order-item-helpers");
+  const unitsForInvoice = itemMonthUnits(item as never, `${y}-${String(m).padStart(2, "0")}`, 12000) ?? 0;
   console.log(`     国保連請求(generateTransferData相当)の単位数 = ${unitsForDensou}`);
-  console.log(`     利用者請求書(InvoiceReceiptModal, calcMonthUnits)の単位数 = ${unitsForInvoice}`);
+  console.log(`     利用者請求書(InvoiceReceiptModal, itemMonthUnits)の単位数 = ${unitsForInvoice}`);
   eq("★★ 国保連請求側は0 (開始日が翌月なのでその月の請求対象外になる。activeRentalsからも除外)", unitsForDensou, 0);
-  eq("★★ 利用者請求書側は満額(1,200単位)を返す — ドキュメント通りの「満額」バグ", unitsForInvoice, 1200);
-  n++;
-  if (unitsForDensou !== unitsForInvoice) {
-    console.log(`  OK  ★★★ 発見: 同じ壊れたデータに対し、国保連請求(${unitsForDensou}) と 利用者請求書(${unitsForInvoice}) が★別の値★を計算する (2箇所の実装が乖離する既知パターン)`);
-  } else {
-    ng++;
-    console.log(`  NG  想定していた乖離が再現しなかった`);
-  }
-  console.log(`     ⚠ 直さない・記録のみ。実データでは該当0件 (order_items 4,669行中)なので現状は潜在バグ。`);
+  eq("★★ 利用者請求書側も0 (2026-11-12 に rentalMonthUnits へ寄せて 乖離が解消)", unitsForInvoice, 0);
 }
 
 console.log("\n═══ C7 自動排泄処理装置カテゴリの経路確認 ═══");

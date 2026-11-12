@@ -3,7 +3,7 @@
 // ContractDocumentsModal/RentalReportModal の両方から参照するため独立させている。
 import type { CSSProperties } from "react";
 import type { OrderItem } from "@/lib/supabase";
-import { halfMonthUnits } from "@/lib/half-month-units";
+import { rentalMonthUnits, type DateRange, type ProrationMode } from "@/lib/half-month-units";
 
 export const STATUS_LABEL: Record<OrderItem["status"], string> = {
   ordered: "発注済",
@@ -33,55 +33,36 @@ export const NEXT_STATUSES: Record<OrderItem["status"], OrderItem["status"][]> =
 };
 
 /**
- * 半月ルール単位数計算
- * ・1〜15日のいずれかに利用あり → 半月分単位数
- * ・16〜末日のいずれかに利用あり → 半月分単位数
+ * 1 明細の当月の算定単位 (1 個あたり)。利用者向け請求書・貸与報告書が使う。
+ *   計算は請求・伝送と同じ lib/half-month-units.ts の rentalMonthUnits (2026-11-12 に calcMonthUnits から寄せた)。
+ *   excluded = 入院・休止 (lib/rentalCalcContext.ts の excludedOf) / mode = 日割り設定 (modeOf)。
+ *   price = 当月の価格 (価格履歴 → マスタ / 明細の価格 の順で呼出側が決める)
+ * 戻り値: null = 価格なし / 未開始 (発注済・納品済) / 翌月以降に開始。0 = キャンセル・先月以前に終了
+ * ⚠ 終了日 < 開始日 (壊れたデータ) は 貸与日が 0 日なので 0 になる (旧 calcMonthUnits は満額を返していた)。
+ *   呼出側で hasBrokenRentalDates() を見て警告を出す。実測 (2026-09-03): 0 行。
  */
-export function calcMonthUnits(item: OrderItem, year: number, month: number, priceOverride?: number): number | null {
-  const price = priceOverride ?? item.rental_price;
+export function itemMonthUnits(
+  item: OrderItem,
+  ym: string,
+  price: number | null | undefined,
+  excluded: readonly DateRange[] = [],
+  mode: ProrationMode = "auto",
+): number | null {
   if (!price) return null;
   if (item.status === "ordered" || item.status === "delivered" || item.status === "trial") return null;
   if (item.status === "cancelled") return 0;
-
-  const fullUnits = Math.round(price / 10);
-
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const monthStart  = new Date(year, month - 1, 1);
-  const monthEnd    = new Date(year, month - 1, daysInMonth);
-  const day15       = new Date(year, month - 1, 15);
-  const day16       = new Date(year, month - 1, 16);
-
-  const start = item.rental_start_date ? new Date(item.rental_start_date + "T00:00:00") : null;
-  const end   = item.rental_end_date   ? new Date(item.rental_end_date   + "T00:00:00") : null;
-
-  if (end   && end   < monthStart) return 0;   // 先月以前終了
-  if (start && start > monthEnd) {
-    // 解約済みで終了日が今月内なら半月ルール適用（開始日が来月以降の場合）
-    // ⚠ **この分岐は正常データでは到達しない** (2026-09-03 確認)。
-    //   条件は `start > 月末` かつ `end <= 月末` = **終了日が開始日より前**。
-    //   到達したときは日付が壊れているのに **黙って満額を請求に載せる**ので、
-    //   呼出側で `hasBrokenRentalDates()` を見て警告を出すこと。
-    //   実測: order_items 4,669 行中 該当 **0 行** (終了<開始 も 開始日なし も 0)。
-    if (item.status === "terminated" && end && end <= monthEnd) {
-      return end <= day15 ? halfMonthUnits(fullUnits, true, false) : fullUnits;
-    }
-    return null; // 翌月以降開始
-  }
-
-  // 上半期（1〜15日）に1日でも利用
-  const inUpper = (!start || start <= day15) && (!end || end >= monthStart);
-  // 下半期（16〜末日）に1日でも利用
-  const inLower = (!start || start <= monthEnd) && (!end || end >= day16);
-
-  return halfMonthUnits(fullUnits, inUpper, inLower);
+  const [y, m] = ym.split("-").map(Number);
+  const monthEnd = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+  const start = (item.rental_start_date ?? "").slice(0, 10);
+  const end = (item.rental_end_date ?? "").slice(0, 10);
+  if (start && start > monthEnd && !(end && end < start)) return null; // 翌月以降に開始
+  return rentalMonthUnits(Math.round(price / 10), item.rental_start_date, item.rental_end_date, ym, excluded, mode);
 }
 
 /**
  * 貸与期間の日付が壊れているか (終了日 < 開始日)。
  *
- * `calcMonthUnits` はこの状態でも **満額を返して請求に載せてしまう**ので、
- * 請求を組む側で警告に出す。⚠ **値は変えない** (null にすると請求から消えて
- * それはそれで黙るため。気づけるようにするのが目的)。
+ * 請求を組む側で警告に出す。⚠ **値は変えない** (請求から黙って消さず、気づけるようにするのが目的)。
  * 実測 (2026-09-03): order_items 4,669 行中 該当 0 行。
  */
 export function hasBrokenRentalDates(item: OrderItem): boolean {

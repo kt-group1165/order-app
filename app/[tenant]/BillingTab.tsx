@@ -8,7 +8,7 @@ import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { HW_KANA } from "./search-utils";
-import { calcMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
+import { itemMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
 import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
 import { rentalMonthUnits, hospitalizationRanges, type DateRange } from "@/lib/half-month-units";
@@ -1033,7 +1033,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         const count = item.quantity;
         const units = unitPer * count;
         if (units <= 0) continue;
-        // ⚠ 終了日 < 開始日 のとき calcMonthUnits は **満額を返して請求に載せる**。
+        // ⚠ 終了日 < 開始日 (壊れたデータ) は 貸与日 0 日として計算される (旧 calcMonthUnits は満額を返していた)。
         //   値は変えず (null にすると請求から消えて、それはそれで黙る) 警告だけ出す。
         //   実測 (2026-09-03): 4,669 行中 該当 0 行。
         if (hasBrokenRentalDates(item)) {
@@ -1639,6 +1639,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           orders={orders}
           equipment={equipment}
           insuranceRecords={insuranceRecords}
+          priceHistory={priceHistoryAll}
           dataLoading={dataLoading}
         />
       </div>
@@ -2212,6 +2213,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           tenantId={tenantId}
           defaultMonth={billingMonth}
           hospitalizations={hospitalizations.filter(h => h.client_id === invoiceClient.id)}
+          prorations={prorations}
+          pausesByItem={pauses?.byItem ?? EMPTY_PAUSES}
           onClose={() => setInvoiceClient(null)}
         />
       )}
@@ -3204,6 +3207,8 @@ function InvoiceReceiptModal({
   tenantId,
   defaultMonth,
   hospitalizations,
+  prorations,
+  pausesByItem,
   onClose,
 }: {
   client: Client;
@@ -3215,6 +3220,10 @@ function InvoiceReceiptModal({
   tenantId: string;
   defaultMonth: string;  // YYYY-MM
   hospitalizations: ClientHospitalization[];
+  /** 明細×月の算定方法 (日割り設定)。単位は請求・伝送と同じ rentalMonthUnits */
+  prorations: ProrationLoad | null;
+  /** 貸与の休止 (order_item_pauses)。休止日は貸与日に数えない */
+  pausesByItem: Map<string, DateRange[]>;
   onClose: () => void;
 }) {
   const [targetMonth, setTargetMonth] = useState(defaultMonth);
@@ -3288,7 +3297,9 @@ function InvoiceReceiptModal({
     return careItems.map((item) => {
       const eq = getEq(item.product_code);
       const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
-      const units = calcMonthUnits(item, y, m, histPrice(item.product_code, targetMonth)) ?? 0;
+      // 単位は 請求・伝送と同じ rentalMonthUnits (日割り設定・入院・休止を反映)
+      const units = itemMonthUnits(item, targetMonth, histPrice(item.product_code, targetMonth) ?? item.rental_price,
+        [...hospitalizationRanges(hospitalizations), ...(pausesByItem.get(item.id) ?? [])], prorationModeOf(prorations, item.id, targetMonth)) ?? 0;
       const quantity = item.quantity || 1;
       const totalUnits = units * quantity;
       // 課税区分（現状 equipment に持たせていないので一律「非課税」扱い）
@@ -3305,7 +3316,7 @@ function InvoiceReceiptModal({
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [careItems, priceHistory, targetMonth, y, m]);
+  }, [careItems, priceHistory, targetMonth, y, m, hospitalizations, pausesByItem, prorations]);
 
   const totalUnits = detailRows.reduce((s, r) => s + r.totalUnits, 0);
   // ★ CM 指示単位数 (2026-11-09): 対象月に入力があれば その単位数までが保険、超過分は保険外 (全額自己負担)。

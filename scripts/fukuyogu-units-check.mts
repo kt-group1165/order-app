@@ -3,7 +3,8 @@
  *
  *   npx tsx scripts/fukuyogu-units-check.mts
  *
- * 対象は `app/[tenant]/order-item-helpers.ts` の `calcMonthUnits`。
+ * 対象は `app/[tenant]/order-item-helpers.ts` の `itemMonthUnits` (利用者向け請求書・貸与報告書が使う)。
+ * ★ 2026-11-12: 旧 `calcMonthUnits` を削除し、請求・伝送と同じ lib/half-month-units.ts の rentalMonthUnits を通す形にした。
  * **画面と同じ関数をそのまま呼ぶ** (逐語コピーしない)。
  *
  * ── 半月ルール ──────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@
  *
  * DB は読まない (純関数のみ)。
  */
-import { calcMonthUnits } from "../app/[tenant]/order-item-helpers";
+import { itemMonthUnits } from "../app/[tenant]/order-item-helpers";
 import type { OrderItem } from "../lib/supabase";
 
 let n = 0, ng = 0;
@@ -55,7 +56,7 @@ const item = (o: Partial<OrderItem>): OrderItem =>
     quantity: 1, payment_type: "介護", ...o,
   }) as OrderItem;
 
-const U = (o: Partial<OrderItem>, price?: number) => calcMonthUnits(item(o), 2026, 12, price);
+const U = (o: Partial<OrderItem>, price?: number) => { const it = item(o); return itemMonthUnits(it, "2026-12", price ?? it.rental_price); };
 
 console.log("══ 満額 / 半月 (貸与価格 3,000 円 = 300 単位) ══");
 eq("前月から継続 (月末まで) → 満額", U({}), 300);
@@ -121,23 +122,31 @@ eq("前半・後半で単位が対称になった (以前は 150 vs 151 で非�
 
 console.log("\n══ 月の長さ ══");
 // 2 月 (28 日) でも 15/16 で切る
-const feb = (o: Partial<OrderItem>) => calcMonthUnits(item(o), 2026, 2);
+const feb = (o: Partial<OrderItem>) => { const it = item(o); return itemMonthUnits(it, "2026-02", it.rental_price); };
 eq("2月 2/16 開始 (後半のみ) → 150", feb({ rental_start_date: "2026-02-16" }), 150);
-eq("2月 2/28 終了 → 満額 (前半から継続)", feb({ status: "terminated", rental_end_date: "2026-02-28" }), 300);
-eq("★ 2月 2/15 終了 (前半のみ) → 150", feb({ status: "terminated", rental_end_date: "2026-02-15" }), 150);
-// ⚠ 2026 は閏年でないので 2/29 は存在しない。`new Date("2026-02-29T00:00:00")` は
-//   **3/1 に繰り上がる**。前半から継続していれば下半期にもかかる扱いになる。
-eq("★ 2026-02-29 (存在しない日) 終了 → 満額 (Date が 3/1 に繰り上がる)",
+// ⚠ 2026-11-12: 以前この 2 行は開始日が既定の 2026-11-01 のまま (= 終了 2 月 < 開始 11 月 の壊れたデータ) で、
+//   旧 calcMonthUnits の「満額」分岐にたまたま当たって通っていた。正しく 1 月開始の継続にした。
+eq("2月 2/28 終了 → 満額 (前半から継続)", feb({ status: "terminated", rental_start_date: "2026-01-01", rental_end_date: "2026-02-28" }), 300);
+eq("★ 2月 2/15 終了 (前半のみ) → 150", feb({ status: "terminated", rental_start_date: "2026-01-01", rental_end_date: "2026-02-15" }), 150);
+// ⚠ 2026 は閏年でないので 2/29 は存在しない。rentalMonthUnits は日付を文字列で比べるので、
+//   "2026-02-29" 終了 = 2/28 まで全部が貸与日 (旧実装の Date が 3/1 に繰り上がる件と結果は同じ)。
+eq("★ 2026-02-29 (存在しない日) 終了 → 満額 (文字列比較で 2/28 まで全部が貸与日)",
   feb({ status: "terminated", rental_start_date: "2026-02-01", rental_end_date: "2026-02-29" }), 300);
 
-console.log("\n══ ⚠ 到達しない分岐 (実装の指摘) ══");
-// status=terminated / start が月末より後 / end が月末以内 → end < start でないと成立しない
+console.log("\n══ 壊れたデータ (終了日 < 開始日) ══");
+// 旧 calcMonthUnits は この形 (開始が月末より後・終了が月内) で **満額** を返し、伝送 (0) と食い違っていた。
+// 2026-11-12 に rentalMonthUnits へ寄せたので 貸与日 0 日 = 0 (伝送と同じ)。気づくのは hasBrokenRentalDates の警告で。
 const weird = U({ status: "terminated", rental_start_date: "2027-01-05", rental_end_date: "2026-12-20" });
-eq("★ 開始 > 終了 の壊れたデータでも **満額が出る** (弾かれない)", weird, 300);
-console.log("  ⚠ `calcMonthUnits` の該当分岐は `start > monthEnd && end <= monthEnd`、");
-console.log("     つまり **終了日が開始日より前**のときしか通らない。正常データでは到達しない。");
-console.log("     壊れたデータを黙って請求に載せるので、**null を返すか警告を出す**ほうが安全。");
-console.log("     ★ 実データでの該当件数は別途要確認 (この harness は DB を読まない)。");
+eq("★ 開始 > 終了 の壊れたデータ → 0 (伝送と同じ。旧実装は満額 300)", weird, 0);
+
+console.log("\n══ 日割り・休止 (請求・伝送と同じ rentalMonthUnits を通す) ══");
+{
+  const it = item({ status: "terminated", rental_end_date: "2026-12-20" });
+  eq("日割り 12/1〜20 (20/31) → round(300×20/31)=194", itemMonthUnits(it, "2026-12", 3000, [], "daily"), 194);
+  eq("自動 12/1〜20 → 満額 300", itemMonthUnits(it, "2026-12", 3000, [], "auto"), 300);
+  eq("★ 休止 12/1〜15 (後半だけ貸与) → 半月 150",
+    itemMonthUnits(item({}), "2026-12", 3000, [{ from: "2026-12-01", to: "2026-12-15" }]), 150);
+}
 
 console.log(`\n══ 検査 ${n} 件 / NG ${ng} 件 ══`);
 console.log(`「両方にかかれば満額 / 片方なら半月」の枠組みは制度どおり。`);
