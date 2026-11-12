@@ -80,7 +80,7 @@ const ClientsTab = dynamic(() => import("./ClientsTab"), { ssr: false, loading: 
 import { getUnreadCount } from "@/lib/notifications";
 
 // ─── Status helpers ─────────────────────────────────────────────────────────
-// (STATUS_LABEL/STATUS_COLOR/NEXT_STATUSES/calcMonthUnits/toShortDate/RPT_* は
+// (STATUS_LABEL/STATUS_COLOR/NEXT_STATUSES/itemMonthUnits/toShortDate/RPT_* は
 //  ./order-item-helpers.ts へ移設。CarePlanModal 等の分割ファイルからも使うため)
 
 // ─── Types ──────────────────────────────────────────────────────────────────

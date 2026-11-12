@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X, Loader2, Printer, Save } from "lucide-react";
 import { supabase, OrderItem, Equipment, EquipmentPriceHistory, Client, ClientDocument } from "@/lib/supabase";
 import { getAllOrderItemsByTenant } from "@/lib/orders";
+import { getPriceHistory } from "@/lib/equipment";
 import { todayYmd } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
 import RentalReportSheet from "./RentalReportSheet";
@@ -92,15 +93,8 @@ export default function BulkRentalReportModal({
         ]);
         const pm: Record<string, { client_id: string; pay: "介護" | "自費" }> = {};
         for (const o of orders) pm[o.id] = { client_id: o.client_id, pay: o.payment_type === "自費" ? "自費" : "介護" };
-        // 単価の改定履歴: .in() は件数が多いと遅くなるので 150 件ずつ
-        const codes = [...new Set(all.map((i) => i.product_code))];
-        const hist: EquipmentPriceHistory[] = [];
-        for (let i = 0; i < codes.length; i += 150) {
-          const { data, error } = await supabase.from("equipment_price_history").select("*")
-            .eq("tenant_id", tenantId).in("product_code", codes.slice(i, i + 150)).order("valid_from", { ascending: true });
-          if (error) throw new Error(error.message);
-          hist.push(...((data ?? []) as EquipmentPriceHistory[]));
-        }
+        // 単価の改定履歴: 請求と同じ getPriceHistory (150 件ずつ・1,000 行ずつ・valid_from 昇順)
+        const hist: EquipmentPriceHistory[] = await getPriceHistory(tenantId, all.map((i) => i.product_code));
         if (!cancelled) { setItems(all); setPayMap(pm); setPriceHistory(hist); }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

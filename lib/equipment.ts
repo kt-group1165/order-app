@@ -273,15 +273,27 @@ export async function getPurchasePrices(
   tenantId: string,
   productCodes: string[]
 ): Promise<EquipmentPrice[]> {
-  if (productCodes.length === 0) return [];
-  const { data, error } = await supabase
-    .from("equipment_prices")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .in("product_code", productCodes)
-    .order("valid_from", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  // ★ 2026-11-12: .in() は 150 件ずつ・各回 1,000 行ずつ (getPriceHistory と同じ。1 回取得だと URL 長・1,000 行で黙って切れる)
+  const codes = [...new Set(productCodes)];
+  if (codes.length === 0) return [];
+  const out: EquipmentPrice[] = [];
+  for (let i = 0; i < codes.length; i += 150) {
+    const chunk = codes.slice(i, i + 150);
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from("equipment_prices")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .in("product_code", chunk)
+        .order("valid_from", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + 999);
+      if (error) throw error;
+      out.push(...((data ?? []) as EquipmentPrice[]));
+      if (!data || data.length < 1000) break;
+    }
+  }
+  return out.sort((a, b) => String(a.valid_from).localeCompare(String(b.valid_from)) || String(a.id).localeCompare(String(b.id)));
 }
 
 /**
@@ -494,12 +506,16 @@ export async function applyPriceCorrection(params: {
 
   // 2) order_items を一括 restate
   const ids = params.targets.map((t) => t.order_item_id);
-  const { error: updateError } = await supabase
-    .from("order_items")
-    .update({ purchase_price: params.newPrice, updated_at: new Date().toISOString() })
-    .eq("tenant_id", params.tenantId)
-    .in("id", ids);
-  if (updateError) throw updateError;
+  // ★ 2026-11-12: 多数の id を 1 回の .in() に渡すと URL 長で 400 になる → 150 件ずつ。失敗したら何件目まで書いたかを出す
+  const now = new Date().toISOString();
+  for (let i = 0; i < ids.length; i += 150) {
+    const { error: updateError } = await supabase
+      .from("order_items")
+      .update({ purchase_price: params.newPrice, updated_at: now })
+      .eq("tenant_id", params.tenantId)
+      .in("id", ids.slice(i, i + 150));
+    if (updateError) throw new Error(`仕入価格の書き換えに失敗 (${i} / ${ids.length} 件まで反映済み): ${updateError.message}`);
+  }
 
   return ids.length;
 }
@@ -789,20 +805,36 @@ export function parseEquipmentCSV(csvText: string): EquipmentImportRow[] {
 
 // ─── 価格改定履歴 ─────────────────────────────────────────────────────────────
 
-/** 指定テナント・用具コードの価格履歴を取得 */
+/**
+ * 指定テナント・用具コードの価格履歴を取得 (valid_from の昇順。呼出側はこの並びを前提にしてよい)。
+ * ★ 2026-11-12: 以前は全コードを 1 回の .in() で取り、ページングもしていなかった
+ *   (請求画面は 793 品目 = URL 約 10KB・1,000 行で黙って切れる)。.in() は 150 件ずつ・各回 1,000 行ずつ (order valid_from + id)。
+ */
 export async function getPriceHistory(
   tenantId: string,
   productCodes: string[]
 ): Promise<EquipmentPriceHistory[]> {
-  if (productCodes.length === 0) return [];
-  const { data, error } = await supabase
-    .from("equipment_price_history")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .in("product_code", productCodes)
-    .order("valid_from", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  const codes = [...new Set(productCodes)];
+  if (codes.length === 0) return [];
+  const out: EquipmentPriceHistory[] = [];
+  for (let i = 0; i < codes.length; i += 150) {
+    const chunk = codes.slice(i, i + 150);
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from("equipment_price_history")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .in("product_code", chunk)
+        .order("valid_from", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + 999);
+      if (error) throw error;
+      out.push(...((data ?? []) as EquipmentPriceHistory[]));
+      if (!data || data.length < 1000) break;
+    }
+  }
+  // 分割して取ったので 全体を valid_from 昇順 (同日は id) に並べ直す (以前の 1 回取得と同じ並び)
+  return out.sort((a, b) => a.valid_from.localeCompare(b.valid_from) || String(a.id).localeCompare(String(b.id)));
 }
 
 /** 価格改定を記録する */
