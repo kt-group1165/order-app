@@ -166,7 +166,11 @@ console.log(`\n請求対象 (当月に介護保険の貸与があり明細が乗
   if (!sb) add(null, "⑤ 負担割合証", "SUPABASE_SERVICE_ROLE_KEY が無いので数えられない");
   else {
     const K = "../kaigo-app";
-    const rowsBy = await loadCertRows(sb, targets);
+    // 認定行は 請求と同じ範囲に絞る (事業所別 = この事業所の行だけ。buildBillingModel の insByClient と同じ行)。
+    //   絞らないと 他事業所の行 (給付率なし) が選ばれて「割合なし」に数えてしまう (上村 亮子 2026-10 で実測)
+    const scopedIds = new Set([...model.insByClient.values()].flat().map((r) => r.id));
+    const rowsAll = await loadCertRows(sb, targets);
+    const rowsBy = new Map([...rowsAll].map(([cid, rs]) => [cid, rs.filter((r) => r.id != null && scopedIds.has(r.id))]));
     const b = await loadBenefitCertsDbOrCsv(sb, targets, [
       { label: "ケアサポ 20261109", futan: join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/負担割合証等_全件.CSV"), ins: [join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/介護保険_全件_保険と認定.CSV")] },
       { label: "全社 20260830", futan: join(K, "利用者データ/全社_R8-08/負担割合証等1.CSV"), ins: [join(K, "利用者データ/全社_R8-08/介護保険1.CSV")] },
