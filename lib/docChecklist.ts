@@ -67,7 +67,18 @@ export function jstYmd(ts: string): string {
 
 function addDays(ymd: string, days: number): string {
   const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+  const t = Date.UTC(y, m - 1, d) + days * 86400000;
+  // 不正な日付で toISOString が投げると 書類タブごと落ちる (2026-11-12)。そのまま返す
+  if (Number.isNaN(t)) return ymd;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+/** clients.certification_start_date は text で "2026/1/9" 形式が混ざる (kaigo 共有利用者)。YYYY-MM-DD に揃える */
+function normalizeYmd(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const m = s.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!m) return null;
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 }
 
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`;
@@ -85,7 +96,8 @@ export function buildChecklist(input: ChecklistInput): ChecklistRow[] {
   const firstStart = starts[0] ?? null;
   const newStarts = starts.filter((d) => d >= DOC_CHECK_CUTOFF);
   const newEnds = ends.filter((d) => d >= DOC_CHECK_CUTOFF);
-  const certChange = input.certificationStart && input.certificationStart >= DOC_CHECK_CUTOFF ? input.certificationStart : null;
+  const certStart = normalizeYmd(input.certificationStart);
+  const certChange = certStart && certStart >= DOC_CHECK_CUTOFF ? certStart : null;
   const activeNow = input.rentals.some((r) => r.status === "rental_started" && (!r.rental_end_date || r.rental_end_date >= input.today));
 
   return ROW_DEFS.map((def) => {
