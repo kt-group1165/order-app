@@ -5903,6 +5903,7 @@ function ClientDetail({
           sourceOfficeId={currentOfficeId}
           yearMonth={recordYearMonth}
           clientItems={clientItems}
+          orderPaymentRaw={orderPaymentRaw}
           equipment={equipment}
           priceHistory={priceHistory}
           onClose={() => setShowRecordModal(false)}
@@ -5995,8 +5996,13 @@ type MonthlyRecordRow = {
   date_range_end: string;
   equipment_name: string;
   tais_code: string | null;
+  /** 月額 (円・按分前・1 個あたり)。変えない */
   monthly_rental_fee: number;
   category: string | null;
+  /** 2026-11-13 追加: 数量 (order_items.quantity。null/0 は 1)。受け側 (kaigo) は無ければ従来どおり 1 として扱う */
+  quantity: number;
+  /** 2026-11-13 追加: 支払区分の生の値 (order_items.payment_type ?? orders.payment_type。"介護"/"自費"/"特価自費" 等。不明は null)。絞らずに送る */
+  payment_type: string | null;
 };
 
 function buildRecordsForMonth(
@@ -6004,6 +6010,8 @@ function buildRecordsForMonth(
   clientItems: OrderItem[],
   equipment: Equipment[],
   priceHistory: EquipmentPriceHistory[],
+  /** order_id → orders.payment_type (明細に支払区分が無いとき用) */
+  orderPaymentRaw: Record<string, string> = {},
 ): MonthlyRecordRow[] {
   const [y, m] = yearMonth.split("-").map(Number);
   const monthStart = `${yearMonth}-01`;
@@ -6031,30 +6039,35 @@ function buildRecordsForMonth(
         tais_code: eq?.tais_code ?? null,
         monthly_rental_fee: price,
         category: eq?.category ?? null,
+        quantity: i.quantity && i.quantity > 0 ? i.quantity : 1,
+        payment_type: i.payment_type ?? orderPaymentRaw[i.order_id] ?? null,
       };
     });
 }
+
+/** 行の金額 = 月額 × 数量 (合計に使う。月額そのものは按分前のまま) */
+const recordAmount = (r: MonthlyRecordRow) => r.monthly_rental_fee * (r.quantity || 1);
 
 function buildRecordHtml(yearMonth: string, clientName: string, records: MonthlyRecordRow[]): string {
   const totalRows = records
     .map(
       (r) =>
-        `<tr><td>${r.date_range_start}</td><td>${r.date_range_end}</td><td>${r.equipment_name}</td><td>${r.tais_code ?? "-"}</td><td>${r.category ?? "-"}</td><td style="text-align:right">¥${r.monthly_rental_fee.toLocaleString()}</td></tr>`,
+        `<tr><td>${r.date_range_start}</td><td>${r.date_range_end}</td><td>${r.equipment_name}</td><td>${r.tais_code ?? "-"}</td><td>${r.category ?? "-"}</td><td>${r.payment_type ?? "-"}</td><td style="text-align:right">¥${r.monthly_rental_fee.toLocaleString()}</td><td style="text-align:right">${r.quantity}</td><td style="text-align:right">¥${recordAmount(r).toLocaleString()}</td></tr>`,
     )
     .join("");
-  const sum = records.reduce((s, r) => s + r.monthly_rental_fee, 0);
+  const sum = records.reduce((s, r) => s + recordAmount(r), 0);
   return `<div style="font-family:sans-serif;font-size:12px;padding:16px;">
 <h2 style="font-size:16px;margin:0 0 8px;">${yearMonth} 福祉用具実績 - ${clientName} 様</h2>
 <table style="width:100%;border-collapse:collapse;font-size:11px" border="1" cellpadding="6">
-<thead><tr style="background:#f3f4f6"><th>開始</th><th>終了</th><th>用具名</th><th>TAIS</th><th>区分</th><th>月額</th></tr></thead>
-<tbody>${totalRows || '<tr><td colspan="6" style="text-align:center;color:#888">対象なし</td></tr>'}</tbody>
-<tfoot><tr><td colspan="5" style="text-align:right;font-weight:bold">合計</td><td style="text-align:right;font-weight:bold">¥${sum.toLocaleString()}</td></tr></tfoot>
+<thead><tr style="background:#f3f4f6"><th>開始</th><th>終了</th><th>用具名</th><th>TAIS</th><th>種目</th><th>支払区分</th><th>月額</th><th>数量</th><th>金額</th></tr></thead>
+<tbody>${totalRows || '<tr><td colspan="9" style="text-align:center;color:#888">対象なし</td></tr>'}</tbody>
+<tfoot><tr><td colspan="8" style="text-align:right;font-weight:bold">合計 (月額×数量)</td><td style="text-align:right;font-weight:bold">¥${sum.toLocaleString()}</td></tr></tfoot>
 </table>
 </div>`;
 }
 
 function SendMonthlyRecordModal({
-  tenantId, client, sourceOfficeId, yearMonth, clientItems, equipment, priceHistory,
+  tenantId, client, sourceOfficeId, yearMonth, clientItems, orderPaymentRaw = {}, equipment, priceHistory,
   onClose, onSuccess, onError,
 }: {
   tenantId: string;
@@ -6062,6 +6075,8 @@ function SendMonthlyRecordModal({
   sourceOfficeId: string;
   yearMonth: string;
   clientItems: OrderItem[];
+  /** order_id → orders.payment_type (明細の支払区分が空のとき用) */
+  orderPaymentRaw?: Record<string, string>;
   equipment: Equipment[];
   priceHistory: EquipmentPriceHistory[];
   onClose: () => void;
@@ -6077,10 +6092,10 @@ function SendMonthlyRecordModal({
   const [showAll, setShowAll] = useState(false);
 
   const records = useMemo(
-    () => buildRecordsForMonth(yearMonth, clientItems, equipment, priceHistory),
-    [yearMonth, clientItems, equipment, priceHistory],
+    () => buildRecordsForMonth(yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw),
+    [yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw],
   );
-  const total = useMemo(() => records.reduce((s, r) => s + r.monthly_rental_fee, 0), [records]);
+  const total = useMemo(() => records.reduce((s, r) => s + recordAmount(r), 0), [records]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6218,7 +6233,10 @@ function SendMonthlyRecordModal({
                   <tr>
                     <th className="text-left px-2 py-1.5">期間</th>
                     <th className="text-left px-2 py-1.5">用具名</th>
+                    <th className="text-left px-2 py-1.5">区分</th>
                     <th className="text-right px-2 py-1.5">月額</th>
+                    <th className="text-right px-2 py-1.5">数量</th>
+                    <th className="text-right px-2 py-1.5">金額</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -6226,7 +6244,10 @@ function SendMonthlyRecordModal({
                     <tr key={idx}>
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{r.date_range_start.slice(5)}〜{r.date_range_end.slice(5)}</td>
                       <td className="px-2 py-1.5 text-gray-800 truncate">{r.equipment_name}</td>
+                      <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{r.payment_type ?? "-"}</td>
                       <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">¥{r.monthly_rental_fee.toLocaleString()}</td>
+                      <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{r.quantity}</td>
+                      <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">¥{recordAmount(r).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
