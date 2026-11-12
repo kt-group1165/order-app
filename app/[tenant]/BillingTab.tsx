@@ -2356,6 +2356,24 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     return { amount: units * 10, prorate: mode === "daily" ? "daily" : units === fullUnits ? "full" : "half" };
   }, [calc]);
 
+  /**
+   * 行 (開始 = 獲得 / 終了 = 引上) の金額 (円・1 個あたり)。★ その月の請求額ではない (2026-11-12 判断)。
+   *   営業の売上報告の書式で「開始で獲得した月額」「解約で引き上げた月額」を記録する列なので、
+   *   同じ月に開始・終了がある台でも 開始行は開始日だけ、終了行は終了日だけで 1ヶ月分/半月分 を決める (旧どおり)。休止・入院は見ない。
+   *   日割りにした月だけ: 開始行 = 開始日〜月末 / 終了行 = 月初〜終了日 の日割り (rentalMonthUnits の daily)
+   */
+  const salesRowAmount = useCallback((item: OrderItem, ev: "start" | "end", ym: string, price: number): { amount: number; prorate: "full" | "half" | "daily" } => {
+    if (modeOf(calc, item.id, ym) === "daily") {
+      const units = ev === "start"
+        ? rentalMonthUnits(price ? Math.round(price / 10) : 0, item.rental_start_date, null, ym, [], "daily")
+        : rentalMonthUnits(price ? Math.round(price / 10) : 0, null, item.rental_end_date, ym, [], "daily");
+      return { amount: units * 10, prorate: "daily" };
+    }
+    const day = parseInt(((ev === "start" ? item.rental_start_date : item.rental_end_date) ?? "").slice(8, 10), 10);
+    const half = ev === "start" ? day >= 16 : day <= 15;
+    return half ? { amount: Math.round(price / 2), prorate: "half" } : { amount: price, prorate: "full" };
+  }, [calc]);
+
   // 当月の売上帳票行を生成（自動集計）
   const rows = useMemo(() => {
     const monthStart = `${month}-01`;
@@ -2367,9 +2385,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       eventType: "start" | "end";
       salesDate: string;
       rType: "新規" | "追加" | "一部解約" | "全部解約";
-      /** 当月の算定: full = 1ヶ月分 / half = 半月分 (半月按分・入院/休止で減った月も含む) / daily = 日割り */
+      /** 行の算定: full = 1ヶ月分 / half = 半月分 / daily = 日割り (salesRowAmount) */
       prorate: "full" | "half" | "daily";
-      /** 当月の金額 (円・1 個あたり) = 請求と同じ rentalMonthUnits × 10 */
+      /** 行の金額 (円・1 個あたり) = 獲得 / 引上 の月額 (その月の請求額ではない) */
       amount: number;
       client: Client;
       item: OrderItem;
@@ -2420,7 +2438,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           eventType: "start",
           salesDate: item.rental_start_date,
           rType,
-          ...salesMonthAmount(item, client.id, month, getMonthlyPrice(item.product_code)),
+          ...salesRowAmount(item, "start", month, getMonthlyPrice(item.product_code)),
           client,
           item,
           order,
@@ -2452,7 +2470,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           eventType: "end",
           salesDate: item.rental_end_date,
           rType,
-          ...salesMonthAmount(item, client.id, month, getMonthlyPrice(item.product_code)),
+          ...salesRowAmount(item, "end", month, getMonthlyPrice(item.product_code)),
           client,
           item,
           order,
@@ -2465,7 +2483,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
 
     // 売上日昇順
     return result.sort((a, b) => a.salesDate.localeCompare(b.salesDate));
-  }, [orderItems, orders, clients, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId, salesMonthAmount]);
+  }, [orderItems, orders, clients, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId, salesRowAmount]);
 
   // 月次損益（発生ベース・介護保険レンタル）
   //   売上 = その月に稼働中のレンタルの当月金額の合計 (請求と同じ rentalMonthUnits。半月按分・日割り・休止・入院を反映)
