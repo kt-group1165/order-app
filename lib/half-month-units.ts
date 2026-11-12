@@ -105,3 +105,38 @@ export function halfMonthFlags(
 export function hospitalizationRanges(hs: readonly { admission_date: string; discharge_date: string | null }[]): DateRange[] {
   return hs.map((h) => ({ from: h.admission_date, to: h.discharge_date }));
 }
+
+// ── 日割り (2026-11-12 user 依頼) ──────────────────────────────────────────────
+/**
+ * 1 明細 × 1 か月の算定方法。
+ *   auto  = 既定。半月按分 (前半・後半の両方に貸与日 → 全額 / 片方 → 半額)
+ *   daily = 日割り。round(月額単位 × 貸与日数 ÷ その月の日数)
+ * 日割りの式は ほのぼの福祉用具の提供票「日割(31日)」の実例 (森 早百合 2026-05 の 14 行) から決めた:
+ *   月額 300 × 20/31 = 193.5 → 194 / × 11/31 = 106.45 → 106 / 月額 100 × 20/31 = 64.5 → 65 (= 四捨五入・分母はその月の日数)
+ * 貸与日数は 休止・入院を除いた日 (rentalDayMask)。
+ */
+export type ProrationMode = "auto" | "daily";
+
+export function dailyProratedUnits(fullUnits: number, rentalDays: number, daysInMonth: number): number {
+  if (rentalDays <= 0 || daysInMonth <= 0) return 0;
+  if (rentalDays >= daysInMonth) return fullUnits;
+  return Math.round((fullUnits * rentalDays) / daysInMonth);
+}
+
+/** 1 明細の当月の算定単位 (1 個あたり)。auto = 半月按分 / daily = 日割り。請求・伝送・画面はすべてこれを通す */
+export function rentalMonthUnits(
+  fullUnits: number,
+  rentalStart: string | null | undefined,
+  rentalEnd: string | null | undefined,
+  ym: string,
+  excluded: readonly DateRange[] = [],
+  mode: ProrationMode = "auto",
+): number {
+  if (mode === "daily") {
+    const mask = rentalDayMask(rentalStart, rentalEnd, ym, excluded);
+    const days = mask.filter(Boolean).length;
+    return dailyProratedUnits(fullUnits, days, mask.length - 1);
+  }
+  const { firstHalf, secondHalf } = halfMonthFlags(rentalStart, rentalEnd, ym, excluded);
+  return halfMonthUnits(fullUnits, firstHalf, secondHalf);
+}
