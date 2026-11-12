@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, ChevronLeft, ChevronRight, Printer, FileText, Receipt } from "lucide-react";
 import { monthEndYmd } from "@/lib/date-jst";
+import { supabase } from "@/lib/supabase";
 import type {
   Client,
+  ClientHospitalization,
   ClientInsuranceRecord,
   Equipment,
   Order,
   OrderItem,
 } from "@/lib/supabase";
+import { rentalMonthUnits, hospitalizationRanges } from "@/lib/half-month-units";
+import { loadProrations, prorationModeOf, type ProrationLoad } from "@/lib/orderItemProration";
+import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
 import {
   getUserInvoices,
   upsertUserInvoice,
@@ -523,6 +528,48 @@ export default function UserBillingTab({
     getCareOffices(tenantId).then(setCareOffices).catch(console.error);
   }, [tenantId]);
 
+  // 介護の単位計算の材料 (BillingTab と同じ): 日割り設定 / 休止 / 入院。
+  //   どれも読めないときは その分を除かずに計算し、画面に理由を 1 行出す (黙って違う額にしない)
+  const [prorations, setProrations] = useState<ProrationLoad | null>(null);
+  const [pauses, setPauses] = useState<PausesLoad | null>(null);
+  const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
+  const [calcNotices, setCalcNotices] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const notices: string[] = [];
+      const [pr, pa, hs] = await Promise.all([
+        loadProrations(tenantId).catch((e: unknown) => {
+          console.error("日割り設定の読込失敗:", e);
+          notices.push(`日割り設定を読めませんでした (${e instanceof Error ? e.message : String(e)}) — 全件 半月按分の自動で計算しています`);
+          return null;
+        }),
+        loadOrderItemPauses(tenantId),
+        (async () => {
+          const out: ClientHospitalization[] = [];
+          for (let from = 0; ; from += 1000) {
+            const { data, error } = await supabase.from("client_hospitalizations").select("*").eq("tenant_id", tenantId).order("id").range(from, from + 999);
+            if (error) {
+              console.error("client_hospitalizations 読込失敗:", error.message);
+              notices.push(`入院記録を読めませんでした (${error.message}) — 入院日を除かずに計算しています`);
+              return [];
+            }
+            out.push(...((data ?? []) as ClientHospitalization[]));
+            if (!data || data.length < 1000) return out;
+          }
+        })(),
+      ]);
+      if (cancelled) return;
+      if (pr?.notice) notices.push(pr.notice);
+      if (!pa.available && pa.message) notices.push(pa.message);
+      setProrations(pr);
+      setPauses(pa);
+      setHospitalizations(hs);
+      setCalcNotices(notices);
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId]);
+
 
   // 当月に対象月が掛かる insurance_record
   const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
@@ -546,7 +593,6 @@ export default function UserBillingTab({
   const rows: Row[] = useMemo(() => {
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
-    const daysInMonth = new Date(y, m, 0).getDate();
 
     // client_id → LineItem[]
     const byClient = new Map<string, LineItem[]>();
@@ -570,26 +616,15 @@ export default function UserBillingTab({
 
       if (pt === "介護") {
         // 介護自己負担分: 単位数 * 10 円 * (1 - 給付率%/100)。
-        // 単位数は rental_price/10 (= 基本単位)。月途中の半月は MonthlyInfoTab と
-        // 同じ簡易判定だが、入院考慮は本 Phase ではスキップ (hospitalizations props 無し)。
+        // 単位数は rental_price/10 (= 基本単位)。当月の算定単位は 請求・伝送と同じ rentalMonthUnits
+        // (既定 = 半月按分の自動 / 明細×月で「日割り」を選んだ月 = 日割り)。入院・休止の日は貸与日に数えない。
         const baseUnits = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
-        let billingDays = 0;
-        let firstHalf = false;
-        let secondHalf = false;
-        const rentalStart = parseLocalDate(item.rental_start_date);
-        const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
-        for (let d = 1; d <= daysInMonth; d++) {
-          const date = new Date(y, m - 1, d);
-          if (date < rentalStart || date > rentalEnd) continue;
-          billingDays++;
-          if (d <= 15) firstHalf = true;
-          else secondHalf = true;
-        }
-        let units = 0;
-        if (billingDays === 0) units = 0;
-        else if (firstHalf && !secondHalf) units = Math.round(baseUnits / 2);
-        else if (secondHalf && !firstHalf) units = Math.round(baseUnits / 2);
-        else units = baseUnits;
+        const excluded = [
+          ...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === order.client_id)),
+          ...(pauses?.byItem.get(item.id) ?? []),
+        ];
+        const units = rentalMonthUnits(baseUnits, item.rental_start_date, item.rental_end_date, billingMonth, excluded,
+          prorationModeOf(prorations, item.id, billingMonth));
 
         const insRec = getActiveInsuranceRecord(order.client_id);
         const benefitRateStr =
@@ -675,6 +710,9 @@ export default function UserBillingTab({
     insuranceRecords,
     careOffices,
     invoiceMap,
+    hospitalizations,
+    pauses,
+    prorations,
   ]);
 
   // かな行フィルター
@@ -985,6 +1023,12 @@ ${errors[0]}`);
       <div className="flex flex-1 min-w-0">
         {/* 中央: ツールバー + テーブル + フッタ */}
         <div className="flex-[1_1_1120px] max-w-[1120px] flex flex-col min-w-0 border-r border-gray-200">
+          {/* 単位計算の材料が読めないときの注記 (日割り設定表の未適用 等)。黙って違う額にしない */}
+          {calcNotices.length > 0 && (
+            <div className="border-b border-amber-200 bg-amber-50 px-3 py-1 text-[11px] text-amber-800 shrink-0">
+              {calcNotices.join(" / ")}
+            </div>
+          )}
           {/* ツールバー */}
           <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
