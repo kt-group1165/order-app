@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useTransition, memo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, useTransition, memo } from "react";
 import dynamic from "next/dynamic";
 import { ChevronRight, ChevronLeft, X, Loader2, Printer, Download } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPriceHistory, ClientInsuranceRecord, ClientHospitalization } from "@/lib/supabase";
@@ -2187,7 +2187,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   const [salesRecords, setSalesRecords] = useState<import("@/lib/sales").SalesRecord[]>([]);
   const [documents, setDocuments] = useState<Array<{ client_id: string; type: string }>>([]);
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
-  const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number }>>([]);
+  // 卸別仕入単価 (is_active かつ サンプル以外のみ。valid_from 履歴を持つ)
+  const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number; valid_from: string }>>([]);
+  const [samplePriceRowCount, setSamplePriceRowCount] = useState(0); // 経費に使わなかったサンプル単価の行数
   const [suppliersAll, setSuppliersAll] = useState<Supplier[]>([]); // 卸名解決用 (非表示含む全件)
   const [careOfficesMap, setCareOfficesMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [careManagersMap, setCareManagersMap] = useState<Map<string, string>>(new Map()); // id -> name
@@ -2226,7 +2228,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           getSalesRecords(tenantId),
           fetchAllRows<{ client_id: string; type: string }>("client_documents", "client_id, type"),
           getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
-          supabase.from("equipment_prices").select("product_code, supplier_id, purchase_price").eq("tenant_id", tenantId),
+          // ★ 2,556 行あるので必ずページング (以前は非ページングで先頭 1,000 行しか見ていなかった)
+          fetchAllRows<{ product_code: string; supplier_id: string; purchase_price: number | null; valid_from: string | null; is_active: boolean | null; supplier_product_code: string | null }>(
+            "equipment_prices", "product_code, supplier_id, purchase_price, valid_from, is_active, supplier_product_code"),
           fetchAllRows<{ id: string; name: string }>("care_offices", "id, name"),
           fetchAllRows<{ id: string; name: string }>("care_managers", "id, name"),
           getSuppliers().catch((e) => { console.error("getSuppliers に失敗 (空で続行):", e); return [] as Supplier[]; }),
@@ -2234,7 +2238,15 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         setSalesRecords(sr);
         setDocuments(docs);
         setPriceHistory(priceHist);
-        setPurchasePrices((ppRes.data ?? []) as Array<{ product_code: string; supplier_id: string; purchase_price: number }>);
+        // ★ サンプル単価 (supplier_product_code が 'SAMPLE-' 始まり。seed_fake_supplier_prices.mjs) は
+        //   架空の値なので経費に使わない。DB の行の削除は user 判断 (ここでは件数だけ出す)
+        const isSample = (p: { supplier_product_code: string | null }) => (p.supplier_product_code ?? "").startsWith("SAMPLE-");
+        setSamplePriceRowCount(ppRes.filter(isSample).length);
+        setPurchasePrices(
+          ppRes
+            .filter((p) => p.is_active !== false && !isSample(p) && p.purchase_price != null && p.purchase_price > 0)
+            .map((p) => ({ product_code: p.product_code, supplier_id: p.supplier_id, purchase_price: p.purchase_price as number, valid_from: p.valid_from ?? "0000-01-01" })),
+        );
         setSuppliersAll(sups);
         const om = new Map<string, string>();
         offs.forEach((o) => om.set(o.id, o.name));
@@ -2254,6 +2266,22 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     (c.care_office_id ? careOfficesMap.get(c.care_office_id) : null) ?? c.care_manager_org ?? "";
   const getCareManagerName = (c: Client): string =>
     (c.care_manager_id ? careManagersMap.get(c.care_manager_id) : null) ?? c.care_manager ?? "";
+
+  /**
+   * 明細の仕入原価。分からなければ null (= 0 円ではなく「不明」)。
+   *   1. order_items.purchase_price (発注時スナップ)。★ 0 は「未入力」扱いでカタログへ
+   *   2. カタログ equipment_prices (product_code, supplier_id) で asOf 時点に有効な最新 (valid_from <= asOf)
+   */
+  const resolvePurchasePrice = useCallback((item: OrderItem, asOf: string): number | null => {
+    if (item.purchase_price != null && item.purchase_price > 0) return item.purchase_price;
+    if (!item.supplier_id) return null;
+    let best: { purchase_price: number; valid_from: string } | null = null;
+    for (const p of purchasePrices) {
+      if (p.product_code !== item.product_code || p.supplier_id !== item.supplier_id || p.valid_from > asOf) continue;
+      if (!best || p.valid_from > best.valid_from) best = p;
+    }
+    return best?.purchase_price ?? null;
+  }, [purchasePrices]);
 
   // 当月の売上帳票行を生成（自動集計）
   const rows = useMemo(() => {
@@ -2285,13 +2313,6 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       if (hist.length > 0) return hist[0].rental_price;
       const eq = equipment.find((e) => e.product_code === productCode);
       return eq?.rental_price ?? 0;
-    };
-
-    // 仕入単価取得
-    const getPurchasePrice = (productCode: string, supplierId: string | null): number => {
-      if (!supplierId) return 0;
-      const p = purchasePrices.find((p) => p.product_code === productCode && p.supplier_id === supplierId);
-      return p?.purchase_price ?? 0;
     };
 
     for (const item of orderItems) {
@@ -2338,7 +2359,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           order,
           equipmentName,
           rentalPrice: getMonthlyPrice(item.product_code),
-          purchasePrice: item.purchase_price ?? getPurchasePrice(item.product_code, item.supplier_id),
+          purchasePrice: resolvePurchasePrice(item, monthEnd) ?? 0,
         });
       }
 
@@ -2372,14 +2393,14 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           order,
           equipmentName,
           rentalPrice: getMonthlyPrice(item.product_code),
-          purchasePrice: item.purchase_price ?? getPurchasePrice(item.product_code, item.supplier_id),
+          purchasePrice: resolvePurchasePrice(item, monthEnd) ?? 0,
         });
       }
     }
 
     // 売上日昇順
     return result.sort((a, b) => a.salesDate.localeCompare(b.salesDate));
-  }, [orderItems, orders, clients, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
+  }, [orderItems, orders, clients, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId]);
 
   // 月次損益（発生ベース・介護保険レンタル）
   //   売上 = その月に稼働中のレンタル月額の合計（半月按分: 開始16日以降/終了15日以前は半月）
@@ -2396,15 +2417,12 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       if (hist.length > 0) return hist[0].rental_price;
       return equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
     };
-    // カタログ仕入（スナップショットが無い旧データ用フォールバック）
-    const catalogPurchaseOf = (productCode: string, supplierId: string | null): number => {
-      if (!supplierId) return 0;
-      return purchasePrices.find((p) => p.product_code === productCode && p.supplier_id === supplierId)?.purchase_price ?? 0;
-    };
     let revenue = 0;
     let expense = 0;
     let activeCount = 0;
     let startedCount = 0;
+    // 仕入原価が分からない当月開始の件数 (卸未設定 / 単価未登録)。¥0 と「不明」を区別するため
+    let unknownCostCount = 0;
     // 内訳: 商品別 (売上+経費) / 卸別 (経費のみ = 当月開始の仕入)
     const byProduct = new Map<string, { revenue: number; expense: number; activeCount: number; startedCount: number }>();
     const bySupplier = new Map<string, { expense: number; startedCount: number }>();
@@ -2440,7 +2458,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       }
       // ── 経費: その月にレンタル開始した分の仕入原価（スナップ優先）──
       if (item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd) {
-        const exp = item.purchase_price ?? catalogPurchaseOf(item.product_code, item.supplier_id);
+        const resolved = resolvePurchasePrice(item, monthEnd);
+        if (resolved == null) unknownCostCount++;
+        const exp = resolved ?? 0;
         expense += exp;
         startedCount++;
         const pa = prodAcc(item.product_code);
@@ -2451,8 +2471,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         bySupplier.set(sKey, sa);
       }
     }
-    return { revenue, expense, profit: revenue - expense, activeCount, startedCount, byProduct, bySupplier };
-  }, [orderItems, orders, equipment, priceHistory, purchasePrices, month, y, m, currentOfficeId]);
+    return { revenue, expense, profit: revenue - expense, activeCount, startedCount, unknownCostCount, byProduct, bySupplier };
+  }, [orderItems, orders, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId]);
   const [showPnlDetail, setShowPnlDetail] = useState(false);
 
   // 書類チェック関数
@@ -2555,8 +2575,26 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           <div className="px-3 py-2 flex items-center gap-4 flex-wrap text-xs">
             <span className="font-semibold text-gray-700">月次損益（発生ベース）</span>
             <span className="text-gray-600">売上 <span className="font-semibold text-gray-900">¥{pnl.revenue.toLocaleString()}</span> <span className="text-gray-400">(稼働{pnl.activeCount}件)</span></span>
-            <span className="text-gray-600">経費 <span className="font-semibold text-gray-900">¥{pnl.expense.toLocaleString()}</span> <span className="text-gray-400">(当月開始{pnl.startedCount}件)</span></span>
-            <span className="text-gray-600">利益 <span className={`font-bold ${pnl.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>¥{pnl.profit.toLocaleString()}</span></span>
+            <span className="text-gray-600">
+              経費{" "}
+              {pnl.unknownCostCount > 0 ? (
+                <span
+                  className="font-semibold text-amber-700"
+                  title={`当月開始 ${pnl.startedCount} 件のうち ${pnl.unknownCostCount} 件は仕入原価が分からない (卸未設定 / 卸別仕入単価が未登録) ため経費に入っていません。¥0 ではなく不明です。`}
+                >
+                  ¥{pnl.expense.toLocaleString()} + 未設定{pnl.unknownCostCount}件
+                </span>
+              ) : (
+                <span className="font-semibold text-gray-900">¥{pnl.expense.toLocaleString()}</span>
+              )}{" "}
+              <span className="text-gray-400">(当月開始{pnl.startedCount}件 / うち仕入未設定{pnl.unknownCostCount}件)</span>
+            </span>
+            <span className="text-gray-600">
+              利益{" "}
+              <span className={`font-bold ${pnl.unknownCostCount > 0 ? "text-amber-700" : pnl.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                ¥{pnl.profit.toLocaleString()}{pnl.unknownCostCount > 0 && <span className="font-normal text-[10px]">（経費不明分を含まない）</span>}
+              </span>
+            </span>
             <button
               onClick={() => setShowPnlDetail((v) => !v)}
               className="text-[11px] px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
@@ -2564,6 +2602,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
               内訳 {showPnlDetail ? "▲" : "▼"}
             </button>
             <span className="text-[10px] text-gray-400">売上=当月稼働レンタルの月額合計 / 経費=当月開始レンタルの仕入原価（現金支払とは別軸）</span>
+            {samplePriceRowCount > 0 && (
+              <span className="text-[10px] text-gray-400">※サンプル仕入単価 {samplePriceRowCount.toLocaleString()} 行は経費に使っていません</span>
+            )}
           </div>
           {showPnlDetail && (
             <div className="px-3 pb-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs max-w-6xl tabular-nums">
@@ -2615,7 +2656,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
                     {Array.from(pnl.bySupplier.entries())
                       .sort((a, b) => b[1].expense - a[1].expense)
                       .map(([sid, v]) => {
-                        const name = sid === "__none__" ? "（卸未設定）" : (suppliersAll.find((s) => s.id === sid)?.name ?? sid);
+                        const name = sid === "__none__" ? "（卸未設定・仕入原価不明）" : (suppliersAll.find((s) => s.id === sid)?.name ?? sid);
                         return (
                           <tr key={sid} className="border-t border-dashed border-slate-100">
                             <td className="px-3 py-1">{name}</td>
