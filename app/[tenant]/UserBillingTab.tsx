@@ -19,7 +19,8 @@ import {
   type BillingUserInvoiceStatus,
 } from "@/lib/userBilling";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
-import { getTenantById, type Tenant } from "@/lib/tenants";
+import { getOfficeCompanyInfo, toCompanyInfo, emptyCompanyInfoRow } from "@/lib/officeCompanyInfo";
+import type { CompanyInfo } from "./company-info";
 
 // ── かな行フィルター (MonthlyInfoTab と同じ pattern) ─────────────────────
 const USER_BILLING_KANA_ROWS = ["あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ", "他"];
@@ -51,6 +52,13 @@ type LineItem = {
   amount: number; // 税抜
   tax_amount: number;
   is_taxable: boolean;
+  /** 介護: 1 個あたりの当月算定単位数 (半月ルール後)。自費は null */
+  units: number | null;
+  /** 帳票の「ご利用日」カレンダー・期間用 (YYYY-MM-DD) */
+  rental_start_date: string;
+  rental_end_date: string | null;
+  /** 発注の事業所 (帳票の発行元を事業所ごとに引くため) */
+  office_id: string | null;
 };
 
 type Row = {
@@ -117,27 +125,41 @@ function formatInvoiceNo(year: number, no: number): string {
 }
 
 type IssuerInfo = {
+  /** 法人名 (companies.name 等)。無ければ空 */
+  legalName: string;
   companyName: string;
+  /** 適格請求書の登録番号 (T + 13 桁) */
+  invoiceNumber: string;
   companyAddress: string;
   tel: string;
   fax: string;
-  businessNumber: string;
-  staffName: string;
 };
 
-function issuerFromTenant(t: Tenant | null): IssuerInfo {
+// 帳票の発行元: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)。
+// BillingTab の InvoiceReceiptModal と同じ経路。
+function issuerFromCompanyInfo(ci: CompanyInfo): IssuerInfo {
+  const inv = (ci.invoiceNumber ?? "").trim();
   return {
-    companyName: t?.company_name ?? "○○福祉用具",
-    companyAddress: t?.company_address ?? "",
-    tel: t?.company_tel ?? "",
-    fax: t?.company_fax ?? "",
-    businessNumber: t?.business_number ?? "",
-    staffName: t?.staff_name ?? "",
+    legalName: (ci.legalName ?? "").trim(),
+    companyName: ci.companyName ?? "",
+    invoiceNumber: inv ? (/^T/i.test(inv) ? inv.toUpperCase() : `T${inv}`) : "",
+    companyAddress: ci.companyAddress ?? "",
+    tel: ci.tel ?? "",
+    fax: ci.fax ?? "",
   };
 }
 
+// 「令和 8年 4月 8日」(見本の書式)
+function reiwaDateSpaced(iso: string): string {
+  const mm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!mm) return iso;
+  const yy = parseInt(mm[1], 10);
+  return `令和 ${yy - 2018}年 ${parseInt(mm[2], 10)}月 ${parseInt(mm[3], 10)}日`;
+}
+
 // 1 枚分の A4 帳票 (請求書 or 領収書) の HTML を組み立てる。
-// group.length === 1 → 通常の 1 利用者。>1 → 名寄せ (同一世帯合算)。
+// 書式は ほのぼの出力の利用料請求書 (apps/order-app/請求書.pdf) に合わせる。
+// group.length === 1 → 通常の 1 利用者。>1 → 名寄せ (同一世帯合算: 利用者別小計 + 世帯合計)。
 function buildDocPage(
   group: Row[],
   mode: "invoice" | "receipt",
@@ -148,99 +170,182 @@ function buildDocPage(
 ): string {
   const rep = group[0];
   const isMerged = group.length > 1;
-  const title = mode === "invoice" ? "利 用 料 請 求 書" : "利 用 料 領 収 書";
-  const amountLabel = mode === "invoice" ? "今回ご請求額" : "領 収 金 額";
+  const title = mode === "invoice" ? "利用料請求書" : "利用料領収書";
+  const amountLabel = mode === "invoice" ? "今回ご請求額" : "領収金額";
   const dateLabel = mode === "invoice" ? "発行日" : "領収日";
-  const noLabel = mode === "invoice" ? "請求書No." : "領収書No.";
+  const lead = mode === "invoice" ? "下記の通り請求いたします。" : "下記の内容について、領収いたしました。";
+
+  const [yy, mo] = billingMonth.split("-").map(Number);
+  const daysInMonth = new Date(yy, mo, 0).getDate();
+  const monthStartStr = `${billingMonth}-01`;
+  const monthEndStr = `${billingMonth}-${String(daysInMonth).padStart(2, "0")}`;
 
   const allItems = group.flatMap((r) => r.lineItems);
+  const careItems = allItems.filter((li) => li.units != null);
   const billed = group.reduce((s, r) => s + (r.invoice?.total_amount ?? r.computedTotal), 0);
+  // 課税分は税込 (見本: 課税分 438円 / 消費税対象額 438 / 消費税額 39)
+  const taxableIncl = allItems.filter((li) => li.is_taxable).reduce((s, li) => s + li.amount + li.tax_amount, 0);
   const nonTaxable = allItems.filter((li) => !li.is_taxable).reduce((s, li) => s + li.amount, 0);
-  const taxableBase = allItems.filter((li) => li.is_taxable).reduce((s, li) => s + li.amount, 0);
   const tax = group.reduce((s, r) => s + r.computedTax, 0);
   const officeName = rep.careOffice?.name ?? rep.client.care_manager_org ?? "";
+  const yen = (n: number) => n.toLocaleString();
 
-  const itemRow = (li: LineItem) => `
-      <tr>
-        <td class="l">${escapeHtml(li.kind)}<br><span class="sub">${escapeHtml(li.name)}</span></td>
-        <td class="r mono">¥${li.unit_price.toLocaleString()}</td>
-        <td class="r mono">${li.quantity}</td>
-        <td class="r mono">¥${li.amount.toLocaleString()}</td>
-      </tr>`;
+  // ── 期間・ご利用日 ──
+  const dayOf = (iso: string) => parseInt(iso.slice(8, 10), 10);
+  const usedDays = new Set<number>(); // 期間 (全明細)
+  const careDays = new Set<number>(); // ○ 介護サービス算定日
+  const edgeDays = new Set<number>(); // □ サービス利用開始・終了日
+  for (const li of allItems) {
+    const from = li.rental_start_date < monthStartStr ? 1 : dayOf(li.rental_start_date);
+    const to = !li.rental_end_date || li.rental_end_date > monthEndStr ? daysInMonth : dayOf(li.rental_end_date);
+    for (let d = from; d <= to; d++) {
+      usedDays.add(d);
+      if (li.units != null) careDays.add(d);
+    }
+    if (li.rental_start_date >= monthStartStr && li.rental_start_date <= monthEndStr) edgeDays.add(dayOf(li.rental_start_date));
+    if (li.rental_end_date && li.rental_end_date >= monthStartStr && li.rental_end_date <= monthEndStr) edgeDays.add(dayOf(li.rental_end_date));
+  }
+  const sortedDays = [...usedDays].sort((a, b) => a - b);
+  const period =
+    sortedDays.length > 0
+      ? `期間：${mo}月${sortedDays[0]}日～${mo}月${sortedDays[sortedDays.length - 1]}日`
+      : "";
 
-  // 明細: 通常は行の羅列、名寄せ時は利用者ごとに見出し行を挟む
-  const rowsHtml = isMerged
+  const firstDow = new Date(yy, mo - 1, 1).getDay();
+  const calCells: string[] = [];
+  for (let i = 0; i < firstDow; i++) calCells.push(`<td></td>`);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = (firstDow + d - 1) % 7;
+    const cls = dow === 0 ? "sun" : dow === 6 ? "sat" : "";
+    const mark = edgeDays.has(d) ? "sq" : careDays.has(d) ? "ci" : "";
+    calCells.push(`<td class="${cls}"><span class="${mark}">${d}</span></td>`);
+  }
+  while (calCells.length % 7 !== 0) calCells.push(`<td></td>`);
+  const calRows: string[] = [];
+  for (let i = 0; i < calCells.length; i += 7) calRows.push(`<tr>${calCells.slice(i, i + 7).join("")}</tr>`);
+
+  // ── 利用内訳 ──
+  const sumPerson = (r: Row) => r.lineItems.reduce((s, li) => s + li.amount + li.tax_amount, 0);
+  const usageRows = isMerged
     ? group
+        .map(
+          (r) =>
+            `<tr><td>福祉用具貸与（${escapeHtml(r.client.name)} 様）</td><td></td><td></td><td class="r">${yen(sumPerson(r))}</td></tr>`
+        )
+        .join("")
+    : `<tr><td>福祉用具貸与</td><td></td><td></td><td class="r">${yen(sumPerson(rep))}</td></tr>`;
+
+  // ── 介護サービス費内訳 (介護の明細のみ。単位数 = 1 個あたり / 回数 = 数量) ──
+  const careRow = (li: LineItem) => {
+    const u = li.units ?? 0;
+    return `<tr><td>${escapeHtml(li.name)}</td><td class="r">${yen(u)}</td><td class="c">${li.quantity}</td><td class="r">${yen(u * li.quantity)}単位</td></tr>`;
+  };
+  const careRowsHtml = isMerged
+    ? group
+        .filter((r) => r.lineItems.some((li) => li.units != null))
         .map((r) => {
-          const sub = r.lineItems.reduce((s, li) => s + li.amount + li.tax_amount, 0);
-          return `
-      <tr class="person"><td class="l" colspan="3">${escapeHtml(r.client.name)}　様</td><td class="r mono">¥${sub.toLocaleString()}</td></tr>
-      ${r.lineItems.map(itemRow).join("")}`;
+          const items = r.lineItems.filter((li) => li.units != null);
+          const sub = items.reduce((s, li) => s + (li.units ?? 0) * li.quantity, 0);
+          return `<tr class="person"><td colspan="3">${escapeHtml(r.client.name)} 様</td><td class="r">${yen(sub)}単位</td></tr>${items.map(careRow).join("")}`;
         })
         .join("")
-    : rep.lineItems.map(itemRow).join("");
+    : careItems.map(careRow).join("");
+  const totalUnits = careItems.reduce((s, li) => s + (li.units ?? 0) * li.quantity, 0);
 
-  const taxRows = `
-    ${nonTaxable > 0 ? `<tr><td class="l">非課税分</td><td colspan="2"></td><td class="r mono">¥${nonTaxable.toLocaleString()}</td></tr>` : ""}
-    ${taxableBase > 0 ? `<tr><td class="l">課税分 (税抜)</td><td colspan="2"></td><td class="r mono">¥${taxableBase.toLocaleString()}</td></tr>` : ""}
-    ${tax > 0 ? `<tr><td class="l">消費税 (10%)</td><td colspan="2"></td><td class="r mono">¥${tax.toLocaleString()}</td></tr>` : ""}
-    <tr class="total"><td class="l">合計</td><td colspan="2"></td><td class="r mono">¥${billed.toLocaleString()}</td></tr>`;
-
-  const receiptNote =
-    mode === "receipt"
-      ? `<div class="note">但し　${reiwaMonth(billingMonth)}　福祉用具貸与利用料として　上記正に領収いたしました。</div>`
-      : `<div class="note">下記のとおりご請求申し上げます。恐れ入りますがお支払期日までにお納めください。</div>`;
-
-  const toName = isMerged
-    ? `<span class="to-name">${escapeHtml(rep.client.name)}</span>　様　他 ${group.length - 1} 名`
-    : `<span class="to-name">${escapeHtml(rep.client.name)}</span>　様`;
-  const householdSub = isMerged
-    ? `<div class="to-sub">（同一世帯：${escapeHtml(group.map((r) => r.client.name).join("・"))}）</div>`
-    : "";
+  const toName = `${escapeHtml(rep.client.name)} 様${isMerged ? ` 他 ${group.length - 1} 名` : ""}`;
+  const userNames = group.map((r) => `${escapeHtml(r.client.name)} 様`).join("<br>");
+  const postalCode = (rep.client as unknown as { postal_code?: string | null }).postal_code ?? "";
 
   return `
-  <div class="sheet">
+  <div class="sheet doc">
     <div class="titlebar">${title}</div>
 
-    <div class="head">
-      <div class="head-l">
-        <div class="issue">${escapeHtml(dateLabel)}：${reiwaDate(issueDate)}</div>
-        ${invoiceNo ? `<div class="issue">${escapeHtml(noLabel)} ${escapeHtml(invoiceNo)}</div>` : ""}
-        <div class="to">${toName}</div>
-        ${householdSub}
-        ${officeName ? `<div class="to-sub">（居宅：${escapeHtml(officeName)}）</div>` : ""}
+    <div class="row top">
+      <div class="col-l addr">
+        <div>〒${escapeHtml(postalCode)}</div>
+        <div>${escapeHtml(rep.client.address ?? "")}</div>
       </div>
-      <div class="head-r">
-        <div class="co-name">${escapeHtml(issuer.companyName)}</div>
+      <div class="col-r issuer">
+        ${issuer.legalName ? `<div>${escapeHtml(issuer.legalName)}</div>` : ""}
+        <div>${escapeHtml(issuer.companyName)}</div>
+        ${issuer.invoiceNumber ? `<div>登録番号：${escapeHtml(issuer.invoiceNumber)}</div>` : ""}
         ${issuer.companyAddress ? `<div>${escapeHtml(issuer.companyAddress)}</div>` : ""}
-        <div>${issuer.tel ? `TEL: ${escapeHtml(issuer.tel)}` : ""}${issuer.fax ? `　FAX: ${escapeHtml(issuer.fax)}` : ""}</div>
-        ${issuer.businessNumber ? `<div>事業所番号: ${escapeHtml(issuer.businessNumber)}</div>` : ""}
-        ${issuer.staffName ? `<div>担当: ${escapeHtml(issuer.staffName)}</div>` : ""}
-        <div class="seal">印</div>
+        <div>${issuer.tel ? `TEL：${escapeHtml(issuer.tel)}` : ""}${issuer.fax ? `　FAX：${escapeHtml(issuer.fax)}` : ""}</div>
+        <div>※　押印は省略させていただきます。</div>
       </div>
     </div>
 
-    <div class="target">対象月：${reiwaMonth(billingMonth)}</div>
-
-    <div class="amountbox">
-      <span class="amountlabel">${escapeHtml(amountLabel)}</span>
-      <span class="amountval">¥${billed.toLocaleString()}</span>
-      <span class="amounttax">（うち消費税 ¥${tax.toLocaleString()}）</span>
+    <div class="row mid">
+      <div class="col-l to">
+        <div class="to-name">${toName}</div>
+        ${isMerged ? `<div class="to-sub">（同一世帯合算）</div>` : ""}
+      </div>
+      <div class="col-r">
+        <table class="box">
+          <tr><th>居宅介護支援事業者名</th></tr>
+          <tr><td>${escapeHtml(officeName)}</td></tr>
+        </table>
+        <table class="box mt">
+          <colgroup><col style="width:52%"><col></colgroup>
+          <tr><th colspan="2">支払い者名</th></tr>
+          <tr><td>${escapeHtml(rep.client.name)} 様</td><td></td></tr>
+        </table>
+      </div>
     </div>
 
-    ${receiptNote}
+    <table class="box userline">
+      <colgroup><col style="width:22%"><col style="width:12%"><col style="width:16%"><col style="width:16%"><col style="width:20%"><col></colgroup>
+      <tr><th>利用者氏名</th><th></th><th></th><th></th><th>${dateLabel}</th><th></th></tr>
+      <tr><td>${userNames}</td><td></td><td></td><td></td><td>${reiwaDateSpaced(issueDate)}</td><td></td></tr>
+    </table>
+    <div class="lead">${lead}</div>
 
-    <table class="detail">
-      <thead>
-        <tr><th class="l">利用料項目</th><th class="r">単価</th><th class="r">数量</th><th class="r">金額</th></tr>
-      </thead>
-      <tbody>
-        ${rowsHtml || `<tr><td colspan="4" class="empty">明細がありません</td></tr>`}
-        ${taxRows}
-      </tbody>
+    <div class="row amountrow">
+      <div class="period">${reiwaMonth(billingMonth).replace(/^令和(\d+)年(\d+)月分$/, "令和 $1年 $2月分")}　${period}</div>
+      <div class="amountbox">
+        <div class="amountlabel">${amountLabel}</div>
+        <div class="amountval">¥${yen(billed)}</div>
+      </div>
+    </div>
+
+    <table class="grid">
+      <colgroup><col><col style="width:9%"><col style="width:9%"><col style="width:11%"></colgroup>
+      <tr><th>利用内訳</th><th>単価</th><th>数量</th><th>金　額</th></tr>
+      ${allItems.length > 0 ? usageRows : `<tr><td colspan="4" class="empty">明細がありません</td></tr>`}
+      <tr class="subline"><td class="indent">課税分　　${yen(taxableIncl)}円</td><td></td><td></td><td></td></tr>
+      <tr class="subline last"><td class="indent">非課税分　${yen(nonTaxable)}円</td><td></td><td></td><td></td></tr>
+      <tr class="total"><td colspan="3">合計</td><td class="r">${yen(billed)}</td></tr>
     </table>
 
-    <div class="foot">※ 本書は福祉用具貸与にかかる利用者負担分の${mode === "invoice" ? "請求" : "領収"}書です。</div>
+    <table class="grid mt">
+      <colgroup><col><col style="width:8%"><col style="width:6%"><col style="width:16%"></colgroup>
+      <tr><th>介護サービス費内訳</th><th>単位数</th><th>回数</th><th>単位</th></tr>
+      ${careRowsHtml || `<tr><td colspan="4" class="empty">介護保険の明細はありません</td></tr>`}
+      <tr class="total"><td colspan="3">合計</td><td class="r">${yen(totalUnits)}単位</td></tr>
+    </table>
+
+    <div class="row calrow">
+      <div class="legend">
+        <div>○：介護サービス算定日</div>
+        <div>□：サービス利用開始・終了日</div>
+      </div>
+      <div class="cal">
+        <div class="cal-title">ご利用日</div>
+        <table>
+          <tr><th class="sun">日</th><th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th class="sat">土</th></tr>
+          ${calRows.join("")}
+        </table>
+      </div>
+    </div>
+
+    <table class="grid mt">
+      <colgroup><col><col style="width:16%"><col style="width:16%"></colgroup>
+      <tr><th>消費税内訳</th><th>消費税対象額</th><th>消費税額</th></tr>
+      <tr><td>10％対象</td><td class="r">${yen(taxableIncl)}</td><td class="r">${yen(tax)}</td></tr>
+      <tr class="total"><td>合計</td><td class="r">${yen(taxableIncl)}</td><td class="r">${yen(tax)}</td></tr>
+    </table>
+
+    <div class="pageno">${invoiceNo ? `No.${escapeHtml(invoiceNo)}` : ""}　　[1枚中1枚目]</div>
   </div>`;
 }
 
@@ -281,10 +386,16 @@ function buildListPage(rows: Row[], billingMonth: string, issuer: IssuerInfo): s
   </div>`;
 }
 
-function openPrintWindow(inner: string, docTitle: string, layout: "invoice" | "list") {
+// ポップアップブロックを避けるため、窓はクリック直後 (await より前) に開いておく
+function openBlankPrintWindow(): Window | null {
   const w = window.open("", "_blank", "width=900,height=1000");
-  if (!w) {
-    alert("印刷ウィンドウを開けませんでした。ポップアップブロックを解除してください。");
+  if (!w) alert("印刷ウィンドウを開けませんでした。ポップアップブロックを解除してください。");
+  return w;
+}
+
+function openPrintWindow(w: Window | null, inner: string, docTitle: string, layout: "invoice" | "list") {
+  if (!w || w.closed) {
+    alert("印刷ウィンドウが閉じられたため、印刷を中止しました。");
     return;
   }
   const pageCss =
@@ -300,34 +411,49 @@ function openPrintWindow(inner: string, docTitle: string, layout: "invoice" | "l
   .sheet { width: 186mm; margin: 0 auto; padding: 0 0 8mm; page-break-after: always; }
   .sheet:last-child { page-break-after: auto; }
 
-  /* 請求書 / 領収書 */
-  .titlebar { background: #d4ead7; border: 1px solid #374151; border-radius: 12px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; letter-spacing: .12em; margin-bottom: 14px; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
-  .head-l { width: 55%; }
-  .head-r { width: 42%; text-align: left; position: relative; padding-right: 42px; }
-  .issue { font-size: 11px; color: #444; margin-bottom: 10px; }
-  .to-name { font-size: 17px; font-weight: 700; border-bottom: 1px solid #111; padding: 0 8px 1px; }
-  .to { margin-bottom: 2px; }
-  .to-sub { font-size: 11px; color: #555; }
-  .co-name { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
-  .head-r div { font-size: 11px; }
-  .seal { position: absolute; top: 0; right: 0; width: 34px; height: 34px; border: 1px solid #c0392b; border-radius: 4px; color: #c0392b; display: flex; align-items: center; justify-content: center; font-size: 11px; }
-  .target { font-size: 12px; margin: 4px 0 8px; }
-  .amountbox { border: 2px solid #374151; border-radius: 8px; padding: 8px 14px; display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
-  .amountlabel { font-size: 13px; font-weight: 700; }
-  .amountval { font-size: 24px; font-weight: 700; letter-spacing: .02em; }
-  .amounttax { font-size: 11px; color: #555; margin-left: auto; }
-  .note { font-size: 11px; color: #333; margin-bottom: 10px; }
-  table.detail { width: 100%; border-collapse: collapse; }
-  table.detail th, table.detail td { border: 1px solid #9ca3af; padding: 5px 8px; }
-  table.detail th { background: #f3f4f6; font-weight: 600; }
-  table.detail .l { text-align: left; }
-  table.detail .r { text-align: right; }
-  table.detail .sub { font-size: 10px; color: #666; }
-  table.detail tr.total td { background: #eef2f7; font-weight: 700; }
-  table.detail tr.person td { background: #f6f8fa; font-weight: 600; }
-  table.detail .empty { text-align: center; color: #999; padding: 16px; }
-  .foot { margin-top: 10px; font-size: 10px; color: #666; }
+  /* 請求書 / 領収書 (ほのぼのの利用料請求書と同じ書式) */
+  .doc { font-size: 12px; line-height: 1.35; position: relative; min-height: 270mm; }
+  .doc .titlebar { width: 60%; margin: 0 auto 12px; background: #d4ead7; border-radius: 6px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 700; letter-spacing: .08em; }
+  .doc .row { display: flex; justify-content: space-between; }
+  .doc .col-l { width: 47%; }
+  .doc .col-r { width: 47%; }
+  .doc .addr { font-size: 13px; padding-left: 2mm; }
+  .doc .issuer { font-size: 12.5px; line-height: 1.25; }
+  .doc .mid { align-items: center; margin-top: 4px; }
+  .doc .to { padding-left: 6mm; }
+  .doc .to-name { font-size: 17px; font-weight: 700; }
+  .doc .to-sub { font-size: 11px; color: #444; margin-top: 2px; }
+  .doc table { border-collapse: collapse; width: 100%; }
+  .doc table.box th, .doc table.box td { border: 1px solid #111; padding: 1px 4px; height: 20px; font-size: 12.5px; }
+  .doc table.box th { background: #d4ead7; font-weight: 700; text-align: center; }
+  .doc .mt { margin-top: 4px; }
+  .doc table.userline { margin-top: 4px; }
+  .doc .lead { margin: 3px 0 0; font-size: 12.5px; }
+  .doc .amountrow { align-items: flex-end; margin: 14px 0 3px; }
+  .doc .period { font-size: 13px; font-weight: 700; }
+  .doc .amountbox { width: 42mm; border: 2px solid #111; }
+  .doc .amountlabel { background: #0d7a6f; color: #fff; text-align: center; font-size: 14px; font-weight: 700; padding: 2px 0; }
+  .doc .amountval { text-align: right; font-size: 19px; font-weight: 700; padding: 0 6px; }
+  .doc table.grid th, .doc table.grid td { border: 1px solid #111; padding: 1px 4px; height: 20px; }
+  .doc table.grid th { background: #d4ead7; font-weight: 700; text-align: center; }
+  .doc table.grid .r { text-align: right; font-variant-numeric: tabular-nums; }
+  .doc table.grid .c { text-align: center; }
+  .doc table.grid .indent { padding-left: 10mm; }
+  .doc table.grid tr.subline td { border-top: 1px solid #bbb; }
+  .doc table.grid tr.total td { border-top: 2px solid #111; font-weight: 700; }
+  .doc table.grid tr.person td { background: #f3f8f4; font-weight: 600; }
+  .doc table.grid .empty { text-align: center; color: #888; }
+  .doc .calrow { align-items: flex-end; justify-content: flex-end; gap: 30mm; margin: 10px 0 6px; }
+  .doc .legend { font-size: 10px; font-weight: 700; line-height: 1.3; }
+  .doc .cal { width: 41mm; border: 2px solid #111; padding: 0 2px 4px; }
+  .doc .cal-title { text-align: center; font-size: 13px; border-bottom: 1px solid #111; margin: 0 -2px 2px; }
+  .doc .cal table th, .doc .cal table td { border: none; text-align: center; font-size: 10px; height: 17px; padding: 0; }
+  .doc .cal table th { font-size: 12px; font-weight: 400; }
+  .doc .cal .sun { color: #e11d48; }
+  .doc .cal .sat { color: #2563eb; }
+  .doc .cal span.ci { display: inline-block; min-width: 14px; height: 14px; line-height: 12px; border: 1px solid currentColor; border-radius: 50%; }
+  .doc .cal span.sq { display: inline-block; min-width: 14px; height: 14px; line-height: 12px; border: 1px solid currentColor; }
+  .doc .pageno { position: absolute; right: 0; bottom: 0; font-size: 12px; }
 
   /* 一覧 */
   .list-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
@@ -381,7 +507,6 @@ export default function UserBillingTab({
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [issuer, setIssuer] = useState<Tenant | null>(null);
 
   const [y, m] = billingMonth.split("-").map(Number);
   const prevMonth = () => {
@@ -398,10 +523,6 @@ export default function UserBillingTab({
     getCareOffices(tenantId).then(setCareOffices).catch(console.error);
   }, [tenantId]);
 
-  // 発行元 (自社) 情報 — 帳票の差出人欄用
-  useEffect(() => {
-    getTenantById(tenantId).then(setIssuer).catch(console.error);
-  }, [tenantId]);
 
   // 当月に対象月が掛かる insurance_record
   const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
@@ -490,6 +611,10 @@ export default function UserBillingTab({
             amount: copay,
             tax_amount: 0,
             is_taxable: false,
+            units,
+            rental_start_date: item.rental_start_date,
+            rental_end_date: item.rental_end_date ?? null,
+            office_id: order.office_id ?? null,
           });
           byClient.set(order.client_id, list);
         }
@@ -510,6 +635,10 @@ export default function UserBillingTab({
           amount,
           tax_amount: tax,
           is_taxable: true,
+          units: null,
+          rental_start_date: item.rental_start_date,
+          rental_end_date: item.rental_end_date ?? null,
+          office_id: order.office_id ?? null,
         });
         byClient.set(order.client_id, list);
       }
@@ -740,15 +869,45 @@ export default function UserBillingTab({
     return [...singles, ...merged];
   };
 
+  // 帳票の発行元を事業所ごとに引く (事業所ごとの設定 > マスタ > グループ共通)。
+  // 読めなければ空欄で印字し、理由を alert で出す (黙って「○○福祉用具」等を印字しない)。
+  const loadIssuers = async (officeIds: (string | null)[]): Promise<Map<string, IssuerInfo>> => {
+    const out = new Map<string, IssuerInfo>();
+    const errors: string[] = [];
+    for (const oid of new Set(officeIds)) {
+      const key = oid ?? "";
+      try {
+        const r = await getOfficeCompanyInfo(tenantId, oid);
+        out.set(key, issuerFromCompanyInfo(r.info));
+      } catch (err) {
+        console.error("発行元 (会社情報) の取得に失敗:", err);
+        errors.push(err instanceof Error ? err.message : String(err));
+        out.set(key, issuerFromCompanyInfo(toCompanyInfo(emptyCompanyInfoRow())));
+      }
+    }
+    if (errors.length > 0) alert(`発行元 (会社情報) を読めませんでした。発行元欄は空欄で印字します。
+${errors[0]}`);
+    return out;
+  };
+
+  // 名寄せグループの発行元事業所: 画面で事業所を選んでいればそれ、無ければ明細の発注事業所が 1 つに決まるときだけ
+  const officeForGroup = (g: Row[]): string | null => {
+    if (currentOfficeId) return currentOfficeId;
+    const ids = new Set(g.flatMap((r) => r.lineItems.map((li) => li.office_id)).filter((v): v is string => !!v));
+    return ids.size === 1 ? [...ids][0] : null;
+  };
+
   const printDocs = async (mode: "invoice" | "receipt") => {
     const targets = printTargetRows();
     if (targets.length === 0) {
       alert("対象月に請求対象の利用者がいません。");
       return;
     }
-    const info = issuerFromTenant(issuer);
+    const w = openBlankPrintWindow();
+    if (!w) return;
     const issue = todayIso();
     const groups = groupForPrint(targets);
+    const issuers = await loadIssuers(groups.map(officeForGroup));
 
     // 発行番号: 請求書は未採番なら採番、領収書は既存番号があれば流用のみ
     const noMap = new Map<string, string>();
@@ -766,18 +925,20 @@ export default function UserBillingTab({
     }
 
     const inner = groups
-      .map((g) => buildDocPage(g, mode, info, billingMonth, issue, noMap.get(g[0].client.id) ?? null))
+      .map((g) => buildDocPage(g, mode, issuers.get(officeForGroup(g) ?? "")!, billingMonth, issue, noMap.get(g[0].client.id) ?? null))
       .join("");
-    openPrintWindow(inner, mode === "invoice" ? "利用料請求書" : "利用料領収書", "invoice");
+    openPrintWindow(w, inner, mode === "invoice" ? "利用料請求書" : "利用料領収書", "invoice");
   };
 
-  const printList = () => {
+  const printList = async () => {
     if (sortedRows.length === 0) {
       alert("対象月に請求対象の利用者がいません。");
       return;
     }
-    const info = issuerFromTenant(issuer);
-    openPrintWindow(buildListPage(sortedRows, billingMonth, info), "利用請求一覧", "list");
+    const w = openBlankPrintWindow();
+    if (!w) return;
+    const info = (await loadIssuers([currentOfficeId])).get(currentOfficeId ?? "")!;
+    openPrintWindow(w, buildListPage(sortedRows, billingMonth, info), "利用請求一覧", "list");
   };
 
   if (dataLoading) {
