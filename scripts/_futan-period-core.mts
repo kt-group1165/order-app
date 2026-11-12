@@ -55,7 +55,8 @@ export async function selectIn<T>(sb: Sb, table: string, select: string, col: st
   return out;
 }
 
-const CERT_ROW_COLS = "id,client_id,certification_start_date,certification_end_date,effective_date,copay_rate,benefit_rate,care_level,service_limit_amount,insurer_number,insured_number";
+// office_id: 事業所別保険で 請求と同じ範囲に絞るため (order-app futan-period-check.mts。2026-11-13)
+const CERT_ROW_COLS = "id,client_id,certification_start_date,certification_end_date,effective_date,copay_rate,benefit_rate,care_level,service_limit_amount,insurer_number,insured_number,office_id";
 type CirRow = CertRowForBenefit & { client_id: string; insurer_number: string | null; insured_number: string | null };
 
 /** 認定行 (全世代) を client ごとに */
