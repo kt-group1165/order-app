@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import path from "path";
+import { normalizeYmd } from "@/lib/date-jst";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -29,10 +30,11 @@ export async function POST(req: NextRequest) {
     sheet!.getRow(row).getCell(col).value = value;
   }
 
-  // Helper: parse "YYYY-MM-DD" to Date
+  // Helper: parse "YYYY-MM-DD" to Date (clients の認定日は "2026/1/9" 形式も混ざるので揃えてから)
   function toDate(s: string | null | undefined): Date | null {
-    if (!s) return null;
-    const d = new Date(s + "T00:00:00");
+    const ymd = normalizeYmd(s);
+    if (!ymd) return null;
+    const d = new Date(ymd + "T00:00:00");
     return isNaN(d.getTime()) ? null : d;
   }
 

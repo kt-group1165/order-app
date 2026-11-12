@@ -10,6 +10,8 @@
 
 import type { ClientDocument } from "./supabase";
 import { docTypesSatisfying } from "./docTaskMatch";
+// clients.certification_start_date は text で "2026/1/9" 形式が混ざる (kaigo 共有利用者)。YYYY-MM-DD に揃える
+import { normalizeYmd } from "./date-jst";
 
 /** この日以降の出来事だけを書類の要否判定に使う (order-app の書類運用の開始 = 一括 backfill の翌日) */
 export const DOC_CHECK_CUTOFF = "2026-05-21";
@@ -71,14 +73,6 @@ function addDays(ymd: string, days: number): string {
   // 不正な日付で toISOString が投げると 書類タブごと落ちる (2026-11-12)。そのまま返す
   if (Number.isNaN(t)) return ymd;
   return new Date(t).toISOString().slice(0, 10);
-}
-
-/** clients.certification_start_date は text で "2026/1/9" 形式が混ざる (kaigo 共有利用者)。YYYY-MM-DD に揃える */
-function normalizeYmd(s: string | null | undefined): string | null {
-  if (!s) return null;
-  const m = s.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (!m) return null;
-  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 }
 
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`;

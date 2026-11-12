@@ -5,7 +5,7 @@ import { ChevronRight, ChevronLeft, Search, X, Plus, Loader2, Send, FileText, Tr
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, ClientHospitalization } from "@/lib/supabase";
 import { getClientDocuments, deleteClientDocument } from "@/lib/documents";
 import { mapWithConcurrency } from "@/lib/concurrency";
-import { monthEndYmd, todayYmd } from "@/lib/date-jst";
+import { monthEndYmd, normalizeYmd, todayYmd } from "@/lib/date-jst";
 import { warekiLabel, ageAt } from "@/lib/renovationDocs";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
@@ -482,7 +482,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
       c.phone ?? "", c.mobile ?? "", c.address ?? "",
       c.care_level ?? "", c.benefit_rate ?? "",
       c.care_manager ?? "", c.care_manager_org ?? "",
-      c.certification_end_date ?? "", c.memo ?? "",
+      normalizeYmd(c.certification_end_date) ?? c.certification_end_date ?? "", c.memo ?? "",
       c.is_facility ? "1" : "",
     ]);
     const csvText = [CSV_HEADERS, ...rows]
@@ -853,11 +853,12 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           benefit_rate: cols[col("給付率")]?.trim() || null,
           care_manager: cols[col("ケアマネ名")]?.trim() || null,
           care_manager_org: cols[col("ケアマネ事業所")]?.trim() || null,
-          certification_end_date: cols[col("認定終了日")]?.trim() || null,
+          // "2026/1/9" のまま入れると 最新判定 (newEnd > oldEnd) の文字列比較が狂うので揃える。読めない値はそのまま
+          certification_end_date: normalizeYmd(cols[col("認定終了日")]) ?? (cols[col("認定終了日")]?.trim() || null),
           // memo は clients から DROP 済。CSV から読んでも保存先がないため省略
           insured_number: cols[col("被保険者番号")]?.trim() || null,
           birth_date: cols[col("生年月日")]?.trim() || null,
-          certification_start_date: cols[col("認定開始日")]?.trim() || null,
+          certification_start_date: normalizeYmd(cols[col("認定開始日")]) ?? (cols[col("認定開始日")]?.trim() || null),
           insurer_number: cols[col("保険者番号")]?.trim() || null,
           copay_rate: (() => {
             // 利用者負担割合が直接CSVにあればそれを使う
@@ -3051,8 +3052,9 @@ function ClientDetail({
     insured_number: client.insured_number ?? "",
     birth_date: client.birth_date ?? "",
     insurer_number: client.insurer_number ?? "",
-    certification_start_date: client.certification_start_date ?? "",
-    certification_end_date: client.certification_end_date ?? "",
+    // text 列で "2026/1/9" 形式が混ざる。input type=date は空表示になり 保存で null に消えるので揃える
+    certification_start_date: normalizeYmd(client.certification_start_date) ?? "",
+    certification_end_date: normalizeYmd(client.certification_end_date) ?? "",
     memo: "", // client_memos から流し込む
   });
   // 保険情報（複数レコード）
@@ -3888,8 +3890,8 @@ function ClientDetail({
                           insured_number: client.insured_number ?? "",
                           birth_date: client.birth_date ?? "",
                           insurer_number: client.insurer_number ?? "",
-                          certification_start_date: client.certification_start_date ?? "",
-                          certification_end_date: client.certification_end_date ?? "",
+                          certification_start_date: normalizeYmd(client.certification_start_date) ?? "",
+                          certification_end_date: normalizeYmd(client.certification_end_date) ?? "",
                           memo: tenantMemo.body,
                         });
                         setPromoteOpen(true);

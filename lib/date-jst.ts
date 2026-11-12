@@ -97,3 +97,23 @@ export function toJapaneseEraYM(year: number, month: number): string {
   if (year > 1989) return `平成${year - 1988}年${month}月`;
   return `${year}年${month}月`;
 }
+
+/**
+ * 日付文字列を "YYYY-MM-DD" に揃える。読めなければ null。
+ *
+ * ⚠ clients.certification_start_date / certification_end_date は **text 列**で、kaigo と共有の利用者には
+ *   "2026/1/9" (スラッシュ・ゼロ埋め無し) が混ざる (2026-11-12 実測: 9,317 件中 407 件)。
+ *   そのまま `new Date(s + "T00:00:00")` すると Invalid Date、`>= today` の文字列比較は誤判定、
+ *   `<input type="date">` は空になる。clients の日付を使う前に必ずこれを通すこと。
+ *   (client_insurance_records の同名列は date 型なので不要)
+ *
+ *   normalizeYmd("2026/1/9")      → "2026-01-09"
+ *   normalizeYmd("2026-01-09")    → "2026-01-09"
+ *   normalizeYmd("２０２６年１月９日") → "2026-01-09"
+ */
+export function normalizeYmd(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const m = s.normalize("NFKC").trim().match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+  if (!m) return null;
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+}

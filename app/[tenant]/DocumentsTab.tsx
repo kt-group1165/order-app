@@ -7,7 +7,7 @@ import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/
 import { buildChecklist, countActionNeeded, type ChecklistKey } from "@/lib/docChecklist";
 import { activeRentalCount, getDocIndex, type ClientRental, type DocIndex } from "@/lib/docChecklistData";
 import DocChecklistPanel from "./DocChecklistPanel";
-import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
+import { normalizeYmd, todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { HW_KANA } from "./search-utils";
@@ -567,8 +567,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
                   <span className="text-base font-semibold text-gray-800">{selectedClient.name}</span>
                   <span className="text-xs text-gray-600">{selectedClient.care_level || "要介護度 未登録"}</span>
                   <span className="text-xs text-gray-600">
-                    認定 {selectedClient.certification_start_date ?? "?"} 〜 {selectedClient.certification_end_date ?? "?"}
-                    {selectedClient.certification_end_date && selectedClient.certification_end_date < today && <span className="ml-1 text-red-600 font-semibold">期限切れ</span>}
+                    認定 {normalizeYmd(selectedClient.certification_start_date) ?? selectedClient.certification_start_date ?? "?"} 〜 {normalizeYmd(selectedClient.certification_end_date) ?? selectedClient.certification_end_date ?? "?"}
+                    {normalizeYmd(selectedClient.certification_end_date) && normalizeYmd(selectedClient.certification_end_date)! < today && <span className="ml-1 text-red-600 font-semibold">期限切れ</span>}
                   </span>
                   <span className="text-xs text-gray-600">ケアマネ {[selectedClient.care_manager_org, selectedClient.care_manager].filter(Boolean).join(" ") || "未登録"}</span>
                   <span className="text-xs text-gray-600">貸与中 {activeRentalCount(selectedRentals, today)} 品目</span>

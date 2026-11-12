@@ -19,6 +19,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Sheet, type DocSheetProps } from "./RenovationDocSheets";
 import { RENOVATION_KINDS, toWareki, warekiLabel, yenNum, cityOf } from "@/lib/renovationDocs";
+import { normalizeYmd } from "@/lib/date-jst";
 
 type BlankField = "started" | "completed" | "cost" | "apply_date" | "title_month";
 
@@ -401,7 +402,7 @@ export function ApplicationSheet({ docs, project, client, totals, addressee, rec
             <tr>
               <td style={th}>認定有効期間</td>
               <td style={cell} colSpan={3}>
-                {warekiLabel(client?.certification_start_date) || blankDate}　～　{warekiLabel(client?.certification_end_date) || blankDate}
+                {warekiLabel(normalizeYmd(client?.certification_start_date)) || blankDate}　～　{warekiLabel(normalizeYmd(client?.certification_end_date)) || blankDate}
               </td>
             </tr>
           )}

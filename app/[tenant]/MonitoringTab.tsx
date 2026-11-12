@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Send, Eye, Download }
 import { supabase, Client, Equipment, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientInsuranceRecord, OrderItem } from "@/lib/supabase";
 import { getClients } from "@/lib/clients";
 import { getEquipment } from "@/lib/equipment";
-import { todayYmd } from "@/lib/date-jst";
+import { normalizeYmd, todayYmd } from "@/lib/date-jst";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
@@ -532,7 +532,7 @@ function MonitoringPreview({
               {(insuranceRecord?.certification_start_date || client.certification_end_date) && (
                 <div>
                   <span className="text-gray-500">認定期間　</span>
-                  <span>{insuranceRecord?.certification_start_date ?? ""} 〜 {insuranceRecord?.certification_end_date ?? client.certification_end_date ?? ""}</span>
+                  <span>{insuranceRecord?.certification_start_date ?? ""} 〜 {insuranceRecord?.certification_end_date ?? normalizeYmd(client.certification_end_date) ?? client.certification_end_date ?? ""}</span>
                 </div>
               )}
             </div>
@@ -839,7 +839,7 @@ function MonitoringFormModal({
           care_level: client.care_level,
           care_manager_org: client.care_manager_org,
           certification_start_date: insuranceRecord?.certification_start_date ?? null,
-          certification_end_date: insuranceRecord?.certification_end_date ?? client.certification_end_date ?? null,
+          certification_end_date: insuranceRecord?.certification_end_date ?? normalizeYmd(client.certification_end_date) ?? null,
         },
         visit_date: visitDate,
         target_month: tm,

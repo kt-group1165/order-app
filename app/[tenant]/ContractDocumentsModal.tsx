@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { ChevronLeft, Printer } from "lucide-react";
 import { OrderItem, Equipment, Client } from "@/lib/supabase";
-import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
+import { normalizeYmd, todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
 import { saveClientDocument } from "@/lib/documents";
 import { CarePlanElement } from "@/lib/supabase";
@@ -63,8 +63,9 @@ export default function ContractDocumentsModal({
 
   const explanationDateJa = explanationDate ? toJapaneseEra(new Date(explanationDate + "T00:00:00")) : "　　年　月　日";
   const contractDateJa    = contractDate    ? toJapaneseEra(new Date(contractDate    + "T00:00:00")) : "　　年　月　日";
-  const certEndJa = client.certification_end_date
-    ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00"))
+  const certEndYmd = normalizeYmd(client.certification_end_date); // text 列で "2026/1/9" 形式が混ざる
+  const certEndJa = certEndYmd
+    ? toJapaneseEra(new Date(certEndYmd + "T00:00:00"))
     : "　　年　月　日";
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
   const burdenLabel = benefitRate === "1" ? "１割" : benefitRate === "2" ? "２割" : "３割";

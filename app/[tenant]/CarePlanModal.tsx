@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { ChevronLeft, Printer } from "lucide-react";
 import { OrderItem, Equipment, Client } from "@/lib/supabase";
-import { todayYmd, toJapaneseEra } from "@/lib/date-jst";
+import { normalizeYmd, todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
 import { STATUS_LABEL, STATUS_COLOR } from "./order-item-helpers";
 import { saveClientDocument } from "@/lib/documents";
@@ -161,7 +161,7 @@ function CarePlanPages({
           <tr>
             <th style={TH}>認定期間</th>
             <td style={TD} colSpan={3}>
-              {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {client.certification_end_date ? toJapaneseEra(new Date(client.certification_end_date.slice(0, 10) + "T00:00:00")) : "　"}
+              {certStartDate ? toJapaneseEra(new Date(certStartDate + "T00:00:00")) : "　"} ～ {normalizeYmd(client.certification_end_date) ? toJapaneseEra(new Date(normalizeYmd(client.certification_end_date) + "T00:00:00")) : "　"}
             </td>
             <th style={TH}>年　齢</th>
             <td style={TD} colSpan={2}>{birthDate ? `${calcAge(birthDate)}歳` : ""}</td>
