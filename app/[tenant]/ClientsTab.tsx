@@ -2024,7 +2024,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
         </div>
       )}
 
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-2 shrink-0">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-72rem)/2))] py-2 flex gap-2 shrink-0">
         {(viewMode === "list" || viewMode === "insurance") && (
           <div className="flex-1 max-w-xl flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-1.5">
             <Search size={14} className="text-gray-400 shrink-0" />
@@ -2234,7 +2234,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
       {/* 利用者一覧ビュー */}
       {viewMode === "list" && <>
       {/* ア行・カ行フィルター */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex gap-1.5 overflow-x-auto shrink-0 items-center">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-72rem)/2))] py-2 flex gap-1.5 overflow-x-auto shrink-0 items-center">
         {hospFilter ? (
           <>
             <span className="shrink-0 text-xs font-medium text-red-600 px-1">入院中一覧</span>

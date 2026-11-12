@@ -984,7 +984,7 @@ ${errors[0]}`);
       {/* 中央 + 右ペイン */}
       <div className="flex flex-1 min-w-0">
         {/* 中央: ツールバー + テーブル + フッタ */}
-        <div className="flex-1 flex flex-col min-w-0 border-r border-gray-200">
+        <div className="flex-[1_1_1120px] max-w-[1120px] flex flex-col min-w-0 border-r border-gray-200">
           {/* ツールバー */}
           <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-0.5 border border-gray-300 rounded bg-white px-2 py-1">
@@ -1203,7 +1203,7 @@ ${errors[0]}`);
         </div>
 
         {/* 右ペイン: 利用明細欄 */}
-        <div className="w-80 shrink-0 flex flex-col bg-white">
+        <div className="flex-[1_1_20rem] min-w-80 flex flex-col bg-white">
           <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center justify-between">
             <span className="text-sm font-semibold text-gray-700">利用明細欄</span>
             {selectedRow && (

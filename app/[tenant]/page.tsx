@@ -849,7 +849,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
   return (
     <div className="flex flex-col h-full">
       {/* Top bar: filter + new order + save */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 shrink-0">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-80rem)/2))] py-2 flex items-center gap-2 shrink-0">
         <button
           onClick={() => setShowNewOrder(true)}
           className="shrink-0 flex items-center gap-1 bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded-xl"
@@ -876,7 +876,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       </div>
 
       {/* 検索ボックス */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 shrink-0">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-80rem)/2))] py-2 shrink-0">
         <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-1.5 bg-white max-w-md">
           <Search size={14} className="text-gray-400 shrink-0" />
           <input
@@ -895,7 +895,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
 
       {/* 要対応サマリー */}
       {(actionSummary.deliveryWait > 0 || actionSummary.startWait > 0 || actionSummary.mergeCount > 0) && (
-        <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 overflow-x-auto shrink-0">
+        <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-80rem)/2))] py-2 flex items-center gap-2 overflow-x-auto shrink-0">
           <span className="shrink-0 text-[11px] text-gray-400 mr-1">要対応</span>
           {actionSummary.deliveryWait > 0 && (
             <button
@@ -930,7 +930,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       )}
 
       {/* Filter bar */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-2 overflow-x-auto shrink-0">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-80rem)/2))] py-2 flex items-center gap-2 overflow-x-auto shrink-0">
         {(["all", "ordered", "delivered", "rental_started", "terminated"] as const).map(
           (s) => (
             <button
@@ -958,7 +958,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
       </div>
 
       {/* 名前(五十音・行)フィルタ */}
-      <div className="bg-white border-b border-gray-100 px-3 py-2 flex items-center gap-1.5 overflow-x-auto shrink-0">
+      <div className="bg-white border-b border-gray-100 px-[max(0.75rem,calc((100%-80rem)/2))] py-2 flex items-center gap-1.5 overflow-x-auto shrink-0">
         <span className="shrink-0 text-[11px] text-gray-400 mr-1">名前</span>
         <button
           onClick={() => setNameRow("all")}
@@ -987,7 +987,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
           <p className="text-sm text-gray-400 text-center py-16">発注データがありません</p>
         ) : (
           /* 広い画面で 利用者名 と 件数・ボタン が両端に離れないよう最大幅で中央に寄せる (2026-11-11) */
-          <div className="max-w-6xl mx-auto bg-white border-x border-gray-100 min-h-full">
+          <div className="max-w-7xl mx-auto bg-white border-x border-gray-100 min-h-full">
             {clientGroups.map((group) => {
               const hasVisible = group.orders.some((o) =>
                 showEnded ? true : o.items.some((i) => i.status !== "cancelled" && i.status !== "terminated")

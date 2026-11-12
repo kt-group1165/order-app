@@ -168,7 +168,7 @@ export default function StaffTab({ tenantId, currentOfficeId, officeViewAll }: {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 shrink-0">
+      <div className="px-[max(0.75rem,calc((100%-64rem)/2))] py-2 border-b border-gray-100 flex items-center gap-2 shrink-0">
         <Users size={18} className="text-emerald-600" />
         <h2 className="font-semibold text-gray-700">職員 ({members.length})</h2>
         <label className="ml-2 text-xs text-gray-600 flex items-center gap-1">
