@@ -8,6 +8,7 @@
  *   node migrations/import_cm_units_from_getsuji.mjs --revert <batch_id> [--execute]
  *     --dir <dir>          既定 kaigo-app/伝送データ/ケアサポ/福祉用具/月次情報 (月次情報_YYYYMM.csv を全部読む)
  *     --teikyo-dir <dir>   既定 kaigo-app/伝送データ/ケアサポ/福祉用具/用具貸与期間_20261109 (提供票_YYYYMM.csv)
+ *     --user-master-dir <dir> / --user-master-dir-off <dir>   利用者マスタ (登録有 / 登録無)。既定 = 日付が最新のフォルダ
  *     --months 2026-04,2026-05   対象月を絞る (既定 = 月次情報にある全月)
  *     --overwrite-manual   既存行のうち 取込マーカーの無い行 (= 画面で人が入れた値) も上書きする (既定は上書きしない)
  *
@@ -53,6 +54,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
+import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -76,7 +78,9 @@ const REPO_ROOT = resolve(HERE, "../../..");
 const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
 const DIR = resolve(opt("--dir") ?? join(FUKUYOGU, "月次情報"));
 const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? join(FUKUYOGU, "用具貸与期間_20261109"));
-const UM_DIRS = [join(FUKUYOGU, "利用者マスタ_20261109"), join(FUKUYOGU, "利用者マスタ_全件_20261109")];
+// 既定 = 利用者マスタ_YYYYMMDD / 利用者マスタ_全件_YYYYMMDD の最新。--user-master-dir / --user-master-dir-off で上書き
+const UM = resolveUserMasterDirs(FUKUYOGU, argv);
+const UM_DIRS = [UM.on, UM.off].filter(Boolean);
 const MONTHS_ARG = opt("--months")?.split(",").map((s) => s.trim()) ?? null;
 const SCRIPT_REL = "apps/order-app/migrations/import_cm_units_from_getsuji.mjs";
 const SOURCE_SYSTEM = "honobono-fukuyogu";

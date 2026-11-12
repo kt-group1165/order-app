@@ -19,11 +19,12 @@
  * 記録: data_import_batches / data_import_rows (op=insert)。
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
+import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -47,10 +48,12 @@ const SOURCE_SYSTEM = "order-app";
 const STEP_NAME = "insurance-office-stage1:caresapo-from-master";
 const CS = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
 const BASE = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
-const MASTER_FILES = [
-  "利用者マスタ_20261109/介護保険_全件_保険と認定.CSV",
-  "利用者マスタ_全件_20261109/介護保険_利用登録無_全件_保険と認定.CSV",
-];
+// 利用者マスタ: 既定 = 利用者マスタ_YYYYMMDD (登録有) / 利用者マスタ_全件_YYYYMMDD (登録無) の最新。--user-master-dir / --user-master-dir-off で上書き
+const UM = resolveUserMasterDirs(BASE, argv);
+const MASTER_FILES = [UM.file(UM.on, "介護保険_"), UM.file(UM.off, "介護保険_")].map((p, i) => {
+  if (!p) throw new Error(`★ 利用者マスタ (${i ? "登録無" : "登録有"}) に 介護保険_*.CSV が無い`);
+  return relative(BASE, p).split("\\").join("/");
+});
 const FROM_END = "2026-04-01";
 const SKIP_COLS = new Set(["id", "created_at", "updated_at"]);
 let EXEC_LOCK = null;

@@ -5,7 +5,7 @@
  *   node migrations/import_benefit_certificates_caresapo.mjs                         # DRY RUN (既定)
  *   node migrations/import_benefit_certificates_caresapo.mjs --execute
  *   node migrations/import_benefit_certificates_caresapo.mjs --revert <batch_id> [--execute]
- *     [--csv <負担割合証等.CSV>] [--ins-csv <介護保険.CSV>] [--out <明細.json>]
+ *     [--user-master-dir <dir>] [--csv <負担割合証等.CSV>] [--ins-csv <介護保険.CSV>] [--out <明細.json>]
  *
  * 前提: migrations/client_benefit_certificates.sql (ルート) を適用済み。未適用でも DRY RUN は回る。
  * 事業所: 全行 office_id = ケアサポ (1bfc0d57…) / office_source = 'import_record'
@@ -28,17 +28,22 @@ if (!process.env.BENEFIT_CERT_UNDER_TSX) {
   process.exit(r.status ?? 1);
 }
 const { runBenefitCertImport } = await import("../scripts/_benefit-cert-import.mjs");
+const { resolveUserMasterDirs } = await import("./_user_master_dir.mjs");
 
 const argv = process.argv.slice(2);
 const opt = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null; };
-const DIR = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109");
+// 既定 = 利用者マスタ_YYYYMMDD (登録有) のうち日付が最新のフォルダ。--user-master-dir で上書き (--csv / --ins-csv はファイル単位の上書き)
+const UM = resolveUserMasterDirs(join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具"), argv);
+if (!UM.on) throw new Error("★ 利用者マスタ_YYYYMMDD が無い");
+const DIR = UM.on;
+const DATE = UM.onDate ?? "日付不明";
 const CARESAPO_OFFICE_ID = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
 
 await runBenefitCertImport({
-  label: "ケアサポ (ほのぼの福祉用具 2026-11-09)",
+  label: `ケアサポ (ほのぼの福祉用具 ${DATE.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")})`,
   scriptRel: "apps/order-app/migrations/import_benefit_certificates_caresapo.mjs",
   sourceSystem: "honobono-fukuyogu",
-  marker: "[benefit-cert ケアサポ 20261109]",
+  marker: `[benefit-cert ケアサポ ${DATE}]`,   // 出力日ごと (20261109 の回は従来と同じ文字列)
   futanCsv: resolve(opt("--csv") ?? join(DIR, "負担割合証等_全件.CSV")),
   kaigoInsCsvs: [resolve(opt("--ins-csv") ?? join(DIR, "介護保険_全件_保険と認定.CSV"))],
   decideOffices: async (_sb, clientIds) =>
