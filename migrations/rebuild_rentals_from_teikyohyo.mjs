@@ -98,9 +98,12 @@ const PAUSE_MODE = opt("--pause-mode") ?? "single";
 const DISAMBIGUATE_BY_BILLING = argv.includes("--disambiguate-by-billing"); // ★ 2026-11-11 user 承認 (下の注記)
 const SKIP_USERS = new Set((opt("--skip-users") ?? "").split(",").map((s) => s.trim()).filter(Boolean));
 // ★ 2026-11-12: --as-of YYYY-MM-DD — 最新月が月の途中のとき (提供票は予定の写しで月末まで印が入る)、
-//   as-of より後の「終了」は まだ確定していない予定なので 継続扱い (end=null) に、as-of より後の「開始」は 入れない。
+//   as-of 当日以降の「終了」は まだ確定していない予定なので 継続扱い (end=null) に、as-of より後の「開始」は 入れない。
+//   as-of より後の休止も notes に書かない (予定の休止を確定扱いにしない)。
 const AS_OF = opt("--as-of") ?? null;
 if (AS_OF && !/^\d{4}-\d{2}-\d{2}$/.test(AS_OF)) { console.error("--as-of は YYYY-MM-DD"); process.exit(1); }
+// ★ --as-of で飛ばした 開始予定の台に当たる DB の明細 (先に手で登録された未来開始の明細) を「DB だけ」として消してしまうので併用禁止
+if (AS_OF && REMOVE_DB_ONLY) { console.error("★ --as-of と --remove-db-only は併用できない (as-of より後の開始予定に当たる DB の明細を消してしまう)"); process.exit(1); }
 if (!["single", "split"].includes(PAUSE_MODE)) { console.error("--pause-mode は single|split"); process.exit(1); }
 const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
 const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
@@ -243,6 +246,8 @@ function readTeikyo(path) {
 }
 /** 月額 (満額) の単位数。半額 → ×2。日割 (保険者の月途中変更) → null (他の月か マスタで決める) */
 const fullUnitsOf = (r) => (r.hiwari === "全額" ? r.units : r.hiwari === "半額" ? r.units * 2 : null);
+/** 支払区分。自費レンタル事業所の行 / 自費レンタル=対象 / 保険事業所の行で概算単位 0 (0 円の付属) → 自費。それ以外は 介護 */
+const payTypeOf = (r) => (r.src === "自費" || r.jihiFlag || (r.src !== "自費" && !r.jihiFlag && r.units === 0) ? "自費" : "介護");
 
 // ── DB ────────────────────────────────────────────────────────────────────
 async function makeSb() {
@@ -415,8 +420,10 @@ async function main() {
   //   提供票に TAIS が無いので決められない。ほのぼのの請求 (明細書明細付 KDS0031・処理R8-04〜) に その人・その提供月に出た
   //   TAIS のうち、同じ月の他の行で使っていないものが候補に 1 つだけなら それにする。値 (単位・日数・期間) は提供票のまま。
   //   使うのは「どの商品か」の手がかりだけ (請求の出力を入力に使う例外。user 2026-11-11)。
-  if (DISAMBIGUATE_BY_BILLING) {
-    const billed = new Map(); // `${氏名}|${YYYY-MM}` → Map<TAIS, 件数>
+  // 請求 (KDS0031) が出ている提供月。前月 TAIS 引き継ぎは この集合に無い月 (= 月途中の最新月) だけで使う
+  const kdsMonths = new Set();
+  const billed = new Map(); // `${氏名}|${YYYY-MM}` → Map<TAIS, 件数>
+  {
     const kdsFiles = [];
     for (const d of readdirSync(FUKUYOGU).filter((x) => /^\d{6}$/.test(x))) {
       const dir = join(FUKUYOGU, d, "ほのぼのから");
@@ -425,14 +432,20 @@ async function main() {
     }
     for (const p of kdsFiles) {
       const K = readSjis(p);
-      sourceFiles.push({ path: relPath(p), sha256: sha256(p), rows: K.rows.length, kind: "明細書明細付 (用具の特定にだけ使う)" });
+      sourceFiles.push({ path: relPath(p), sha256: sha256(p), rows: K.rows.length,
+        kind: DISAMBIGUATE_BY_BILLING ? "明細書明細付 (用具の特定と 提供月の有無の判定にだけ使う)" : "明細書明細付 (提供月の有無の判定にだけ使う)" });
       for (const x of K.rows) {
-        if (x[61] !== "明細情報レコード" || !x[73]) continue;
+        if (x[61] !== "明細情報レコード") continue;
+        kdsMonths.add(x[1].replace("/", "-"));
+        if (!x[73]) continue;
         const k = `${nfkc(x[12]).replace(/\s/g, "")}|${x[1].replace("/", "-")}`;
         if (!billed.has(k)) billed.set(k, new Map());
         billed.get(k).set(x[73], (billed.get(k).get(x[73]) ?? 0) + 1);
       }
     }
+    console.log(`請求 (KDS0031) のある提供月: ${[...kdsMonths].sort().join(", ") || "なし"}`);
+  }
+  if (DISAMBIGUATE_BY_BILLING) {
     const masterRowOf = (t) => Object.values(masters).filter(Boolean).flatMap((m) => m.rows).find((x) => x.tais === t) ?? null;
     for (const [, grp] of groupBy(rows, (r) => `${r.userNo}|${r.ym}`)) {
       const open = grp.filter((r) => !r.tais && (r.how === "複数" || r.how === "類似が複数") && r.cands?.length);
@@ -448,7 +461,8 @@ async function main() {
           r.tais = t; r.how = `${r.how} → 請求 (明細書明細付) の TAIS で特定`; r.mrow = masterRowOf(t);
           left.set(t, left.get(t) - 1);
         } else {
-          R.warn.add("請求の TAIS でも用具を決められない", { 氏名: r.name, 月: r.ym, 用具: r.item, 候補: r.cands, 請求に残る: Object.fromEntries([...left].filter(([, n]) => n > 0)) });
+          // 警告は 前月 TAIS 引き継ぎの後に 最終的に未決のものだけ出す (下)
+          r.billLeft = Object.fromEntries([...left].filter(([, n]) => n > 0));
         }
       }
     }
@@ -456,34 +470,47 @@ async function main() {
   // ★ 2026-11-12: 請求 (KDS0031) がまだ無い月 (= 月途中の最新月) は、略称が同じで TAIS が複数ある用具を
   //   前月の同じ利用者・同じ用具名の行で決まった TAIS から引き継ぐ (続けて借りている台なので同じ商品)。
   //   これが無いと 11 月の行が「引き当て不可」→ 10 月の台が 10/31 で終了扱いになっていた (予ｳｪｰﾌﾞ型ｱｰﾑ ほか 14 台)。
+  //   ★ 2026-11-12 (レビュー反映): 引き継ぐのは「月またぎで連結される組」だけ = 前月の行の最後の印が月末 かつ 当月の行が 1 日から。
+  //     さらに 事業所 (src)・支払区分・満額の単位数 が同じこと。前月に終わったサイズ違いの台の TAIS を新しい台に振らない。
+  //     請求 (KDS0031) のある月では引き継がない (警告だけ)。
   {
     const prevYm = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
     const byUserYm = groupBy(rows, (r) => `${r.userNo}|${r.ym}`);
     const masterRowOf2 = (t) => Object.values(masters).filter(Boolean).flatMap((m) => m.rows).find((x) => x.tais === t) ?? null;
+    const linkable = (p, r) => p.item === r.item && p.tais && r.cands.includes(p.tais)
+      && p.days[p.nd - 1] === 1 && r.days[0] === 1
+      && p.src === r.src && payTypeOf(p) === payTypeOf(r) && r.full != null && p.full === r.full;
     for (const [k, grp] of byUserYm) {
       const open = grp.filter((r) => !r.tais && (r.how === "複数" || r.how === "類似が複数") && r.cands?.length);
       if (!open.length) continue;
       const [userNo, ym] = k.split("|");
       const prev = byUserYm.get(`${userNo}|${prevYm(ym)}`) ?? [];
+      const hasKds = kdsMonths.has(ym);
       for (const r of open) {
-        // 前月の 同じ用具名で TAIS が決まった行 (この月でまだ使っていない分) から候補に入るものを取る
+        // 前月の 同じ用具名で TAIS が決まり 当月 1 日に続く行 (この月でまだ使っていない分) から候補に入るものを取る
         const used = grp.filter((x) => x.tais).map((x) => x.tais);
-        const pool = prev.filter((p) => p.item === r.item && p.tais && r.cands.includes(p.tais)).map((p) => p.tais);
+        const pool = prev.filter((p) => linkable(p, r)).map((p) => p.tais);
         for (const t of used) { const i = pool.indexOf(t); if (i >= 0) pool.splice(i, 1); }
         const opts = [...new Set(pool)];
         // 同じ用具名の未決の行が 前月の候補とちょうど同じ数なら 1 対 1 で振る (天野 るみ子 BPZ 2 台 = TAIS 2 種)
         const sameOpen = open.filter((o) => o.item === r.item && !o.tais).length;
         if (opts.length === 1 || (opts.length > 1 && pool.length === sameOpen)) {
           const t = [...pool].sort()[0];
+          if (hasKds) { R.warn.add("前月の TAIS を引き継げるが 請求 (KDS0031) のある月なので引き継がない", { 氏名: r.name, 月: ym, 用具: r.item, 前月のTAIS: t }); continue; }
           r.tais = t; r.how = `${r.how} → 前月の同じ用具の TAIS を引き継ぎ`; r.mrow = masterRowOf2(t);
         }
       }
     }
   }
+  // 請求でも前月引き継ぎでも 最終的に決まらなかった行だけを警告に出す
+  if (DISAMBIGUATE_BY_BILLING) for (const r of rows) {
+    if (r.tais || !("billLeft" in r)) continue;
+    R.warn.add("請求の TAIS でも用具を決められない", { 氏名: r.name, 月: r.ym, 用具: r.item, 候補: r.cands, 請求に残る: r.billLeft });
+  }
   for (const r of rows) {
     // ★ 2026-11-09: 保険事業所の行で 概算単位 0 は 自費レンタル欄が空でも 0 円の付属 = 自費 (介護 0 円 172 件になった)
     r.zeroUnits = r.src !== "自費" && !r.jihiFlag && r.units === 0;
-    r.payType = r.src === "自費" || r.jihiFlag || r.zeroUnits ? "自費" : "介護";
+    r.payType = payTypeOf(r);
     if (r.payType === "自費" && r.src !== "自費" && r.units > 0) R.warn.add("自費レンタル=対象 だが 概算単位 > 0 (保険事業所の行)", { file: r.file, row: r.row, 氏名: r.name, 用具: r.item, 単位: r.units });
     r.grp = r.src === "自費" ? "自費事業所" : "保険事業所";
     // 支払区分もキーに入れる (同じ TAIS の有料の台と 0 円の付属を混ぜない)
@@ -540,12 +567,12 @@ async function main() {
     const s0 = ch.segs[0], s1 = ch.segs[ch.segs.length - 1], r1 = s1.r;
     const beforeApr = s0.r.ym === FIRST && s0.a === 1;
     const rawEnd = `${r1.ym}-${pad(s1.b)}`;
-    // as-of より後の終了 (最新月の予定) は 確定していないので 継続扱い
-    const futureEnd = AS_OF != null && r1.ym === LAST && !(s1.b === r1.nd) && rawEnd > AS_OF;
+    // as-of 当日以降の終了 (最新月の予定) は 確定していないので 継続扱い (提供票は予定の写しなので as-of 当日の終了も予定)
+    const futureEnd = AS_OF != null && r1.ym === LAST && !(s1.b === r1.nd) && rawEnd >= AS_OF;
     const open = (r1.ym === LAST && s1.b === r1.nd) || futureEnd;
     const start = beforeApr ? MIGRATION_START : `${s0.r.ym}-${pad(s0.a)}`;
     const end = open ? null : rawEnd;
-    if (futureEnd) R.warn.add(`--as-of ${AS_OF} より後の終了予定 → 継続扱い (確定版の提供票で回し直すと終了になる)`, { 氏名: r1.name, 用具: r1.item, 終了予定: rawEnd });
+    if (futureEnd) R.warn.add(`--as-of ${AS_OF} 当日以降の終了予定 → 継続扱い (確定版の提供票で回し直すと終了になる)`, { 氏名: r1.name, 用具: r1.item, 終了予定: rawEnd });
     if (AS_OF != null && start > AS_OF) { R.warn.add(`--as-of ${AS_OF} より後の開始予定 → 入れない`, { 氏名: r1.name, 用具: r1.item, 開始予定: start }); continue; }
     const fullR = [...ch.segs].reverse().find((s) => s.r.full != null)?.r;
     const full = fullR?.full ?? r1.mrow?.units ?? null;
@@ -555,7 +582,11 @@ async function main() {
       start, end, open, beforeApr, full, segs: ch.segs.map((s) => ({ ym: s.r.ym, a: s.a, b: s.b, units: s.r.units, hiwari: s.r.hiwari, file: s.r.file, row: s.r.row })), notes });
   }
   // 休止 (貸与しなかった日): notes に [休止 YYYY-MM-DD〜YYYY-MM-DD]
-  for (const p of planned) for (const [a, b] of p.ch.gaps ?? []) p.notes.push(`[休止 ${a}〜${b}]`);
+  //   --as-of: as-of より後の休止は予定なので書かない。as-of をまたぐ休止は as-of までに切る
+  for (const p of planned) for (const [a, b] of p.ch.gaps ?? []) {
+    if (AS_OF != null && a > AS_OF) continue;
+    p.notes.push(`[休止 ${a}〜${AS_OF != null && b > AS_OF ? AS_OF : b}]`);
+  }
   console.log(`\n提供票 ${FIRST}〜${LAST}: 実績 ${rows.length} 行 → 台 ${planned.length} (継続中 ${planned.filter((p) => p.open).length} / 終了 ${planned.filter((p) => !p.open).length} / 4/1以前から ${planned.filter((p) => p.beforeApr).length})`);
 
   // ── 用具の product_code と equipment_master の追加 ─────────────────────
