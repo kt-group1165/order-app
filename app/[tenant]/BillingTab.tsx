@@ -1725,7 +1725,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             {/* 行 (ヘッダーは sticky にしてスクロール内へ配置。本文とスクロールバー幅を共有し列を一致させる) */}
             <div className="flex-1 overflow-y-auto">
             {/* ヘッダー行: 対象 / 申請中 / 状態 / 提出月 / 請求月 / サービス事業所 / 被保険者番号 / 利用者名 / 月遅 / 返戻 / 過誤 */}
-            <div className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
+            <div className="grid min-w-max grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-300 bg-gray-100 text-xs font-semibold text-gray-600 sticky top-0 z-10">
               <div className="px-1 py-2 flex items-center justify-center">
                 <button
                   onClick={() => setSelectedClientIds(
@@ -1762,7 +1762,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                   const [ry, rm] = row.month.split("-").map(Number);
                   return (
                     <div key={`rebill-${row.client.id}-${row.month}`}
-                      className="grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
+                      className="grid min-w-max grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 bg-amber-50 text-xs">
                       <div className="px-1 py-2" />
                       <div className="px-2 py-2 border-l border-gray-100" />
                       <div className="px-2 py-2 border-l border-gray-100 text-amber-700 font-medium">再請求</div>
@@ -1815,7 +1815,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                   <div
                     key={client.id}
                     onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
+                    className={`grid min-w-max grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
                       isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
                     }`}
                   >
