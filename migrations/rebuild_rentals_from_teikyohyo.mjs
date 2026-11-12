@@ -97,6 +97,10 @@ const REMOVE_DB_ONLY = argv.includes("--remove-db-only");
 const PAUSE_MODE = opt("--pause-mode") ?? "single";
 const DISAMBIGUATE_BY_BILLING = argv.includes("--disambiguate-by-billing"); // ★ 2026-11-11 user 承認 (下の注記)
 const SKIP_USERS = new Set((opt("--skip-users") ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+// ★ 2026-11-12: --as-of YYYY-MM-DD — 最新月が月の途中のとき (提供票は予定の写しで月末まで印が入る)、
+//   as-of より後の「終了」は まだ確定していない予定なので 継続扱い (end=null) に、as-of より後の「開始」は 入れない。
+const AS_OF = opt("--as-of") ?? null;
+if (AS_OF && !/^\d{4}-\d{2}-\d{2}$/.test(AS_OF)) { console.error("--as-of は YYYY-MM-DD"); process.exit(1); }
 if (!["single", "split"].includes(PAUSE_MODE)) { console.error("--pause-mode は single|split"); process.exit(1); }
 const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
 const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
@@ -449,6 +453,33 @@ async function main() {
       }
     }
   }
+  // ★ 2026-11-12: 請求 (KDS0031) がまだ無い月 (= 月途中の最新月) は、略称が同じで TAIS が複数ある用具を
+  //   前月の同じ利用者・同じ用具名の行で決まった TAIS から引き継ぐ (続けて借りている台なので同じ商品)。
+  //   これが無いと 11 月の行が「引き当て不可」→ 10 月の台が 10/31 で終了扱いになっていた (予ｳｪｰﾌﾞ型ｱｰﾑ ほか 14 台)。
+  {
+    const prevYm = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
+    const byUserYm = groupBy(rows, (r) => `${r.userNo}|${r.ym}`);
+    const masterRowOf2 = (t) => Object.values(masters).filter(Boolean).flatMap((m) => m.rows).find((x) => x.tais === t) ?? null;
+    for (const [k, grp] of byUserYm) {
+      const open = grp.filter((r) => !r.tais && (r.how === "複数" || r.how === "類似が複数") && r.cands?.length);
+      if (!open.length) continue;
+      const [userNo, ym] = k.split("|");
+      const prev = byUserYm.get(`${userNo}|${prevYm(ym)}`) ?? [];
+      for (const r of open) {
+        // 前月の 同じ用具名で TAIS が決まった行 (この月でまだ使っていない分) から候補に入るものを取る
+        const used = grp.filter((x) => x.tais).map((x) => x.tais);
+        const pool = prev.filter((p) => p.item === r.item && p.tais && r.cands.includes(p.tais)).map((p) => p.tais);
+        for (const t of used) { const i = pool.indexOf(t); if (i >= 0) pool.splice(i, 1); }
+        const opts = [...new Set(pool)];
+        // 同じ用具名の未決の行が 前月の候補とちょうど同じ数なら 1 対 1 で振る (天野 るみ子 BPZ 2 台 = TAIS 2 種)
+        const sameOpen = open.filter((o) => o.item === r.item && !o.tais).length;
+        if (opts.length === 1 || (opts.length > 1 && pool.length === sameOpen)) {
+          const t = [...pool].sort()[0];
+          r.tais = t; r.how = `${r.how} → 前月の同じ用具の TAIS を引き継ぎ`; r.mrow = masterRowOf2(t);
+        }
+      }
+    }
+  }
   for (const r of rows) {
     // ★ 2026-11-09: 保険事業所の行で 概算単位 0 は 自費レンタル欄が空でも 0 円の付属 = 自費 (介護 0 円 172 件になった)
     r.zeroUnits = r.src !== "自費" && !r.jihiFlag && r.units === 0;
@@ -508,9 +539,14 @@ async function main() {
   for (const ch of chains) {
     const s0 = ch.segs[0], s1 = ch.segs[ch.segs.length - 1], r1 = s1.r;
     const beforeApr = s0.r.ym === FIRST && s0.a === 1;
-    const open = r1.ym === LAST && s1.b === r1.nd;
+    const rawEnd = `${r1.ym}-${pad(s1.b)}`;
+    // as-of より後の終了 (最新月の予定) は 確定していないので 継続扱い
+    const futureEnd = AS_OF != null && r1.ym === LAST && !(s1.b === r1.nd) && rawEnd > AS_OF;
+    const open = (r1.ym === LAST && s1.b === r1.nd) || futureEnd;
     const start = beforeApr ? MIGRATION_START : `${s0.r.ym}-${pad(s0.a)}`;
-    const end = open ? null : `${r1.ym}-${pad(s1.b)}`;
+    const end = open ? null : rawEnd;
+    if (futureEnd) R.warn.add(`--as-of ${AS_OF} より後の終了予定 → 継続扱い (確定版の提供票で回し直すと終了になる)`, { 氏名: r1.name, 用具: r1.item, 終了予定: rawEnd });
+    if (AS_OF != null && start > AS_OF) { R.warn.add(`--as-of ${AS_OF} より後の開始予定 → 入れない`, { 氏名: r1.name, 用具: r1.item, 開始予定: start }); continue; }
     const fullR = [...ch.segs].reverse().find((s) => s.r.full != null)?.r;
     const full = fullR?.full ?? r1.mrow?.units ?? null;
     const notes = [MARK];
