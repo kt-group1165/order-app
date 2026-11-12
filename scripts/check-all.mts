@@ -32,6 +32,9 @@ const CHECKS: Check[] = [
   { name: "ceiling-boundary", script: "check:ceiling-boundary", why: "上限価格判定 (純関数・境界値)" },
   { name: "fukuyogu-amounts", script: "check:fukuyogu-amounts", why: "★ 保険請求額・本人負担・公費 (公費単独 H は保険0・公費10割)" },
   { name: "fukuyogu-units", script: "check:fukuyogu-units", why: "福祉用具貸与の半月按分ルール" },
+  // ★ 2026-11-12 新設。DB は読まない (提供票 CSV のみ)。提供票が無い環境では「測れていない」で exit 0 (合格ではない)
+  { name: "proration", script: "check:proration", why: "★ 月の算定 (半月按分の自動 / 日割り) を ほのぼのの提供票 (実績行) と突合。日割は全一致・全額/半額は既知の食い違い89行が基準値 (負のコントロール付き)",
+    kind: "baseline" },
   { name: "fukuyogu-rounding", script: "check:fukuyogu-rounding", why: "福祉用具の価格丸め (過去月に現在価格を使わないか)" },
   { name: "fukuyogu-densou", script: "check:fukuyogu-densou", why: "福祉用具伝送の仕様書突合 (ほのぼの実出力は未入手)",
     kind: "baseline", knownDiff: 1 }, // formatRecordLikeHonobono 未使用 (既知・B-2t/B-2x)
@@ -67,7 +70,9 @@ const CHECKS: Check[] = [
 
 /** ★ この一覧が見ていないもの。緑でも安心しないための明示 */
 const NOT_COVERED = [
-  "福祉用具のTAISコード・貸与期間・半月按分そのものの実出力照合 — ほのぼの福祉用具伝送が未入手",
+  // 2026-11-12: 半月按分・日割りの単位は check:proration で ほのぼのの提供票 (入力側) と突合するようになった
+  "福祉用具の伝送 (TAIS・項10 日数・公費按分) の実出力照合 — ほのぼの福祉用具伝送 KK は ケアサポ 2026-09 分のみ手作業で突合 (常設の検査は無い)",
+  "日割り × 入院 / 日割り × 月途中の公費 — ほのぼのの実例が無い (伝送時に警告だけ出す)",
   "住宅改修 — 請求の実装が存在しない",
   "移動支援 (千葉市) — 伝送に乗らず市へExcel直接請求のため国保連系チェックの対象外",
   "kaigo-app / payroll-app の集計 — 別アプリ。各app側で回す",

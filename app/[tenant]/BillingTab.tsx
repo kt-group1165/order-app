@@ -453,6 +453,31 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       });
     return () => { cancelled = true; };
   }, [tenantId]);
+  /**
+   * 日割りの明細がある利用者の注意 (単位の計算は変えない。伝送の警告に 1 行/利用者)。
+   *   ① 当月に入院がある: 単位 (rentalMonthUnits daily) は入院日を除いた日数、伝送の日数 (項10) は入院を含む
+   *   ② 月途中の公費がある: 日割り後の単位に さらに公費の日割り/半月がかかる (二重の按分)
+   *   どちらも ほのぼのの実出力で確かめた例が無い (2026-11-12)。
+   */
+  const dailyProrationWarnings = (
+    client: { id: string; name: string; insured_number: string | null },
+    items: readonly OrderItem[],
+    ym: string,
+    kohi: FukuyoguKohi | null,
+    lines: readonly FukuyoguLineInput[],
+  ): string[] => {
+    if (!items.some((it) => prorationModeOf(prorations, it.id, ym) === "daily")) return [];
+    const out: string[] = [];
+    const ms = `${ym}-01`, me = monthEndYmd(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)));
+    const hospInMonth = hospitalizations.some((h) => h.client_id === client.id && h.admission_date <= me && (h.discharge_date == null || h.discharge_date >= ms));
+    if (hospInMonth) {
+      out.push(`${client.name}: 日割りと入院が重なる: 単位は入院日を除いた日数で計算、伝送の日数 (項10) は入院を含む。ほのぼのの実例が無いので確認を`);
+    }
+    if (kohi && !/^[Hh]/.test((client.insured_number ?? "").trim()) && lines.length && kohiCoverageInMonth(kohi.periods, [...lines], ym).partial) {
+      out.push(`${client.name}: 日割り×月途中の公費は二重に按分される (日割り後の単位に さらに公費の按分がかかる)。実例が無いので確認を`);
+    }
+    return out;
+  };
   const prorationNotice: string | null = prorationError
     ? `${prorationError} — 全件 半月按分の自動で計算しました`
     : !prorations
@@ -1087,6 +1112,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       });
       for (const w of kohiLoad.clientWarnings.get(client.id) ?? []) preWarnings.push(`${client.name}: ${w}`);
       for (const w of amt.warnings) preWarnings.push(`${client.name}: ${w}`);
+      for (const w of dailyProrationWarnings(client, items, billingMonth, kohi,
+        details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })))) preWarnings.push(w);
       if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
       const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
       const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
@@ -1433,6 +1460,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         });
         for (const w of kohiLoad.clientWarnings.get(client.id) ?? []) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
         for (const w of amt.warnings) allWarnings.push(`[${ym}] ${client.name}: ${w}`);
+        for (const w of dailyProrationWarnings(client, items, ym, kohi,
+          details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })))) allWarnings.push(`[${ym}] ${w}`);
         if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
         const { copayRate, totalCost, insuranceAmount } = amt;
         const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
