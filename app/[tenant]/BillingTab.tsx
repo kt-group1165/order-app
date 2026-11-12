@@ -12,6 +12,7 @@ import { itemMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GR
 import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
 import { rentalMonthUnits, hospitalizationRanges, type DateRange } from "@/lib/half-month-units";
+import { useRentalCalcContext, excludedOf, modeOf } from "@/lib/rentalCalcContext";
 import { loadProrations, prorationModeOf, type ProrationLoad } from "@/lib/orderItemProration";
 import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
 
@@ -2237,6 +2238,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [y, m] = month.split("-").map(Number);
+  // ★ 2026-11-12: 按分は 請求・伝送と同じ rentalMonthUnits (日割り設定・休止・入院を反映。lib/rentalCalcContext.ts)
+  const calc = useRentalCalcContext(tenantId);
   const prevMonth = () => { const d = new Date(y, m - 2, 1); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const nextMonth = () => { const d = new Date(y, m, 1); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
   const toThisMonth = () => { const d = new Date(); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
@@ -2341,6 +2344,18 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     return best?.purchase_price ?? null;
   }, [purchasePrices]);
 
+  /**
+   * 1 明細の当月の金額 (円・1 個あたり) と算定の種類。請求・伝送と同じ rentalMonthUnits (日割り設定・休止・入院を反映)。
+   *   終了日は 解約済 (terminated) のときだけ見る (売上帳票の従来の扱い)
+   */
+  const salesMonthAmount = useCallback((item: OrderItem, clientId: string, ym: string, price: number): { amount: number; prorate: "full" | "half" | "daily" } => {
+    const fullUnits = price ? Math.round(price / 10) : 0;
+    const mode = modeOf(calc, item.id, ym);
+    const units = rentalMonthUnits(fullUnits, item.rental_start_date, item.status === "terminated" ? item.rental_end_date : null, ym,
+      excludedOf(calc, clientId, item.id), mode);
+    return { amount: units * 10, prorate: mode === "daily" ? "daily" : units === fullUnits ? "full" : "half" };
+  }, [calc]);
+
   // 当月の売上帳票行を生成（自動集計）
   const rows = useMemo(() => {
     const monthStart = `${month}-01`;
@@ -2352,7 +2367,10 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       eventType: "start" | "end";
       salesDate: string;
       rType: "新規" | "追加" | "一部解約" | "全部解約";
-      isHalfMonth: boolean;
+      /** 当月の算定: full = 1ヶ月分 / half = 半月分 (半月按分・入院/休止で減った月も含む) / daily = 日割り */
+      prorate: "full" | "half" | "daily";
+      /** 当月の金額 (円・1 個あたり) = 請求と同じ rentalMonthUnits × 10 */
+      amount: number;
       client: Client;
       item: OrderItem;
       order: Order;
@@ -2362,16 +2380,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     };
     const result: RowType[] = [];
 
-    // 月額取得（その月有効な rental_price、なければ equipment.rental_price）
-    const getMonthlyPrice = (productCode: string): number => {
-      // price_history from getPriceHistory: { product_code, rental_price, valid_from }
-      const hist = priceHistory
-        .filter((p) => p.product_code === productCode && p.valid_from <= monthEnd)
-        .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
-      if (hist.length > 0) return hist[0].rental_price;
-      const eq = equipment.find((e) => e.product_code === productCode);
-      return eq?.rental_price ?? 0;
-    };
+    // 月額: 請求 (getUnits) と同じ 価格履歴 (getPriceForMonth = 月初時点) → 用具マスタ
+    const getMonthlyPrice = (productCode: string): number =>
+      getPriceForMonth(priceHistory, productCode, month) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
 
     for (const item of orderItems) {
       const order = orders.find((o) => o.id === item.order_id);
@@ -2403,15 +2414,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           return true;
         });
         const rType = hasPrior ? "追加" : "新規";
-        const day = parseInt(item.rental_start_date.split("-")[2]);
-        const isHalf = day >= 16;
         result.push({
           key: `${item.id}-start`,
           orderItemId: item.id,
           eventType: "start",
           salesDate: item.rental_start_date,
           rType,
-          isHalfMonth: isHalf,
+          ...salesMonthAmount(item, client.id, month, getMonthlyPrice(item.product_code)),
           client,
           item,
           order,
@@ -2437,15 +2446,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           return true;
         });
         const rType: "一部解約" | "全部解約" = hasOtherActive ? "一部解約" : "全部解約";
-        const day = parseInt(item.rental_end_date.split("-")[2]);
-        const isHalf = day <= 15;
         result.push({
           key: `${item.id}-end`,
           orderItemId: item.id,
           eventType: "end",
           salesDate: item.rental_end_date,
           rType,
-          isHalfMonth: isHalf,
+          ...salesMonthAmount(item, client.id, month, getMonthlyPrice(item.product_code)),
           client,
           item,
           order,
@@ -2458,23 +2465,18 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
 
     // 売上日昇順
     return result.sort((a, b) => a.salesDate.localeCompare(b.salesDate));
-  }, [orderItems, orders, clients, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId]);
+  }, [orderItems, orders, clients, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId, salesMonthAmount]);
 
   // 月次損益（発生ベース・介護保険レンタル）
-  //   売上 = その月に稼働中のレンタル月額の合計（半月按分: 開始16日以降/終了15日以前は半月）
+  //   売上 = その月に稼働中のレンタルの当月金額の合計 (請求と同じ rentalMonthUnits。半月按分・日割り・休止・入院を反映)
   //   経費 = その月にレンタル開始した item の仕入原価合計（order_items.purchase_price スナップ優先、無ければカタログ）
   //   利益 = 売上 − 経費。現金（買掛支払）とは別軸の客観的な月次損益。
   const pnl = useMemo(() => {
     const monthStart = `${month}-01`;
     const monthEnd = monthEndYmd(y, m);
-    // その月有効な月額レンタル（rental 履歴優先）
-    const monthlyRentalOf = (productCode: string): number => {
-      const hist = priceHistory
-        .filter((p) => p.product_code === productCode && p.valid_from <= monthEnd)
-        .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
-      if (hist.length > 0) return hist[0].rental_price;
-      return equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
-    };
+    // 月額: 請求と同じ 価格履歴 (月初時点) → 用具マスタ
+    const monthlyRentalOf = (productCode: string): number =>
+      getPriceForMonth(priceHistory, productCode, month) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
     let revenue = 0;
     let expense = 0;
     let activeCount = 0;
@@ -2501,14 +2503,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       const startedByMonthEnd = item.rental_start_date <= monthEnd;
       const endedBeforeMonth = item.status === "terminated" && item.rental_end_date != null && item.rental_end_date < monthStart;
       if (startedByMonthEnd && !endedBeforeMonth) {
-        const full = monthlyRentalOf(item.product_code);
-        const startDay = item.rental_start_date >= monthStart && item.rental_start_date <= monthEnd
-          ? parseInt(item.rental_start_date.split("-")[2]) : null;
-        const endDay = item.status === "terminated" && item.rental_end_date != null
-          && item.rental_end_date >= monthStart && item.rental_end_date <= monthEnd
-          ? parseInt(item.rental_end_date.split("-")[2]) : null;
-        const half = (startDay != null && startDay >= 16) || (endDay != null && endDay <= 15);
-        const rev = Math.round(full * (half ? 0.5 : 1));
+        const rev = salesMonthAmount(item, order.client_id ?? "", month, monthlyRentalOf(item.product_code)).amount;
         revenue += rev;
         activeCount++;
         const pa = prodAcc(item.product_code);
@@ -2530,7 +2525,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       }
     }
     return { revenue, expense, profit: revenue - expense, activeCount, startedCount, unknownCostCount, byProduct, bySupplier };
-  }, [orderItems, orders, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId]);
+  }, [orderItems, orders, equipment, priceHistory, resolvePurchasePrice, month, y, m, currentOfficeId, salesMonthAmount]);
   const [showPnlDetail, setShowPnlDetail] = useState(false);
 
   // 書類チェック関数
@@ -2555,6 +2550,15 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     }
   };
 
+  /** 売上・引上の金額を列に振り分ける。日割りは 半月分の列ではなく 日割の列 (CSV は末尾に追加。既存列の位置は変えない) */
+  const amountCols = (r: (typeof rows)[number]) => {
+    const pick = (ev: "start" | "end", kind: "full" | "half" | "daily") => (r.eventType === ev && r.prorate === kind ? r.amount : null);
+    return {
+      revenueFull: pick("start", "full"), revenueHalf: pick("start", "half"), revenueDaily: pick("start", "daily"),
+      liftFull: pick("end", "full"), liftHalf: pick("end", "half"), liftDaily: pick("end", "daily"),
+    };
+  };
+
   // CSV 出力
   const exportCSV = () => {
     const headers = [
@@ -2562,13 +2566,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       "提案書", "個別援助計画", "紹介機関", "居宅", "ケアマネージャー様氏名",
       "受注担当者名", "納品・回収", "利用者名", "商品名",
       "R売上(1ヶ月分)", "R売上(半月分)", "R引上金額(1ヶ月分)", "R引上金額(半月分)", "仕入金額",
+      // 2026-11-12 追加 (末尾。既存列の位置は変えない): 明細×月で「日割り」にした月の金額
+      "R売上(日割)", "R引上金額(日割)",
     ];
     const rowsCsv = rows.map((r, idx) => {
       const sr = getSalesRec(r.orderItemId, r.eventType);
-      const revenueFull = r.eventType === "start" && !r.isHalfMonth ? r.rentalPrice : "";
-      const revenueHalf = r.eventType === "start" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : "";
-      const liftFull = r.eventType === "end" && !r.isHalfMonth ? r.rentalPrice : "";
-      const liftHalf = r.eventType === "end" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : "";
+      const c = amountCols(r);
+      const v = (x: number | null) => (x == null ? "" : x);
       return [
         idx + 1,
         r.salesDate,
@@ -2587,11 +2591,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         sr?.delivery_person ?? "",
         r.client.name,
         r.equipmentName,
-        revenueFull,
-        revenueHalf,
-        liftFull,
-        liftHalf,
+        v(c.revenueFull),
+        v(c.revenueHalf),
+        v(c.liftFull),
+        v(c.liftHalf),
         r.purchasePrice || "",
+        v(c.revenueDaily),
+        v(c.liftDaily),
       ];
     });
     const csvText = [headers, ...rowsCsv]
@@ -2620,6 +2626,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         {/* 横長対策: 件数・CSV出力も右端に飛ばさず並べる */}
         <div className="flex items-center gap-2">
           <span className="text-gray-500 text-xs">{rows.length} 件</span>
+          {calc && calc.notices.length > 0 && (
+            <span className="text-[11px] text-amber-700" title={calc.notices.join("\n")}>⚠ {calc.notices[0]}{calc.notices.length > 1 ? ` (他 ${calc.notices.length - 1} 件)` : ""}</span>
+          )}
           <button onClick={exportCSV}
             className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
             <Download size={13} />CSV出力
@@ -2749,6 +2758,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
                   "提案", "援助計画", "紹介機関", "居宅", "ケアマネ様氏名",
                   "受注担当", "納品・回収", "利用者名", "商品名",
                   "R売上\n(1ヶ月)", "R売上\n(半月)", "R引上\n(1ヶ月)", "R引上\n(半月)", "仕入",
+                  "R売上\n(日割)", "R引上\n(日割)",
                 ].map((h) => (
                   <th key={h} className="border border-gray-300 px-2 py-1 font-medium text-gray-600 whitespace-pre-line text-center">{h}</th>
                 ))}
@@ -2757,10 +2767,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
             <tbody>
               {rows.map((r, idx) => {
                 const sr = getSalesRec(r.orderItemId, r.eventType);
-                const revenueFull = r.eventType === "start" && !r.isHalfMonth ? r.rentalPrice : null;
-                const revenueHalf = r.eventType === "start" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : null;
-                const liftFull = r.eventType === "end" && !r.isHalfMonth ? r.rentalPrice : null;
-                const liftHalf = r.eventType === "end" && r.isHalfMonth ? Math.round(r.rentalPrice / 2) : null;
+                const { revenueFull, revenueHalf, revenueDaily, liftFull, liftHalf, liftDaily } = amountCols(r);
                 const yen = (v: number | null) => v !== null ? `¥${v.toLocaleString()}` : "";
                 const rTypeColor =
                   r.rType === "新規" ? "bg-blue-50 text-blue-700" :
@@ -2807,6 +2814,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
                     <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(liftFull)}</td>
                     <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{yen(liftHalf)}</td>
                     <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap">{r.purchasePrice ? `¥${r.purchasePrice.toLocaleString()}` : ""}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap text-amber-700">{yen(revenueDaily)}</td>
+                    <td className="border border-gray-200 px-2 py-1 text-right whitespace-nowrap text-amber-700">{yen(liftDaily)}</td>
                   </tr>
                 );
               })}
