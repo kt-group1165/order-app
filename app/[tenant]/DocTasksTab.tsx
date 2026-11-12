@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { FileWarning, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, X } from "lucide-react";
 import { supabase, Client, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
+import { getClients } from "@/lib/clients";
 import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, completeDocTask, findExistingDocForTask, type MergeCandidateGroup } from "@/lib/docTasks";
 import { todayYmd, addDaysYmd } from "@/lib/date-jst";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
@@ -191,16 +192,14 @@ export default function DocTasksTab({
           // 統合候補検出のため pending / completed / received すべて取る (cancelled は除外)
           noOffice ? Promise.resolve([] as DocTask[]) : getDocTasks(tenantId, officeIds, ["pending", "completed", "received"]),
           // 3. clients (office 絞り込み) — task client_id 解決と cert_renewal 表示用
-          selectAllPagedParallel<Client>(
-            () => {
-              const q = supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).is("deleted_at", null);
-              return officeIds && officeIds.length > 0 ? q.in("office_id", officeIds) : q;
-            },
-            (from, to) => {
-              const q = supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null);
-              return (officeIds && officeIds.length > 0 ? q.in("office_id", officeIds) : q).order("id").range(from, to);
-            },
-          ),
+          //    2026-11-12: 事業所で絞るときは 割当 (client_office_assignments) の利用者も含める (office_id だけだと高品などで 0 名)
+          officeIds && officeIds.length > 0
+            ? Promise.all(officeIds.map((oid) => getClients(tenantId, { officeId: oid, bypassCache: true })))
+                .then((lists) => [...new Map(lists.flat().map((c) => [c.id, c])).values()])
+            : selectAllPagedParallel<Client>(
+                () => supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).is("deleted_at", null),
+                (from, to) => supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, to),
+              ),
           // 5. client_documents (rental_report 以外の全 type)
           //    - care_plan: cert_renewal で「対応 care_plan が無い場合のみ」絞るため
           //    - 全 type: 書類タスク経由以外で作られた書類を「作成済書類で完了」の候補に出すため (B-2n)

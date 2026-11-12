@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ChevronLeft, Loader2, Printer, FileText } from "lucide-react";
 import { supabase, Order, OrderItem, Equipment, EquipmentPriceHistory, Client, Supplier, Member, ClientDocument, DocTask } from "@/lib/supabase";
+import { getClients } from "@/lib/clients";
 import { getClientDocuments, saveClientDocument, deleteClientDocument } from "@/lib/documents";
 import { buildChecklist, countActionNeeded, type ChecklistKey } from "@/lib/docChecklist";
 import { activeRentalCount, getDocIndex, type ClientRental, type DocIndex } from "@/lib/docChecklistData";
@@ -104,13 +105,13 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     const officeFilter = officeViewAll ? null : currentOfficeId;
     // PostgREST default limit 1000 を超えるケース対応 (ページング)
     const fetchAllClients = async (): Promise<Client[]> => {
+      // 2026-11-12: 事業所で絞るときは 割当 (client_office_assignments) の利用者も含める (office_id だけだと高品などで 0 名)
+      if (officeFilter) return getClients(tenantId, { officeId: officeFilter, includeDeleted: true, bypassCache: true });
       const PAGE = 1000;
       const all: Client[] = [];
       let from = 0;
       while (true) {
-        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana").order("id").range(from, from + PAGE - 1);
-        if (officeFilter) q = q.eq("office_id", officeFilter);
-        const { data, error } = await q;
+        const { data, error } = await supabase.from("clients").select("*").eq("tenant_id", tenantId).order("furigana").order("id").range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
         all.push(...(data as Client[]));
@@ -125,6 +126,11 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
     ]).then(([cls, equip]) => {
       setClients(cls);
       setEquipment(equip);
+      setLoading(false);
+    }).catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("書類: 利用者・用具の読み込みに失敗:", msg);
+      alert(`利用者・用具の読み込みに失敗しました: ${msg}`);
       setLoading(false);
     });
   }, [tenantId, currentOfficeId, officeViewAll]);

@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, Fragment } from "react";
 import { calcNextDueMonth } from "@/lib/monitoring-cycle";
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Send, Eye, Download } from "lucide-react";
 import { supabase, Client, Equipment, ClientRentalHistory, MonitoringRecord, MonitoringItem, ClientInsuranceRecord, OrderItem } from "@/lib/supabase";
+import { getClients } from "@/lib/clients";
 import { getEquipment } from "@/lib/equipment";
 import { todayYmd } from "@/lib/date-jst";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
@@ -52,16 +53,14 @@ export default function MonitoringTab({ tenantId, currentOfficeId, officeViewAll
       //   どれも 1000 行を超えうるので、件数を聞いてページを並列に読む (lib/pagedParallel.ts・id を二次キーに)。
       //   以前は発注・明細の読み込みエラーを見ずに黙って打ち切っていた。
       const [cls, monitoring, eqData, rentalHist, allOrders, items] = await Promise.all([
-        selectAllPagedParallel<Client>(
-          () => {
-            const q = supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId);
-            return officeFilter ? q.eq("office_id", officeFilter) : q;
-          },
-          (from, to) => {
-            const q = supabase.from("clients").select("*").eq("tenant_id", tenantId);
-            return (officeFilter ? q.eq("office_id", officeFilter) : q).order("id").range(from, to);
-          },
-        ),
+        // 2026-11-12: 事業所で絞るときは clients.office_id だけでなく 割当 (client_office_assignments) の利用者も含める。
+        //   office_id だけだと ケアサポ以外 (高品など) は利用者が 0 名になっていた (CLAUDE.md §3.1)
+        officeFilter
+          ? getClients(tenantId, { officeId: officeFilter, includeDeleted: true, bypassCache: true })
+          : selectAllPagedParallel<Client>(
+              () => supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+              (from, to) => supabase.from("clients").select("*").eq("tenant_id", tenantId).order("id").range(from, to),
+            ),
         selectAllPagedParallel<MonitoringRecord>(
           () => supabase.from("monitoring_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
           (from, to) => supabase.from("monitoring_records").select("*").eq("tenant_id", tenantId)
