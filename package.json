@@ -37,7 +37,8 @@
     "check:attendance-excel": "tsx scripts/attendance-excel-import-check.mts",
     "check:exec-lock": "tsx scripts/exec-lock-test.mts",
     "check:proration": "tsx scripts/proration-teikyohyo-check.mts",
-    "check:cert-status": "tsx scripts/cert-status-rule-check.mts"
+    "check:cert-status": "tsx scripts/cert-status-rule-check.mts",
+    "check:month-ready": "tsx scripts/month-ready-check.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",
