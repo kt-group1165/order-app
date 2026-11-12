@@ -6,6 +6,7 @@ import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, Equipm
 import { getClientDocuments, deleteClientDocument } from "@/lib/documents";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { monthEndYmd, todayYmd } from "@/lib/date-jst";
+import { warekiLabel, ageAt } from "@/lib/renovationDocs";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
 import { type CareOfficeChoice } from "./SendRentalReportModal";
@@ -3284,6 +3285,23 @@ function ClientDetail({
 
   const today = todayYmd();
 
+  // ヘッダーに出す 生年月日・担当居宅・担当ケアマネ・介護度 (2026-11-12 user 依頼)。
+  // 介護度・担当は 今日 有効な認定 (認定期間に今日を含む) を優先し、無ければ利用者の基本情報。
+  const headerInfo = useMemo(() => {
+    const valid = insuranceRecords
+      .filter((r) => (!r.certification_start_date || r.certification_start_date <= today) && (!r.certification_end_date || r.certification_end_date >= today))
+      .sort((a, b) => (b.certification_start_date ?? "").localeCompare(a.certification_start_date ?? ""));
+    const cur = valid[0] ?? null;
+    const officeId = cur?.care_office_id ?? client.care_office_id ?? null;
+    const mgrId = cur?.care_manager_id ?? client.care_manager_id ?? null;
+    const careOffice = (officeId && careOfficesList.find((o) => o.id === officeId)?.name) || cur?.care_manager_org || client.care_manager_org || null;
+    const careManager = (mgrId && careManagersList.find((m) => m.id === mgrId)?.name) || cur?.care_manager || client.care_manager || null;
+    const careLevel = cur?.care_level ?? client.care_level ?? null;
+    const age = ageAt(client.birth_date, today);
+    const birth = client.birth_date ? `${warekiLabel(client.birth_date)}${age !== null ? ` (${age}歳)` : ""}` : null;
+    return { birth, careOffice, careManager, careLevel, certEnd: cur?.certification_end_date ?? null, noValidCert: insuranceRecords.length > 0 && !cur };
+  }, [insuranceRecords, careOfficesList, careManagersList, client, today]);
+
   const handleStatusClick = (item: OrderItem, nextStatus: OrderItem["status"]) => {
     if (nextStatus === "delivered" || nextStatus === "rental_started" || nextStatus === "terminated") {
       setDateInput({ item, nextStatus, date: today });
@@ -3611,7 +3629,7 @@ function ClientDetail({
         <button onClick={onBack}>
           <ChevronLeft size={20} className="text-gray-500" />
         </button>
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1 lg:flex-none lg:mr-6">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="font-semibold text-gray-800">{client.name}</h2>
             {client.gender && <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md">{client.gender}</span>}
@@ -3622,6 +3640,21 @@ function ClientDetail({
           </div>
           {client.furigana && <p className="text-xs text-gray-400">{client.furigana}</p>}
         </div>
+        {/* 利用者の基本の情報 (見ながら確認できるように)。狭い画面では隠す */}
+        <dl className="hidden lg:grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-0.5 text-xs mr-auto">
+          <dt className="text-gray-400">生年月日</dt>
+          <dd className="text-gray-800 tabular-nums">{headerInfo.birth ?? <span className="text-gray-300">未登録</span>}</dd>
+          <dt className="text-gray-400">介護度</dt>
+          <dd className="text-gray-800">
+            {headerInfo.careLevel ?? <span className="text-gray-300">未登録</span>}
+            {headerInfo.certEnd && <span className="ml-1 text-gray-400">(〜{headerInfo.certEnd.replaceAll("-", "/")})</span>}
+            {headerInfo.noValidCert && <span className="ml-1 text-amber-600" title="今日を含む認定期間の保険情報がありません">認定期間外</span>}
+          </dd>
+          <dt className="text-gray-400">担当居宅</dt>
+          <dd className="text-gray-800 truncate max-w-[16rem]" title={headerInfo.careOffice ?? ""}>{headerInfo.careOffice ?? <span className="text-gray-300">未登録</span>}</dd>
+          <dt className="text-gray-400">担当CM</dt>
+          <dd className="text-gray-800 truncate max-w-[10rem]" title={headerInfo.careManager ?? ""}>{headerInfo.careManager ?? <span className="text-gray-300">未登録</span>}</dd>
+        </dl>
         <button
           onClick={() => setShowDocuments(true)}
           title="重要事項説明書・契約書を作成"
