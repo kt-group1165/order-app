@@ -74,6 +74,8 @@ if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
   process.exit(r.status ?? 1);
 }
 const core = await import("../scripts/_honobono-sync-core.mjs");
+// 認定状況の規則は lib/insurance/certStatus.ts の 1 か所 (逐語コピーしない。check:cert-status)
+const { mayOverwriteCertStatus } = await import("../lib/insurance/certStatus.ts");
 const {
   C, TENANT, PROVIDER_BN, readKds0031, loadSnapshot, loadLibs, readEnv, buildBillingModel, groupCsvUsers, repReceipt, csvTotals,
   buildMatchIndex, matchCsvUser, parseCsvLine, nfkc, nName, nKana, nInsurer, nInsured, nCare, nDate, nRate, nGender, toInt, ymOf, daysIn,
@@ -500,7 +502,7 @@ async function main() {
         for (const col of INS_COLS) {
           const v = g.row[col]; if (v == null || v === "") continue;
           // ★ 2026-11-13: 認定済み → 申請中 には下げない (ほのぼのの申請中 = 更新申請中の印。sync_fukuyogu_from_honobono.mjs と同じ)
-          if (col === "certification_status" && exr.certification_status === "認定済み" && v === "申請中") { console.log(`  認定済み → 申請中 には下げない: ${ex?.氏名 ?? exr.client_id} ${g.row.certification_start_date}〜${g.row.certification_end_date}`); continue; }
+          if (col === "certification_status" && !mayOverwriteCertStatus(exr.certification_status, v)) { console.log(`  認定済み → 申請中 には下げない: ${ex?.氏名 ?? exr.client_id} ${g.row.certification_start_date}〜${g.row.certification_end_date}`); continue; }
           if (normFor(col, exr[col] ?? null) !== normFor(col, v)) { patch[col] = v; before[col] = exr[col] ?? null; }
         }
         if (Object.keys(patch).length) applyOp(cs, { table: "client_insurance_records", action: shared ? "observe" : "update", id: exr.id, before, patch, src: g.src, ref: ex, why: "同じ認定開始日の行を ほのぼのの値に更新" });

@@ -86,6 +86,8 @@ if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
   process.exit(r.status ?? 1);
 }
 const core = await import("../scripts/_honobono-sync-core.mjs");
+// 認定状況の規則 (認定済み→申請中 に下げない 等) は lib/insurance/certStatus.ts の 1 か所 (逐語コピーしない。check:cert-status)
+const { mayOverwriteCertStatus } = await import("../lib/insurance/certStatus.ts");
 const {
   C, TENANT, PROVIDER_BN, readKds0031, loadSnapshot, loadLibs, readEnv, buildBillingModel, groupCsvUsers, repReceipt, csvTotals,
   buildMatchIndex, matchCsvUser, parseCsvLine, nfkc, nName, nKana, nInsurer, nInsured, nCare, nDate, nRate, nGender, toInt, ymOf, daysIn,
@@ -711,7 +713,7 @@ async function main() {
             if (v == null || v === "") continue;
             // ★ 2026-11-13: 認定済み → 申請中 には下げない。ほのぼのの「申請中」は 更新申請中の印で、その期間も請求している
             //   (5 名で 4〜9 月の KDS と照合して確認)。下げると BillingTab が月遅れ扱いにして 当方だけ請求を止めてしまう
-            if (col === "certification_status" && ex.certification_status === "認定済み" && v === "申請中") {
+            if (col === "certification_status" && !mayOverwriteCertStatus(ex.certification_status, v)) {
               R.insurance.add("認定済み → 申請中 には下げない (ほのぼのの申請中 = 更新申請中の印)", { ...s.ex, 認定: `${ex.care_level ?? ""}/${g.row.certification_start_date}〜${g.row.certification_end_date}` });
               continue;
             }

@@ -34,6 +34,8 @@ if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
   process.exit(r.status ?? 1);
 }
 const core = await import("../scripts/_honobono-sync-core.mjs");
+// 認定状況の規則は lib/insurance/certStatus.ts の 1 か所 (逐語コピーしない。check:cert-status)
+const { certStatusFromHonobono, mayOverwriteCertStatus } = await import("../lib/insurance/certStatus.ts");
 const { TENANT, readEnv } = core;
 
 const argv = process.argv.slice(2);
@@ -132,7 +134,8 @@ async function plan(sb) {
       // ★ 2026-11-13: マスタの「申請中」は 更新申請中の印 (その期間も ほのぼのは請求している)。
       //   要介護度がある or 元の行が認定済み なら 認定済み で作る (申請中で作ると BillingTab が月遅れ扱いにする)。
       //   2026-11-11 の実行 (batch 0c46125e) では 吉田 絢子・箱﨑 国昭 の 2 行が 認定済み → 申請中 で作られていた
-      const masterApplying = g.status === "申請中" && (g.level || src.certification_status === "認定済み");
+      //   = ① 要介護度があれば 認定済み (certStatusFromHonobono) / ② 元の行が認定済みなら 申請中に下げない (mayOverwriteCertStatus)
+      const masterApplying = g.status === "申請中" && (certStatusFromHonobono(g.status, g.level) === "認定済み" || !mayOverwriteCertStatus(src.certification_status, g.status));
       if (masterApplying) keptCertified.push(`${c.name} ${g.start}〜${g.end ?? ""} ${g.level ?? src.care_level ?? ""}`);
       Object.assign(row, {
         office_id: CS, copied_from_id: src.id, office_source: "import_record",
