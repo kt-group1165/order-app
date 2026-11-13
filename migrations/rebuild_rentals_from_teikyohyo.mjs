@@ -130,6 +130,7 @@ const STEP = "teikyo-rebuild";
 const MARK = "[teikyo-rebuild-20261109]";
 // 移行の起点 = 提供票の最初の月の 1 日 (ケアサポは 2026-04 から → 2026-04-01 / [4/1以前から] で従来どおり)。
 //   ★ 2026-11-13: 誉田は R8/5 からしか無いので 4/1 固定だと 5/1 から続く台に 4/1 を仮置きしていた → 最初の月から決める (main で確定)
+const BILLED_TAIS_MARK = "[品目は請求の出力で特定]";
 let MIGRATION_START = "2026-04-01";
 let BEFORE_APR = "[4/1以前から]";
 const REF_TABLES = [["billing_unit_overrides", "order_item_id"], ["order_item_price_changes", "order_item_id"], ["monitoring_items", "order_item_id"]];
@@ -633,6 +634,9 @@ async function main() {
     const full = fullR?.full ?? r1.mrow?.units ?? null;
     const notes = [MARK];
     if (beforeApr) notes.push(BEFORE_APR);
+    // ★ 2026-11-14: --disambiguate-by-billing で 品目を ほのぼのの請求の出力 (KDS0031) から決めた台には印を付ける。
+    //   この台は KDS0031 との答え合わせで当然一致するので、一致率の分母から外せるようにする (循環の印)
+    if (ch.segs.some((s) => String(s.r.how ?? "").includes("請求 (明細書明細付) の TAIS で特定"))) notes.push(BILLED_TAIS_MARK);
     planned.push({ ch, userNo: r1.userNo, name: r1.name, grp: r1.grp, key: r1.key, tais: r1.tais, payType: r1.payType, kindRaw: r1.kindRaw, item: r1.item, mrow: r1.mrow, how: r1.how,
       start, end, open, beforeApr, full, segs: ch.segs.map((s) => ({ ym: s.r.ym, a: s.a, b: s.b, units: s.r.units, hiwari: s.r.hiwari, file: s.r.file, row: s.r.row })), notes });
   }
@@ -643,6 +647,7 @@ async function main() {
     p.notes.push(`[休止 ${a}〜${AS_OF != null && b > AS_OF ? AS_OF : b}]`);
   }
   console.log(`\n提供票 ${FIRST}〜${LAST}: 実績 ${rows.length} 行 → 台 ${planned.length} (継続中 ${planned.filter((p) => p.open).length} / 終了 ${planned.filter((p) => !p.open).length} / ${BEFORE_APR.slice(1, -1)} ${planned.filter((p) => p.beforeApr).length})`);
+  console.log(`  うち 品目を請求の出力 (KDS0031) で決めた台 ${planned.filter((p) => p.notes.includes(BILLED_TAIS_MARK)).length} (notes に ${BILLED_TAIS_MARK}。KDS0031 との答え合わせでは当然一致する = 一致率の分母から外して読む)`);
   { // 開始月の分布 (仮置きの「○/1以前から」は別に数える。2026-11-13 誉田の受入れで追加)
     const by = new Map();
     for (const p of planned) { const k = p.beforeApr ? `${BEFORE_APR.slice(1, -1)}` : p.start.slice(0, 7); by.set(k, (by.get(k) ?? 0) + 1); }
