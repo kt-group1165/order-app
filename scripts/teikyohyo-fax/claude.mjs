@@ -24,6 +24,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
+import { faxOffice } from "./_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -109,10 +110,13 @@ function normalize(v, k) {
   if (NUM_KEYS.has(k)) { const n = Number(t.normalize("NFKC").replace(/[^0-9.]/g, "")); return t.normalize("NFKC").replace(/[^0-9.]/g, "") === "" ? null : n; }
   return t;
 }
-const CARESAPO_BN = "1272400050";
+// 対象の事業所 (--area / --office-bn。既定 ケアサポ 1272400050 = 引数化の前と同じ)
+const FO = faxOffice(argv);
+const CARESAPO_BN = FO.bn;
+const OFFICE_NAME_RE = FO.isDefault ? /サポート千葉|ケア.?サポ/ : FO.nameRe;
 /** 生年月日として受け入れる年齢 (提供月の時点)。外れたら Sonnet で読み直し、それでも外れたら birth を null にする */
 export const CONST_AGE = { min: 40, max: 110 };
-const isCaresapo = (r) => dig(r.office_no).endsWith(CARESAPO_BN.slice(-7)) || /サポート千葉|ケア.?サポ/.test(r.office ?? "");
+const isCaresapo = (r) => dig(r.office_no).endsWith(CARESAPO_BN.slice(-7)) || OFFICE_NAME_RE.test(r.office ?? "");
 const dig = (s) => String(s ?? "").normalize("NFKC").replace(/[^0-9]/g, "");
 /**
  * 給付率の欄が 2 段 (1 段目 = 保険 90 / 2 段目 = 公費 10。生保の新垣 良江 p23) の別表で、2 段目を別の行として返してきたら

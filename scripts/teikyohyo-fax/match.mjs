@@ -4,6 +4,7 @@
 //   ★ 照合ロジックは ★福祉用具新ソフト セッションが作成 (2026-11-13)。判定は 3 段階 (✅確定 / ⚠要確認 / ❌該当なし) + 対象外
 import fs from "node:fs";
 import { dirname, join } from "node:path";
+import { faxOffice } from "./_office.mjs";
 
 const argOf = (n) => (process.argv.includes(n) ? process.argv[process.argv.indexOf(n) + 1] : null);
 const SRC = process.argv[2];
@@ -13,7 +14,13 @@ if (!SRC || !SNAP) { console.error("usage: node match.mjs <claude.json> --snapsh
 const OUTF = argOf("--out") ?? join(dirname(SRC), "match_result.json");
 const snap = JSON.parse(fs.readFileSync(SNAP, "utf8"));
 const doc = JSON.parse(fs.readFileSync(SRC, "utf8"));
-const CS_NO = "1272400050";
+// 対象の事業所 (--area / --office-bn。既定 ケアサポ 1272400050 = 引数化の前と同じ)
+const FO = faxOffice(process.argv.slice(2));
+const CS_NO = FO.bn;
+const OFFICE_NAME_RE = FO.isDefault ? /サポート/ : FO.nameRe;
+// 控え (snapshot.mjs) が別の事業所で取ったものなら止める (office の記録が無い古い控えは ケアサポで取ったもの)
+const snapBn = snap.office?.bn ?? "1272400050";
+if (snapBn !== FO.bn) { console.error(`★ 控え ${SNAP} は ${snap.office?.area ?? "ケアサポ"} (${snapBn}) のもの。照合の事業所 ${FO.area} (${FO.bn}) と違うので止める (snapshot.mjs に同じ --area を付けて取り直す)`); process.exit(1); }
 
 // ---- 判定の閾値 (出力にも書く) ----
 const TH = {
@@ -238,9 +245,9 @@ for (const d of docs) {
   const t = d.teikyo?.teikyo ?? null;
   const ym = YM ?? t?.ym ?? d.beppyo[0]?.beppyo?.ym;
   const bRows = d.beppyo.flatMap((p) => p.beppyo?.rows ?? []);
-  const hasCS = bRows.some((r) => normDigits(r.office_no) === CS_NO) || (t?.rows ?? []).some((r) => /サポート/.test(nfkc(r.office)));
+  const hasCS = bRows.some((r) => normDigits(r.office_no) === CS_NO) || (t?.rows ?? []).some((r) => OFFICE_NAME_RE.test(nfkc(r.office)));
   const rec = { pages: [d.teikyo?.page, ...d.beppyo.map((p) => p.page)].filter(Boolean), name: t?.name ?? d.beppyo[0]?.beppyo?.name, ym };
-  if (!hasCS) { out.push({ ...rec, verdict: "out", reason: "ケアサポの行が無い (宛先違いの可能性)" }); continue; }
+  if (!hasCS) { out.push({ ...rec, verdict: "out", reason: `${FO.area}の行が無い (宛先違いの可能性)` }); continue; }
   if (!t) {
     const bt = d.beppyo[0]?.beppyo ?? {};
     const id = identify({ name: bt.name, insured_no: bt.insured_no, insurer_no: null });

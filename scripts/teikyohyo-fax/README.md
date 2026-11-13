@@ -24,8 +24,13 @@ node scripts/teikyohyo-fax/run.mjs --pdf 提供票.jpg --pdf 別表.jpg --all
 
 DB の控えは 12 時間以内のものがあれば使い回す (DB を読まない)。
 
-★ いまは **ケアサポ専用** (照合のケアサポの番号 1272400050 は match.mjs の `CS_NO`)。ほかの事業所に広げるときは
-`snapshot.mjs --area` (既に対応) と match.mjs の `CS_NO` を 同じ事業所にそろえる。
+| `--area <拠点>` / `--office-bn <番号>` | 照合する事業所 (ケアサポ / 誉田 / 高品 / 花見川 / 茂原。既定 ケアサポ) |
+
+★ 事業所は `--area` / `--office-bn` で切り替える (`_office.mjs` → `migrations/_fukuyogu_office.mjs` の 5 事業所)。
+run.mjs が 2 段目・控え・照合に同じ引数を渡す。既定 (引数なし) はケアサポで、判定・出力は切り替えを入れる前と同じ。
+- 控えは事業所ごとに別ファイル (`snapshot.json` = ケアサポ / `snapshot_<拠点>.json`)。控えには取った事業所が記録され、
+  match.mjs は 照合の事業所と違う控えを渡されると止める (記録の無い古い控えは ケアサポのものとして扱う)。
+- 番号が読めないときの予備の事業所名の判定は `_office.mjs` の `NAME_RE` (誉田 = Hana/ハナ+ムツミ、高品 = ムツミ福祉用具+高品 …)。
 
 ## 流れ
 

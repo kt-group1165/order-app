@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createWorker, createScheduler, PSM } from "tesseract.js";
+import { faxOffice } from "./_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -35,7 +36,9 @@ const opt = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && 
 // --pdf は複数可 (提供票の写真と別表の写真を 1 回で: --pdf 提供票.jpg --pdf 別表.jpg)。並べた順にページ番号を振る
 const PDFS = argv.flatMap((a, i) => (a === "--pdf" && argv[i + 1] ? [argv[i + 1]] : []));
 const PDF = PDFS[0] ?? null;
-if (!PDF) { console.error("usage: node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf> [--out <dir>] [--pages 1-10]"); process.exit(1); }
+// 対象の事業所 (--area / --office-bn。既定 ケアサポ = 引数化の前と同じ)。2 段目・控え・照合にも同じ引数を渡す
+const FO = faxOffice(argv);
+if (!PDF) { console.error("usage: node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf> [--out <dir>] [--pages 1-10] [--area ケアサポ|誉田|高品|花見川|茂原]"); process.exit(1); }
 const OUT = resolve(opt("--out") ?? join(tmpdir(), "teikyohyo-fax", basename(PDF).replace(/\.pdf$/i, "")));
 const TESSDATA = resolve(opt("--tessdata") ?? join(tmpdir(), "teikyohyo-fax-tessdata"));
 const WORKERS = Number(opt("--workers") ?? 3);
@@ -50,7 +53,7 @@ mkdirSync(TESSDATA, { recursive: true });
 export const CONST = {
   BLANK_INK: 0.004,        // インク率がこれ未満 = 白紙
   ORIENT_MIN_SCORE: 2,     // 表題の語が この数以上 読めた向きを採る (未満 = 向き不明)
-  CARESAPO_BN: "1272400050",
+  CARESAPO_BN: FO.bn,
 };
 
 // ── Python (prep.py) ─────────────────────────────────────────────────────
@@ -181,7 +184,7 @@ async function readTeikyo(img, J, page) {
       });
     }
   }
-  r.caresapoRows = r.rows.filter((x) => /ケア.?サポ|サポート/.test(x.office ?? "")).length;
+  r.caresapoRows = r.rows.filter((x) => (FO.isDefault ? /ケア.?サポ|サポート/ : FO.nameRe).test(x.office ?? "")).length;
   return r;
 }
 
@@ -231,12 +234,12 @@ async function readBeppyo(img, J) {
       const su = digits(row.serviceUnits);
       if (row.code && row.unit && row.count && su && !/\(/.test(row.serviceUnits)) row.check = Number(row.unit) * Number(row.count) === Number(su) ? "一致" : `★ 不一致 ${row.unit}×${row.count}≠${su}`;
       // ケアサポの行: 事業所番号 (頭の桁が欠けやすいので 下 7 桁) か 事業所名
-      row.caresapo = (row.officeNumber && row.officeNumber.length >= 7 && CONST.CARESAPO_BN.endsWith(row.officeNumber.slice(-7))) || /サポート千|ケア.?サポ/.test(row.office ?? "");
+      row.caresapo = (row.officeNumber && row.officeNumber.length >= 7 && CONST.CARESAPO_BN.endsWith(row.officeNumber.slice(-7))) || (FO.isDefault ? /サポート千|ケア.?サポ/ : FO.nameRe).test(row.office ?? "");
       r.rows.push(row);
     }
   }
   r.caresapoRows = r.rows.filter((x) => x.caresapo).length;
-  r.target = r.caresapoRows > 0 ? "対象" : "対象外 (ケアサポの行が無い = 宛先違いの可能性)";
+  r.target = r.caresapoRows > 0 ? "対象" : `対象外 (${FO.area}の行が無い = 宛先違いの可能性)`;
   return r;
 }
 
@@ -300,11 +303,12 @@ function pipeline() {
     const r = spawnSync(process.execPath, [join(HERE, script), ...args], { stdio: "inherit" });
     if (r.status !== 0) { console.error(`✗ ${script} が失敗 (exit ${r.status})。ここで止める`); process.exit(r.status ?? 1); }
   };
-  node("claude.mjs", ["--out", OUT, ...(PAGES ? ["--pages", opt("--pages")] : [])]);
-  const SNAP = resolve(opt("--snapshot") ?? join(tmpdir(), "teikyohyo-fax", "snapshot.json"));
+  node("claude.mjs", ["--out", OUT, ...(PAGES ? ["--pages", opt("--pages")] : []), ...FO.args]);
+  // 控えは事業所ごとに別ファイル (既定 ケアサポは引数化の前と同じ snapshot.json)
+  const SNAP = resolve(opt("--snapshot") ?? join(tmpdir(), "teikyohyo-fax", FO.isDefault ? "snapshot.json" : `snapshot_${FO.area}.json`));
   const fresh = existsSync(SNAP) && Date.now() - statSync(SNAP).mtimeMs < 12 * 3600 * 1000;
   if (fresh && !argv.includes("--refresh-db")) console.log(`\nDB の控え: ${SNAP} を使い回す (${Math.round((Date.now() - statSync(SNAP).mtimeMs) / 60000)} 分前。取り直すなら --refresh-db)`);
-  else node("snapshot.mjs", ["--out", SNAP]);
-  node("match.mjs", [join(OUT, "claude.json"), "--snapshot", SNAP, "--out", join(OUT, "match_result.json")]);
+  else node("snapshot.mjs", ["--out", SNAP, ...FO.args]);
+  node("match.mjs", [join(OUT, "claude.json"), "--snapshot", SNAP, "--out", join(OUT, "match_result.json"), ...FO.args]);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

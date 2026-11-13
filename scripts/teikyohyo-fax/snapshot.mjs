@@ -21,7 +21,8 @@ const envTxt = fs.readFileSync(join(HERE, "../../../kaigo-app/.env.local"), "utf
 const env = Object.fromEntries(envTxt.split(/\r?\n/).filter((l) => l.includes("=")).map((l) => [l.slice(0, l.indexOf("=")).trim(), l.slice(l.indexOf("=") + 1).trim().replace(/^"|"$/g, "")]));
 const SB = env.NEXT_PUBLIC_SUPABASE_URL, K = env.SUPABASE_SERVICE_ROLE_KEY;
 const H = { apikey: K, Authorization: `Bearer ${K}` };
-const CS = resolveFukuyoguOffice(process.argv.slice(2)).officeId; // 既定 ケアサポ 1bfc0d57…
+const FO = resolveFukuyoguOffice(process.argv.slice(2));
+const CS = FO.officeId; // 既定 ケアサポ 1bfc0d57…
 
 async function get(path) {
   const r = await fetch(`${SB}/rest/v1/${path}`, { headers: H });
@@ -58,6 +59,7 @@ snap.benefit = await all("client_benefit_certificates", "id,client_id,kind,benef
 snap.certRates = await all("client_insurance_records", "id,benefit_rate,copay_rate", `&office_id=eq.${CS}`);
 snap.clientRates = await all("clients", "id,benefit_rate,copay_rate", "");
 snap.takenAt = new Date().toISOString();
+snap.office = { bn: FO.bn, area: FO.area, officeId: FO.officeId }; // match.mjs が 照合の事業所と同じか確かめる
 fs.mkdirSync(dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(snap));
 console.log("done", ((Date.now() - t0) / 1000).toFixed(1) + "s", "→", OUT);

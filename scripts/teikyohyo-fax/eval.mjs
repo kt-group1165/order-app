@@ -3,6 +3,8 @@
 //   ★ 正解データ gt.json は個人情報 (目で読んだ氏名・番号) なので repo に入れない。--gt で外から渡す
 import fs from "node:fs";
 import { dirname, join } from "node:path";
+import { faxOffice } from "./_office.mjs";
+const OFFICE_BN = faxOffice(process.argv.slice(2)).bn; // --area / --office-bn (既定 ケアサポ 1272400050)
 const argOf = (n) => (process.argv.includes(n) ? process.argv[process.argv.indexOf(n) + 1] : null);
 const [READ] = process.argv.slice(2);
 if (!READ || !argOf("--gt") || !argOf("--snapshot")) { console.error("usage: node eval.mjs <claude.json> --gt <gt.json> --snapshot <snapshot.json> [--match <match_result.json>]"); process.exit(1); }
@@ -39,7 +41,7 @@ for (const g of gt.people) {
     if (ok) f[k].ok++; else f[k].ng.push(`${g.name}: 正=${g[k]} 読=${got[k] ?? "null"}`);
   }
   if (g.units) {
-    const rows = g.beppyo_pages.flatMap((p) => pages.get(p)?.beppyo?.rows ?? []).filter((r) => N(r.office_no) === "1272400050" && /^\d{6}$/.test(N(r.service_code)));
+    const rows = g.beppyo_pages.flatMap((p) => pages.get(p)?.beppyo?.rows ?? []).filter((r) => N(r.office_no) === OFFICE_BN && /^\d{6}$/.test(N(r.service_code)));
     const num = (v) => { const n = Number(String(v ?? "").normalize("NFKC").replace(/[(),（）\s]/g, "")); return n > 0 ? n : null; };
     const got = rows.flatMap((r) => { const c = num(r.count) ?? 1; const u = num(r.units) ?? (num(r.service_units) ? Math.round(num(r.service_units) / c) : 0); return Array(c).fill(u); }).sort((a, b) => a - b);
     const exp = [...g.units].sort((a, b) => a - b);
@@ -55,7 +57,7 @@ for (const g of gt.people) {
   if (g.cert_status) { extra.cert_status.n++; const got = t.cert_status ?? null; if (got && got.startsWith("認定") === g.cert_status.startsWith("認定")) extra.cert_status.ok++; else extra.cert_status.ng.push(`${g.name}: 正=${g.cert_status} 読=${got}`); }
   if (g.benefit_rate != null) {
     extra.benefit_rate.n++;
-    const rows = g.beppyo_pages.flatMap((p) => pages.get(p)?.beppyo?.rows ?? []).filter((r) => N(r.office_no) === "1272400050");
+    const rows = g.beppyo_pages.flatMap((p) => pages.get(p)?.beppyo?.rows ?? []).filter((r) => N(r.office_no) === OFFICE_BN);
     const got = rows.map((r) => Number(r.benefit_rate)).find((x) => x > 0) ?? null;
     if (got === g.benefit_rate) extra.benefit_rate.ok++; else extra.benefit_rate.ng.push(`${g.name}: 正=${g.benefit_rate} 読=${got}`);
   }
