@@ -1,11 +1,11 @@
 "use client";
 
+import { type BillingCertRow } from "@/lib/insurance/billing-cert-cols";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, ChevronLeft, ChevronRight, Printer, FileText, Receipt } from "lucide-react";
 import { monthEndYmd } from "@/lib/date-jst";
 import type {
   Client,
-  ClientInsuranceRecord,
   Equipment,
   EquipmentPriceHistory,
   Order,
@@ -69,7 +69,7 @@ type LineItem = {
 
 type Row = {
   client: Client;
-  ins: ClientInsuranceRecord | null;
+  ins: BillingCertRow | null;
   careOffice: CareOffice | null;
   lineItems: LineItem[];
   computedTotal: number; // 税込合計
@@ -499,7 +499,7 @@ export default function UserBillingTab({
   orderItems: OrderItem[];
   orders: Order[];
   equipment: Equipment[];
-  insuranceRecords: ClientInsuranceRecord[];
+  insuranceRecords: BillingCertRow[];
   /** 用具の価格履歴 (請求と同じ月の価格で基本単位を出す)。無ければ用具マスタの現在価格 */
   priceHistory?: EquipmentPriceHistory[];
   dataLoading: boolean;
@@ -539,7 +539,7 @@ export default function UserBillingTab({
 
 
   // 当月に対象月が掛かる insurance_record
-  const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
+  const getActiveInsuranceRecord = (clientId: string): BillingCertRow | null => {
     const monthStart = `${billingMonth}-01`;
     const monthEnd = monthEndYmd(y, m);
     const recs = insuranceRecords

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, useTransition, memo } from "react";
 import dynamic from "next/dynamic";
 import { ChevronRight, ChevronLeft, X, Loader2, Printer, Download } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPriceHistory, ClientInsuranceRecord, ClientHospitalization } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPriceHistory, ClientHospitalization } from "@/lib/supabase";
 import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
@@ -38,6 +38,7 @@ import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fu
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
 import { fukuyoguServiceStartDate } from "@/lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth } from "@/lib/insurance/cert-month";
+import { BILLING_CERT_SELECT, type BillingCertRow } from "@/lib/insurance/billing-cert-cols";
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
 import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
@@ -114,7 +115,7 @@ function MonthlyInfoTab({
   tenantId: string;
   currentOfficeId: string | null;
   clients: Client[];
-  insuranceRecords: ClientInsuranceRecord[];
+  insuranceRecords: BillingCertRow[];
   orderItems: OrderItem[];
   orders: Order[];
   equipment: Equipment[];
@@ -149,7 +150,7 @@ function MonthlyInfoTab({
   const nextMonth = () => { const d = new Date(y, m, 1);     setBillingMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); };
 
   // 当月に対象月が掛かる insurance_record を引く (effective_date <= 月末 && (cert_end >= 月初 || null))
-  const getActiveInsuranceRecord = (clientId: string): ClientInsuranceRecord | null => {
+  const getActiveInsuranceRecord = (clientId: string): BillingCertRow | null => {
     const monthStart = `${billingMonth}-01`;
     const monthEnd = monthEndYmd(y, m);
     const recs = insuranceRecords
@@ -348,7 +349,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [orders, setOrders] = useState<Order[]>([]);
   const [tenantInfo, setTenantInfo] = useState<import("@/lib/tenants").Tenant | null>(null);
   const [offices, setOffices] = useState<Office[]>([]);
-  const [insuranceRecordsAll, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  const [insuranceRecordsAll, setInsuranceRecords] = useState<BillingCertRow[]>([]);
   // ★ 2026-11-11 事業所別保険 (DESIGN_INSURANCE_PER_OFFICE.md §3.2): 認定・公費・負担割合証は
   //   per_office の事業所なら自事業所の行だけ、shared なら per_office の事業所の行を外して使う。
   //   per_office の事業所が 0 なら素通し (= 今の動き)。読み込んだ直後に絞るので下流 (伝送・月遅れ判定・給付率) は全部この規則に従う
@@ -369,7 +370,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
    *   per_office … ★ 自事業所の認定行だけ。clients の列 (他事業所と共有) は使わない。行が無ければ要介護度が空になり、
    *                build.ts の「要介護度をコードにできない」で伝送から外れる (= 認定なし・月遅れ扱い)
    */
-  const densouCertOf = (client: Client, rec: ClientInsuranceRecord | null) => perOfficeMode
+  const densouCertOf = (client: Client, rec: BillingCertRow | null) => perOfficeMode
     ? { ...certFieldsForDensou({ care_level: null, certification_start_date: null, certification_end_date: null }, rec),
         insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
     : { ...certFieldsForDensou(client, rec),
@@ -395,10 +396,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
     // PostgREST default limit 1000 を超えるテーブル (insurance_records 8370 件等) は必ずページング
     // 認定 (約 25,000 行) を 1000 行ずつ直列に読むと約 5 秒かかっていた → 件数を聞いてページを並列に (lib/pagedParallel.ts)
-    const fetchAllPaged = <T,>(table: string): Promise<T[]> =>
+    const fetchAllPaged = <T,>(table: string, select = "*"): Promise<T[]> =>
       selectAllPagedParallel<T>(
         () => supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        (from, to) => supabase.from(table).select("*").eq("tenant_id", tenantId).order("id").range(from, to),
+        (from, to) => supabase.from(table).select(select).eq("tenant_id", tenantId).order("id").range(from, to),
       );
     // 価格改定の履歴は テナント全件 (約 700 行) を最初から同時に読み、order_items が揃ってから品目で絞る
     //   (2026-11-13 高速化: 旧 = order_items を待ってから 150 品目ずつ 6 回直列。結果は getPriceHistory(tenantId, codes) と同じ
@@ -414,7 +415,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       getAllOrders(tenantId, currentOfficeId),
       getTenantById(tenantId),
       getOffices(tenantId),
-      fetchAllPaged<ClientInsuranceRecord>("client_insurance_records"),
+      // 認定は請求で使う列だけ (lib/insurance/billing-cert-cols.ts。旧 select("*") 約 36MB)
+      fetchAllPaged<BillingCertRow>("client_insurance_records", BILLING_CERT_SELECT),
       fetchAllPaged<ClientHospitalization>("client_hospitalizations"),
       getCareOffices(tenantId),
     ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw, coffs]) => {
@@ -424,7 +426,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       setOrders(ords);
       setTenantInfo(tenant);
       setOffices(offs);
-      setInsuranceRecords(insRaw as ClientInsuranceRecord[]);
+      setInsuranceRecords(insRaw as BillingCertRow[]);
       setHospitalizations(hospRaw as ClientHospitalization[]);
       setCareOffices(coffs as CareOffice[]);
       // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
@@ -599,7 +601,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const monthEnd = monthEndYmd(y, m);
     const lateSet = new Set<string>();
     const noLevel = new Set<string>();
-    const recsByClient = new Map<string, ClientInsuranceRecord[]>();
+    const recsByClient = new Map<string, BillingCertRow[]>();
     for (const r of insuranceRecords) {
       const xs = recsByClient.get(r.client_id);
       if (xs) xs.push(r); else recsByClient.set(r.client_id, [r]);
