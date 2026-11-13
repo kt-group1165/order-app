@@ -1105,7 +1105,8 @@ ${errors[0]}`);
                       <td className="px-2 py-1 border border-gray-200 text-center">
                         {statusBadge(status)}
                       </td>
-                      <td className="px-2 py-1 border border-gray-200">{client.name}</td>
+                      {/* 2026-11-13: 氏名が「相川 小 / 一」のように折り返していた → 折り返さない */}
+                      <td className="px-2 py-1 border border-gray-200 whitespace-nowrap">{client.name}</td>
                       <td
                         className="px-2 py-1 border border-gray-200 truncate max-w-[200px]"
                         title={careOffice?.name ?? ""}

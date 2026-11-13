@@ -333,7 +333,8 @@ function MonthlyInfoTab({
               {sortedRows.map(({ client, ins, careOffice, units }) => (
                 <tr key={client.id} className="hover:bg-blue-50">
                   <td className="px-2 py-1 border border-gray-200 text-center text-gray-400">-</td>
-                  <td className="px-2 py-1 border border-gray-200">{ins?.insurer_name ?? client.care_manager_org ?? "-"}</td>
+                  {/* 2026-11-13: 保険者名が無いとき 居宅の名前 (care_manager_org) を出していた (18 名) → 保険者番号を出す */}
+                  <td className="px-2 py-1 border border-gray-200">{ins?.insurer_name ?? (ins?.insurer_number ?? client.insurer_number ? <span className="font-mono text-gray-500" title="保険者名が未登録のため番号を表示">{ins?.insurer_number ?? client.insurer_number}</span> : "-")}</td>
                   <td className="px-2 py-1 border border-gray-200 font-mono">{ins?.insured_number ?? client.insured_number ?? "-"}</td>
                   <td className="px-2 py-1 border border-gray-200">{client.name}</td>
                   <td className="px-2 py-1 border border-gray-200 font-mono">{client.user_number ?? "-"}</td>
@@ -1857,7 +1858,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             <button onClick={generateRebillTransferData} disabled={!densouInputsReady}
               title={densouInputsReady ? "返戻・過誤の対象をサービス提供年月ごとに 1 ファイルずつ出力" : "伝送に使うデータを読み込み中です"}
               className="border border-orange-500 rounded bg-orange-50 px-3 py-1 text-orange-700 font-semibold hover:bg-orange-100 flex items-center gap-1.5">
-              <Download size={13} />返戻過誤 伝送({rebillByMonth.length}月分)
+              <Download size={13} />返戻過誤 伝送({rebillByMonth.length}か月分)
             </button>
           )}
           <button onClick={generateCareplanJissekiCsv}
@@ -1966,8 +1967,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               <div className="px-2 py-2 border-l border-gray-200">状態</div>
               <div className="px-2 py-2 border-l border-gray-200">提出月</div>
               <div className="px-2 py-2 border-l border-gray-200">請求月</div>
-              <div className="px-2 py-2 border-l border-gray-200">サービス事業所</div>
-              <div className="px-2 py-2 border-l border-gray-200">被保険者番号</div>
+              {/* 2026-11-13: 見出しを中身に合わせた (旧「サービス事業所」「被保険者番号」。中身は 居宅介護支援事業所名 と 利用者番号) */}
+              <div className="px-2 py-2 border-l border-gray-200">居宅介護支援事業所</div>
+              <div className="px-2 py-2 border-l border-gray-200">利用者番号</div>
               <div className="px-2 py-2 border-l border-gray-200">利用者名</div>
               <div className="px-1 py-2 border-l border-gray-200 text-center" title="ケアマネが給付管理で割り付けた単位数。入れるとその単位数までを保険請求し、超えた分は保険外 (全額自己負担)。空欄 = 月次情報 (給付管理) 未着として伝送から外す (その月に 1 名も入力が無いときは実績で請求)">CM指示単位</div>
               <div className="px-2 py-2 border-l border-gray-200 text-center">月遅</div>
