@@ -124,6 +124,11 @@ function report(p, fetchedAt, n) {
   console.log(`■ TAIS が化けた行で 子になるもの ${garbledKids.length}: ${garbledKids.join(" ")}`);
   console.log(`■ ⚠ 親の TAIS が化けている組 ${p.garbledParent.length} (TAIS を直すまで 上限チェック・請求で TAIS が崩れたまま)`);
   for (const x of p.garbledParent) console.log(`   ${x}`);
+  const all = [...p.A, ...p.B].flatMap((g) => g.children.map((c) => ({ c, g })));
+  const fix = all.filter(({ c, g }) => c.TAIS化け && normTais(c.元TAIS) === g.parent.元TAIS && TAIS.test(String(g.parent.元TAIS)));
+  const kept = all.filter((x) => !fix.includes(x) && String(x.c.元TAIS ?? "") !== String(x.g.parent.元TAIS ?? ""));
+  console.log(`■ 子の tais_code を親の値に書き換える ${fix.length} 行 / 子だが TAIS が親と違うので書き換えずに残す ${kept.length} 行`);
+  for (const { c, g } of kept) console.log(`   残す ${c.product_code}「${c.名前}」 tais_code=${c.元TAIS} (親 ${g.parent.product_code} ${g.parent.元TAIS})`);
   console.log(`■ 子にする行 合計 ${kids(p.A) + kids(p.B)} (--execute --expect にこの数を渡す)`);
 }
 
@@ -179,7 +184,8 @@ if (opt("--csv-dir")) writeCsv(p, opt("--csv-dir"));
 if (EXECUTE) {
   const rows = [...p.A, ...p.B].flatMap((g) => g.children.map((c) => ({ id: c.id, product_code: c.product_code, parent: g.parent.product_code, variant_label: c.元のvariant_label, label: c.variant_label,
     // TAIS が化けた子は 親の TAIS に書き直す (どこから引いても 正しい TAIS になるように)。退避には元の値を残す
-    tais_code: c.元TAIS, fixTais: c.TAIS化け ? g.parent.元TAIS : null })));
+    // ★ 条件: 化けを直した子の TAIS が 親の tais_code と完全に一致するときだけ (= 同じ商品の重複行)。違えば書き換えない (taisKept に出す)
+    tais_code: c.元TAIS, fixTais: c.TAIS化け && normTais(c.元TAIS) === g.parent.元TAIS && TAIS.test(String(g.parent.元TAIS)) ? g.parent.元TAIS : null })));
   const expect = Number(opt("--expect"));
   if (!Number.isFinite(expect) || expect !== rows.length) {
     console.error(`★ 止めた: 子にする行 ${rows.length} が --expect ${opt("--expect")} と違う (DRY RUN の後に DB が変わった)。DRY RUN からやり直す`);
