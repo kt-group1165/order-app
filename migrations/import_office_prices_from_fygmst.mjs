@@ -10,7 +10,9 @@
  * 作る案 (TAIS ごと。FYGMST01 の介護・予防。自費は TAIS が無いので外す):
  *   「今の価格」= その TAIS の 使用中 (中止=0) の行のうち
  *       ケアサポ: 名前が「●」で始まらない行 (● = 古い世代)。複数なら ID が最大の行
- *       それ以外 (誉田 等): ID が最大の行 (★ 仮置き。誉田の記号 ◎☆◇▲★ の意味は user の答え待ち)
+ *       それ以外 (誉田 等): 記号 (略称・商品名称の先頭) の優先 ★ > ☆ > (◎・◇・▲) > 無印。同じ記号なら ID が最大の行
+ *         (2026-11-13 誉田の提供票 R8/5〜10 の新規開始で確認: 価格が複数ある品目の新規は ☆ 176 / 無印 64 (☆ の無い品目) / ★ 2 / ◎◇ 3。
+ *          ★ は ☆ より新しく安い世代)。◎・◇・▲ や無印の古い価格は G (古い世代の品目の候補) に出る
  *   P1 用具マスタに無い TAIS → equipment_master に品目を足す (product_code = TAIS・rental_price = 今の価格)。事業所の行は作らない (共通 = その価格)
  *   P2 用具マスタにあり、共通の価格 (--valid-from の月初・今月 の両方) が今の価格と同じ → 何もしない
  *   P3 用具マスタにあり、共通の価格と違う → equipment_price_history に office_id = その事業所・valid_from = --valid-from の行 (その TAIS の品目コードごと)
@@ -82,12 +84,19 @@ const eqByTais = new Map();
 for (const e of snap.equipment ?? []) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], J: [], G: [] };
+const R = { P1: [], P2: [], P3: [], J: [], G: [], diffFromIdMax: [] };
+/** 誉田の世代の記号 (略称 → 商品名称 の先頭)。★ = 最新・最安 / ☆ = その前 / ◎◇▲ = ☆ より前 / 無印 = 古いか 世代の分かれていない品目 */
+const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
+const genRank = (r) => ({ "★": 4, "☆": 3, "◎": 2, "◇": 2, "▲": 2 })[genMark(r)] ?? 1;
 for (const [tais, rows] of byTais) {
   const act = rows.filter((r) => !r.stop);
   if (!act.length) continue; // 中止だけの品目は作らない
   const curCands = IS_CARESAPO ? act.filter((r) => !r.name.startsWith("●")) : act;
-  const cur = (curCands.length ? curCands : act).reduce((a, b) => (b.id > a.id ? b : a));
+  const pool = curCands.length ? curCands : act;
+  const byId = pool.reduce((a, b) => (b.id > a.id ? b : a));
+  // ケアサポ: ● の無い行の ID 最大 / それ以外 (誉田): 記号の優先、同じ記号なら ID 最大
+  const cur = IS_CARESAPO ? byId : pool.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
+  if (!IS_CARESAPO && cur !== byId) R.diffFromIdMax.push({ TAIS: tais, 記号で選んだ行: `${cur.id} ${cur.abbr || cur.name} ${cur.units * 10}円`, ID最大の行: `${byId.id} ${byId.abbr || byId.name} ${byId.units * 10}円`, 価格が違う: cur.units !== byId.units });
   const price = cur.units * 10;
   const others = [...new Set(act.map((r) => r.units))].filter((u) => u !== cur.units);
   if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}`).join(" ") });
@@ -128,7 +137,7 @@ mkdirSync(OUT, { recursive: true });
 const esc = (v) => `"${String(Array.isArray(v) ? v.join(" / ") : v ?? "").replace(/"/g, '""')}"`;
 const label = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の品目が要る候補" };
 console.log(`事業所 ${FO.area} ${FO.bn} / FYGMST01 ${files.join(" / ")} / 使用中の TAIS ${[...byTais.values()].filter((rs) => rs.some((r) => !r.stop)).length}`);
-console.log(`控え ${snap.fetchedAt} / 事業所の行の valid_from ${VALID_FROM} / 影響を見る月 ${MONTH}${IS_CARESAPO ? " / 今の価格 = 中止=0 で ● の無い行 (複数なら ID 最大)" : " / 今の価格 = 中止=0 の ID 最大の行 (★ 仮置き)"}\n`);
+console.log(`控え ${snap.fetchedAt} / 事業所の行の valid_from ${VALID_FROM} / 影響を見る月 ${MONTH}${IS_CARESAPO ? " / 今の価格 = 中止=0 で ● の無い行 (複数なら ID 最大)" : " / 今の価格 = 中止=0 の行で 記号 ★ > ☆ > ◎◇▲ > 無印 (同じ記号なら ID 最大)"}\n`);
 for (const k of ["P1", "P2", "P3", "J", "G"]) {
   const xs = R[k];
   console.log(`  ${label[k].padEnd(28)} ${String(xs.length).padStart(5)}`);
@@ -138,6 +147,10 @@ for (const k of ["P1", "P2", "P3", "J", "G"]) {
   writeFileSync(join(OUT, `${FO.area}_${label[k]}.csv`), "﻿" + [cols.map(esc).join(","), ...xs.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\r\n"));
 }
 const p3rows = R.P3.reduce((s, x) => s + x.品目コード.length, 0);
+if (!IS_CARESAPO) {
+  console.log(`\n  記号の優先で選んだ行が ID 最大の行と違う TAIS: ${R.diffFromIdMax.length} (うち価格も違う ${R.diffFromIdMax.filter((x) => x.価格が違う).length})`);
+  for (const x of R.diffFromIdMax.slice(0, Number(process.env.SHOW_DIFF ?? 10))) console.log(`      - ${JSON.stringify(x)}`);
+}
 console.log(`\n  P3 の内訳: 事業所の方が高い ${R.P3.filter((x) => x.差 > 0).length} / 安い ${R.P3.filter((x) => x.差 < 0).length}`);
 console.log(`★ ${VALID_FROM.slice(0, 7)}〜${MONTH} に ${FO.area} の注文で貸与していた明細が使っていた品目 ${hitCodes.size} (明細 ${hit.length} 本) は P3 から外して J に回した → P3 で請求額が変わる明細は 0 本`);
 console.log(`\n書込みの見込み (承認後): equipment_master insert ${R.P1.length} 品目 / equipment_price_history insert ${p3rows} 行 (office_id=${FO.area}・valid_from ${VALID_FROM})。J・G は書かない`);
