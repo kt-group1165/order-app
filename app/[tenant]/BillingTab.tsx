@@ -375,9 +375,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   //   per_office の事業所なら自事業所の行だけ、shared なら per_office の事業所の行を外して使う。
   //   per_office の事業所が 0 なら素通し (= 今の動き)。読み込んだ直後に絞るので下流 (伝送・月遅れ判定・給付率) は全部この規則に従う
   const [perOfficeIds, setPerOfficeIds] = useState<string[]>([]);
+  const [perOfficeLoaded, setPerOfficeLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    loadPerOfficeOfficeIds().then((ids) => { if (!cancelled) setPerOfficeIds(ids); });
+    loadPerOfficeOfficeIds().then((ids) => { if (!cancelled) { setPerOfficeIds(ids); setPerOfficeLoaded(true); } });
     return () => { cancelled = true; };
   }, [tenantId]);
   const perOfficeMode = isPerOffice(currentOfficeId, perOfficeIds);
@@ -553,11 +554,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     let cancelled = false;
     // ★ 2026-11-13: per_office の事業所なら 自事業所の行だけ読む (benefitRawForMonth の rowsForOffice で残る行と同じ。
     //   ケアサポ 約 12,000 → 約 2,000 行)。per_office の判定 (offices 1 行) を先に聞く (認定の読込と同じ)
-    loadPerOfficeOfficeIds()
-      .then((ids) => loadBenefitCertificates(tenantId, { officeId: isPerOffice(currentOfficeId, ids) ? currentOfficeId : null }))
+    //   per_office の判定は 画面を開いたときに読み終えた perOfficeIds を使う (2026-11-13: 旧 = ここで offices をもう一度聞いてから 2 段目)
+    if (!perOfficeLoaded) return;
+    loadBenefitCertificates(tenantId, { officeId: isPerOffice(currentOfficeId, perOfficeIds) ? currentOfficeId : null })
       .then((r) => { if (!cancelled) { setBenefitCerts(r); setBenefitCertsOfficeKey(currentOfficeId ?? ""); } });
     return () => { cancelled = true; };
-  }, [tenantId, insuranceTabOpened, currentOfficeId]);
+  }, [tenantId, insuranceTabOpened, currentOfficeId, perOfficeLoaded, perOfficeIds]);
   /** その月の給付率 (computeFukuyoguAmounts の benefitRateRaw に渡す文字列)。警告は onWarn、負担割合証なしは noCert に名前を足す */
   const benefitRawForMonth = (client: BillingClient, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
     if (!benefitCerts?.available) return client.benefit_rate;

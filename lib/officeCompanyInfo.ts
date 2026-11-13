@@ -75,6 +75,8 @@ type OfficeRow = {
   name: string | null; business_number: string | null; address: string | null; postal_code: string | null;
   phone: string | null; fax: string | null; manager_name: string | null; company_id: string | null;
   doc_company_info?: Partial<CompanyInfoRow> | null;
+  /** 法人 (company_id の先)。PostgREST の埋め込みで事業所と同じ問い合わせで読む (2026-11-13: 旧 = 事業所の後に 2 回目) */
+  companies?: { name: string | null } | null;
 };
 
 export type ResolvedCompanyInfo = {
@@ -107,7 +109,7 @@ export async function getOfficeCompanyInfo(tenantId: string, officeId: string | 
     let o: OfficeRow | null = null;
     let cm = false;
     if (officeId) {
-      const sel = "name, business_number, address, postal_code, phone, fax, manager_name, company_id";
+      const sel = "name, business_number, address, postal_code, phone, fax, manager_name, company_id, companies(name)";
       const res = await supabase.from("offices").select(`${sel}, doc_company_info`).eq("id", officeId).maybeSingle();
       if (res.error) {
         // 列追加 (office_doc_company_info.sql) の前でも帳票が出るよう、列なしで読み直す
@@ -131,12 +133,8 @@ export async function getOfficeCompanyInfo(tenantId: string, officeId: string | 
   const fromTenant = emptyCompanyInfoRow();
   for (const k of COMPANY_INFO_KEYS) fromTenant[k] = nonEmpty((tenant as Record<string, string | null> | null)?.[k]) ?? "";
 
-  let companyName: string | undefined;
-  if (office?.company_id) {
-    const { data, error } = await supabase.from("companies").select("name").eq("id", office.company_id).maybeSingle();
-    if (error) console.warn("法人名の取得に失敗 (法人名は設定の値を使う):", error.message);
-    companyName = nonEmpty((data as { name: string | null } | null)?.name);
-  }
+  // 法人名は事業所と同じ問い合わせの埋め込みで読んだもの (読めなければ 従来どおり設定の値を使う)
+  const companyName: string | undefined = office?.company_id ? nonEmpty(office.companies?.name) : undefined;
 
   const base: CompanyInfoRow = { ...fromTenant };
   if (office) {

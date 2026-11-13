@@ -59,7 +59,7 @@ export async function loadKohiForMonth(
       .from("client_public_expenses")
       .select(select)
       .eq("tenant_id", tenantId)
-      .in("client_id", chunk));
+      .in("client_id", chunk), undefined, 8);
   let rows: KohiDbRow[];
   try {
     rows = await run(`${base}, self_pay_amount`);

@@ -9,11 +9,15 @@ import { mapWithConcurrency } from "./concurrency";
  * → 150 件ずつに分けて読み、結果をつなぐ。1 回の結果が 1000 行を超えうる場合は呼出側で order + range すること。
  */
 export const IN_CHUNK = 150;
+/** 同時本数の上限 (並行セッション・他画面で大量チャンクになっても DB を詰まらせない。memory feedback_db_load_parallel_sessions) */
+export const IN_CHUNK_MAX_CONCURRENCY = 8;
 
 export async function selectInChunks<T>(
   ids: readonly string[],
   run: (chunk: string[]) => PromiseLike<{ data: unknown; error: { message: string; code?: string } | null }>,
   chunkSize = IN_CHUNK,
+  /** 同時に投げる本数 (既定 4)。HTTP/2 で 1 本の接続に多重化されるので、往復の待ちを減らしたい読込は増やしてよい */
+  concurrency = 4,
 ): Promise<T[]> {
   // 空の id が混ざると .in() に "null" が渡って uuid の型エラー (22P02) で全体が落ちるので除く
   const unique = [...new Set(ids)].filter((id): id is string => typeof id === "string" && id !== "");
@@ -25,7 +29,7 @@ export async function selectInChunks<T>(
   const results = await mapWithConcurrency(chunks, async (chunk) => {
     const { data, error } = await run(chunk);
     return { rows: (data ?? []) as T[], error };
-  }, 4);
+  }, Math.max(1, Math.min(concurrency, IN_CHUNK_MAX_CONCURRENCY)));
   const firstErr = results.find((r) => r.error)?.error;
   if (firstErr) throw firstErr;
   return results.flatMap((r) => r.rows);
