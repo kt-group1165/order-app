@@ -106,7 +106,7 @@ console.log(`  金額: 7〜9 月 各 費用 13,000 → 12,850 / 保険 11,700 �
 
 if (!EXECUTE) { console.log("\nDRY RUN — --execute で実行"); process.exit(0); }
 
-const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+const stamp = new Date().toISOString().replace(/[:.]/g, "-"); // ミリ秒まで (日付だけだと同じ日の 2 回目で退避が上書きされる)
 const backupPath = join(HERE, `_backup_kmd_r12_ceiling_${stamp}.json`);
 const backup = { master, history, flags, added: { history: [], flags: [] } };
 writeFileSync(backupPath, JSON.stringify(backup, null, 2));

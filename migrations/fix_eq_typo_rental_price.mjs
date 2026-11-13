@@ -137,7 +137,7 @@ if (PRICE == null || !Number.isInteger(PRICE) || PRICE <= 0) {
 // 1. 退避
 const d = new Date();
 const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-const backupPath = join(__dirname, `_backup_eq_typo_rental_price_${ymd}.json`);
+const backupPath = join(__dirname, `_backup_eq_typo_rental_price_${ymd}_${d.toISOString().replace(/[:.]/g, "-")}.json`);
 writeFileSync(backupPath, JSON.stringify({ taken_at: d.toISOString(), equipment_master: master, equipment_price_history: hist }, null, 2) + "\n", "utf8");
 console.log(`\n退避: ${backupPath}`);
 
