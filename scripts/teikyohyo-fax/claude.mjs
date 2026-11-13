@@ -20,7 +20,7 @@
  *   conf: 1 = ローカル OCR と Claude が一致 / 0.5 = 片方だけ / 0 = 検算 (単位数×回数=サービス単位) が合わない
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
@@ -64,9 +64,10 @@ const SCHEMA_TEIKYO = obj({
   birth_raw: S("生年月日を書いてあるとおりに (例 昭和21年01月05日 / 昭●年9月24日)。元号は「明・大・昭・平」のうち ★丸で囲んである字 を選ぶ (印字の順番や近さで選ばない)"),
   birth: S("生年月日 YYYY-MM-DD (昭和=1925+年 で西暦に直す)。年・月・日のどれかが伏字なら空文字"),
   gender: S("性別: 丸の付いた方 (男 / 女)"),
+  cert_status: { type: "string", enum: ["認定済", "申請中", ""], description: "左上の「認定済・申請中」のうち ★丸 (楕円) で囲まれているほう。印字の順番や位置では選ばない。ホッチキス等で見えない・どちらにも丸が無いときは空文字 (推測しない)" },
   care_level: S("要介護状態区分: 丸の付いたもの (要支援1 / 要支援2 / 要介護1〜5 / 事業対象者)。変更後の欄に丸があればそちら"),
   cert_from: S("限度額適用期間の開始 YYYY-MM"), cert_to: S("限度額適用期間の終了 YYYY-MM"),
-  kyotaku_name: S("居宅介護支援事業者の事業所名 (「居宅介護支援事業者事業所名 担当者名」の欄。表の上段・右寄りにあることが多い。カタカナは一字ずつ正確に (例 ケイ・ティ・サービス))"), kyotaku_no: S("居宅の事業所番号 (書いてあれば)"), cm_name: S("担当者 (ケアマネ) 氏名 (同じ欄の 2 行目など)"),
+  kyotaku_name: S("居宅介護支援事業者の事業所名 (「居宅介護支援事業者事業所名 担当者名」の欄。表の上段・右寄りにあることが多い。その欄に印字された名前だけを一字ずつ正確に書く)"), kyotaku_no: S("居宅の事業所番号 (書いてあれば)"), cm_name: S("担当者 (ケアマネ) 氏名 (同じ欄の 2 行目など)"),
   rows: { type: "array", description: "下の表の サービス内容 が書いてある行 (空行は入れない)", items: obj({ service: S("サービス内容"), office: S("サービス事業者事業所名"), equipment: S("用具名称・TAIS (書いてあれば)"), planned_count: N("予定の合計回数") }) },
 });
 const SCHEMA_BEPPYO = obj({
@@ -78,6 +79,14 @@ const SCHEMA_BEPPYO = obj({
     office: S("事業所名"), office_no: S("事業所番号 (10 桁)"), service_name: S("サービス内容/種類"), service_code: S("サービスコード (6 桁。A6 などの英数字も)"),
     tais: S("用具名称・TAIS"), units: N("単位数 (この欄が空欄なら空文字。0 にしない。サービス単位数の欄だけにカッコ付きで書いてある様式がある)"), discount_pct: N("割引後 率%"), units_after: N("割引後 単位数"), count: N("回数"),
     service_units: S("サービス単位/金額 (括弧付きならそのまま (1370) と書く)"), kyufu_units: N("給付管理単位数"),
+    // 負担割合の照合用 (2026-11-13)。福祉用具の合計行 (例「予) 福祉用具合計」) の右側に印字されている。合計行が 2 段なら 2 段目は公費
+    // ★ 列の並び (左→右): … 区分支給限度基準内単位数 / 単位数単価 / 費用総額(保険/事業対象分) / 給付率(%) / 保険/事業費請求額 / 定額利用者負担単価金額 / 利用者負担(保険/事業対象分) / 利用者負担(全額負担分)
+    unit_price: N("単位数単価 (例 10.0 / 10.45)。合計行の右側の 1 つめの数字"),
+    total_cost: N("費用総額 (保険/事業対象分)。単位数単価のすぐ右の列 (区分支給限度基準内単位数 × 単位数単価 くらいの大きい金額)"),
+    benefit_rate: N("給付率 (%)。費用総額のすぐ右の列 (例 90 / 80 / 70)。2 段に分かれていれば 1 段目"),
+    kohi_rate: N("公費の給付率 (%)。給付率の欄が 2 段のときの 2 段目 (生保など)。無ければ空文字"),
+    insurance_claim: N("保険/事業費請求額。給付率のすぐ右の列"),
+    user_burden: N("利用者負担 (保険/事業対象分)。右から 2 つめの列 (費用総額 − 請求額 くらいの小さい金額)"),
   }) },
 });
 // ★ 伏字: 個人情報保護で ● に置き換えた文字がある (氏名・番号・生年月日の一部)。推測で埋めさせない (照合側は ● をワイルドカードとして扱う)
@@ -88,7 +97,7 @@ const PROMPT = {
 };
 
 /** 空文字 → null / 数値の欄 → number */
-const NUM_KEYS = new Set(["planned_count", "units", "discount_pct", "units_after", "count", "kyufu_units"]);
+const NUM_KEYS = new Set(["planned_count", "units", "discount_pct", "units_after", "count", "kyufu_units", "benefit_rate", "kohi_rate", "unit_price", "user_burden", "total_cost", "insurance_claim"]);
 function normalize(v, k) {
   if (Array.isArray(v)) return v.map((x) => normalize(x));
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([kk, vv]) => [kk, normalize(vv, kk)]));
@@ -105,6 +114,26 @@ const CARESAPO_BN = "1272400050";
 export const CONST_AGE = { min: 40, max: 110 };
 const isCaresapo = (r) => dig(r.office_no).endsWith(CARESAPO_BN.slice(-7)) || /サポート千葉|ケア.?サポ/.test(r.office ?? "");
 const dig = (s) => String(s ?? "").normalize("NFKC").replace(/[^0-9]/g, "");
+/**
+ * 給付率の欄が 2 段 (1 段目 = 保険 90 / 2 段目 = 公費 10。生保の新垣 良江 p23) の別表で、2 段目を別の行として返してきたら
+ * 1 つ前の行の kohi_rate / kohi_claim に寄せる。2 段目の行 = サービス名・コード・事業所が空で 給付率だけある行
+ */
+function mergeKohiRows(rows) {
+  const out = [];
+  for (const r of rows) {
+    const prev = out.at(-1);
+    const onlyRate = !r.service_name && !r.service_code && !r.office && !r.office_no && r.benefit_rate != null && r.total_cost == null;
+    if (onlyRate && prev && prev.benefit_rate != null && prev.kohi_rate == null) {
+      prev.kohi_rate = r.benefit_rate;
+      prev.kohi_claim = r.insurance_claim ?? null;
+      if (prev.user_burden == null) prev.user_burden = r.user_burden ?? null;
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 /** 読み直しが要るか (Sonnet に回す理由)。空配列なら OK */
 function problems(kind, d) {
   const p = [];
@@ -127,6 +156,12 @@ function problems(kind, d) {
       }
     }
     if (!(d.rows ?? []).length) p.push("行なし");
+    // 負担割合の欄の検算: 費用総額 = 請求額 + 利用者負担 (公費が無いとき)。列の取り違え (費用総額 ↔ 利用者負担) を見つける
+    for (const r of d.rows ?? []) {
+      if (r.total_cost == null || r.user_burden == null) continue;
+      if (r.user_burden > r.total_cost) p.push(`負担 ${r.service_name}: 利用者負担 ${r.user_burden} > 費用総額 ${r.total_cost} (列の取り違え)`);
+      else if (r.insurance_claim != null && r.kohi_rate == null && Math.abs(r.total_cost - r.insurance_claim - r.user_burden) > 2) p.push(`負担 ${r.service_name}: 費用総額 ${r.total_cost} ≠ 請求額 ${r.insurance_claim} + 負担 ${r.user_burden}`);
+    }
   }
   return p;
 }
@@ -192,7 +227,10 @@ async function main() {
     }
     if (d) {
       rec.fax_seq = d.fax_seq ?? null;
-      if (kind === "beppyo") for (const r of d.rows ?? []) if (r.units === 0) r.units = null; // 空欄を 0 と読んだもの (いわい型の別表)
+      if (kind === "beppyo") {
+        for (const r of d.rows ?? []) if (r.units === 0) r.units = null; // 空欄を 0 と読んだもの (いわい型の別表)
+        d.rows = mergeKohiRows(d.rows ?? []);
+      }
       if (kind === "teikyo" && why.some((w) => w.startsWith("生年月日"))) { d.birth_rejected = d.birth; d.birth = null; } // 最後まで年齢が合わない生年月日は使わない
       const body = { ...d };
       delete body.fax_seq;
@@ -216,7 +254,16 @@ async function main() {
   }
   const perPage = sent ? total / sent : 0;
   const summary = { sent, usd: Math.round(total * 1e6) / 1e6, jpy: Math.round(total * USD_JPY * 100) / 100, per_page_usd: Math.round(perPage * 1e6) / 1e6, price: PRICE, usd_jpy: USD_JPY };
-  writeFileSync(join(resolve(OUT), "claude.json"), JSON.stringify({ pdf: S1.pdf, summary, pages: out }, null, 1));
+  // --pages で一部だけ読み直したときは、前回の claude.json のほかのページを残してそのページだけ差し替える
+  let pagesOut = out;
+  const prevPath = join(resolve(OUT), "claude.json");
+  if (PAGES && existsSync(prevPath)) {
+    const prev = JSON.parse(readFileSync(prevPath, "utf8"));
+    const mine = new Map(out.map((x) => [x.page, x]));
+    pagesOut = [...prev.pages.filter((x) => !mine.has(x.page)), ...out].sort((a, b) => a.page - b.page);
+    console.log(`  (--pages: 前回の claude.json の ${prev.pages.length - out.filter((x) => prev.pages.some((y) => y.page === x.page)).length} ページはそのまま残した)`);
+  }
+  writeFileSync(prevPath, JSON.stringify({ pdf: S1.pdf, summary, pages: pagesOut }, null, 1));
   console.log(`\n══ 費用 ══\n  送ったページ ${sent} / 合計 $${summary.usd} (約 ${summary.jpy} 円・${USD_JPY}円/$ 換算) / 1 ページ平均 $${summary.per_page_usd}`);
   console.log(`  → 月 1,000 ページなら 約 ${Math.round(perPage * 1000 * USD_JPY)} 円の見込み\n→ ${join(resolve(OUT), "claude.json")}`);
 }
