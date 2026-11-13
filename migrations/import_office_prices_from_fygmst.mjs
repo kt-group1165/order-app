@@ -314,6 +314,8 @@ for (const [tais, rows] of byTais) {
   const stillOld = [...oldUsers].filter(([n]) => !switchers.some(([m]) => m === n));
   const fresh = otherRows.reduce((a, r) => a + freshOfRow(r), 0);
   const unknownSwitch = (why) => {
+    // 値上げは書かない (2026-11-14 user: 了解は「値下げなので 古い価格の人を移しても過大にならない」が前提。値上げは別に確認する)
+    if (cur.units > olds[0]) return jOf(tais, name, `改定月が分からない・値上げ (${olds[0] * 10}→${cur.units * 10}) → 12 月から今借りている人の請求を上げることになるので書かない (user 確認待ち)`, base);
     const nt = `改定月が分からない (${why}) → ${ymAdd(SWITCH_UNKNOWN, -1)} まで古い価格・${SWITCH_UNKNOWN} から今の価格 (2026-11-14 user 決定)`;
     R.hist.push({ TAIS: tais, 名前: name, ...base, 付け替えた月: SWITCH_UNKNOWN, 移った人: switchers.length, 備考: nt });
     place(tais, name, cur.cat, [{ from: vfYm, price: olds[0] * 10 }, { from: SWITCH_UNKNOWN, price: cur.units * 10 }], nt);
