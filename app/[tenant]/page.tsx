@@ -1272,7 +1272,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                                               {equipCategory(item.product_code)}
                                             </span>
                                           )}
-                                          <span className="truncate">{equipName(item.product_code)}</span>
+                                          <span className="truncate" title={equipName(item.product_code) ?? ""}>{(equipName(item.product_code) ?? "").normalize("NFKC") /* 半角カナを全角にそろえて表示 */}</span>
                                         </div>
                                       </td>
                                       {/* コード */}
@@ -1284,7 +1284,7 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                                         {item.rental_price ? `¥${item.rental_price.toLocaleString()}/月` : ""}
                                       </td>
                                       {/* 納品日・開始・終了日（未保存分も仮表示） */}
-                                      <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">
+                                      <td className="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap w-[12rem] overflow-hidden text-ellipsis">
                                         {(pending?.newStatus === "delivered" ? displayDate : item.delivered_at) && (
                                           <span className={`mr-2 ${pending?.newStatus === "delivered" ? "text-amber-600" : ""}`}>
                                             納品: {pending?.newStatus === "delivered" ? displayDate : item.delivered_at}
@@ -1302,7 +1302,8 @@ function OrdersTab({ tenantId, currentOfficeId, officeViewAll, onDirtyChange, on
                                         )}
                                       </td>
                                       {/* アクションボタン（未保存中は取消ボタンのみ） */}
-                                      <td className="py-2 pr-3 whitespace-nowrap">
+                                      {/* 2026-11-13: 幅指定が無く table-fixed で等分され、3 つめのボタン (→ キャンセル 等) が切れていた */}
+                                      <td className="py-2 pr-3 whitespace-nowrap w-[19rem]">
                                         {pending ? (
                                           <button
                                             onClick={() => setPendingChanges((prev) => { const n = new Map(prev); n.delete(item.id); return n; })}
