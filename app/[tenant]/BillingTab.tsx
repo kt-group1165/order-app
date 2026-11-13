@@ -343,6 +343,11 @@ function MonthlyInfoTab({
 export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionGrant }: { tenantId: string; currentOfficeId: string | null; onOpenExceptionGrant?: (clientId: string, restrictionGroup: string) => void }) {
   // サブタブ: 月次情報 / 介護請求 / 利用請求 / 売上帳票
   const [subTab, setSubTab] = useState<BillingSubTab>("monthly");
+  // ★ 2026-11-13 高速化: 介護請求サブタブでだけ使う読込 (会社情報・負担割合証・例外給付・CM 指示・公費の扱い・画面用の公費) は
+  //   そのサブタブを一度開いてから読む (初期表示の 月次情報 では使わない)。一度開いたら以後は従来どおり月・事業所の切替で読み直す。
+  //   伝送 (CSV 出力・返戻過誤) は これらが読み終わるまで押せない (densouInputsReady)
+  const [insuranceTabOpened, setInsuranceTabOpened] = useState(false);
+  const changeSubTab = (id: BillingSubTab) => { if (id === "insurance") setInsuranceTabOpened(true); setSubTab(id); };
   const [clients, setClients] = useState<Client[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
@@ -385,12 +390,13 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   // 請求書・領収書の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
   const [companyInfoForDoc, setCompanyInfoForDoc] = useState<CompanyInfo>(COMPANY_INFO_DEFAULTS);
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     getOfficeCompanyInfo(tenantId, currentOfficeId)
       .then((r) => { if (!cancelled) setCompanyInfoForDoc(r.info); })
       .catch((e) => console.error("会社情報の取得に失敗:", e instanceof Error ? e.message : e));
     return () => { cancelled = true; };
-  }, [tenantId, currentOfficeId]);
+  }, [tenantId, currentOfficeId, insuranceTabOpened]);
 
   useEffect(() => {
     // BillingTab は currentOfficeId 単独 (officeViewAll 概念無し)
@@ -515,10 +521,11 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     ? "貸与の休止期間をまだ読み込んでいません — 休止を除かずに日数・半月按分を計算しました (少し待ってから作り直してください)"
     : pauses.available ? null : pauses.message;
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     loadBenefitCertificates(tenantId).then((r) => { if (!cancelled) setBenefitCerts(r); });
     return () => { cancelled = true; };
-  }, [tenantId]);
+  }, [tenantId, insuranceTabOpened]);
   /** その月の給付率 (computeFukuyoguAmounts の benefitRateRaw に渡す文字列)。警告は onWarn、負担割合証なしは noCert に名前を足す */
   const benefitRawForMonth = (client: Client, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
     if (!benefitCerts?.available) return client.benefit_rate;
@@ -564,6 +571,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [cmUnitsNotice, setCmUnitsNotice] = useState<string | null>(null);
   const [cmUnitsAvailable, setCmUnitsAvailable] = useState(true);
   const [cmSavingId, setCmSavingId] = useState<string | null>(null);
+  /** CM 指示を読み終えた 月|事業所 (読込中・前の月の値のまま伝送しないため) */
+  const [cmLoadedKey, setCmLoadedKey] = useState<string | null>(null);
   // ★ 月途中の公費 (生保) の扱い (2026-11-09): 公費が月の途中で始まる/終わる利用者の行に
   //   「全部利用者負担 / 日割り / 半月」の選択を出す (ケアマネの方針で 利用者ごと・月ごと)。未選択は既定 + 警告。
   //   保存は選んだとき即時 (upsert)。表が未適用なら選択欄を無効にし、理由を画面に出す。
@@ -571,6 +580,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [kohiModesAvailable, setKohiModesAvailable] = useState(true);
   const [kohiModesNotice, setKohiModesNotice] = useState<string | null>(null);
   const [kohiModeSavingId, setKohiModeSavingId] = useState<string | null>(null);
+  /** 公費の扱いを読み終えた 月|事業所 */
+  const [kohiModesLoadedKey, setKohiModesLoadedKey] = useState<string | null>(null);
   const [screenKohi, setScreenKohi] = useState<{ month: string; byClient: Map<string, FukuyoguKohi> } | null>(null);
   const [screenKohiNotice, setScreenKohiNotice] = useState<string | null>(null);
   // ★ 軽度者 例外給付の印 (2026-11-09): 利用者行に 記録なし/切れ = 赤・30日以内に期限/期間要なのに終了日空 = 橙。
@@ -580,6 +591,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [exRules, setExRules] = useState<ExceptionInsurerRule[]>([]);
   const [exNotice, setExNotice] = useState<string | null>(null);
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     (async () => {
       const notices: string[] = [];
@@ -600,7 +612,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (!cancelled) { setExRules(r.rules); setExNotice(notices.length > 0 ? notices.join(" / ") : null); }
     })();
     return () => { cancelled = true; };
-  }, [tenantId]);
+  }, [tenantId, insuranceTabOpened]);
 
   // 月遅れ自動判定：
   //   ① 当月の認定の certification_status が「申請中」の利用者
@@ -723,6 +735,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   // CM 指示単位数を読む (事業所を選んでいればその事業所の値)
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     getCmUnits(tenantId, billingMonth, currentOfficeId).then((r) => {
       if (cancelled) return;
@@ -730,9 +743,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       setCmEntered(r.entered);
       setCmUnitsAvailable(r.available);
       setCmUnitsNotice(r.message);
+      setCmLoadedKey(`${billingMonth}|${currentOfficeId ?? ""}`);
     });
     return () => { cancelled = true; };
-  }, [tenantId, billingMonth, currentOfficeId]);
+  }, [tenantId, billingMonth, currentOfficeId, insuranceTabOpened]);
 
   // CM 指示単位数の入力を保存 (空欄 = 削除 = 実績で請求に戻す)。失敗は必ず画面に出す
   const handleCmUnitsCommit = async (clientId: string, raw: string) => {
@@ -770,19 +784,22 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   // 月途中の公費の扱いを読む (事業所を選んでいればその事業所の値)
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     getKohiMonthModes(tenantId, billingMonth, currentOfficeId).then((r) => {
       if (cancelled) return;
       setKohiModes(r.byClient);
       setKohiModesAvailable(r.available);
       setKohiModesNotice(r.message);
+      setKohiModesLoadedKey(`${billingMonth}|${currentOfficeId ?? ""}`);
     });
     return () => { cancelled = true; };
-  }, [tenantId, billingMonth, currentOfficeId]);
+  }, [tenantId, billingMonth, currentOfficeId, insuranceTabOpened]);
 
   // 画面表示用に 当月の公費を読む (月途中の判定だけに使う。伝送は出力時に読み直す)
   const screenClientIdsKey = useMemo(() => clientGroups.map((g) => g.client.id).sort().join(","), [clientGroups]);
   useEffect(() => {
+    if (!insuranceTabOpened) return;
     let cancelled = false;
     const ids = screenClientIdsKey ? screenClientIdsKey.split(",") : [];
     if (ids.length === 0) return;
@@ -803,7 +820,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         }
       });
     return () => { cancelled = true; };
-  }, [tenantId, billingMonth, screenClientIdsKey, currentOfficeId, perOfficeIds]);
+  }, [tenantId, billingMonth, screenClientIdsKey, currentOfficeId, perOfficeIds, insuranceTabOpened]);
 
   // 公費が当月の貸与期間の一部だけの利用者 (= 「公費の扱い」を選ぶ必要がある人)
   const kohiPartialByClient = useMemo(() => {
@@ -983,7 +1000,18 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   };
 
   // 伝送データ生成 (国保連 正式インタフェース: 7111 請求書 + 7131 様式第二 / Shift_JIS)
+  /**
+   * 伝送に使う入力が読み終わっているか (2026-11-13)。読込中に押すと 負担割合証なし = clients の給付率 /
+   * CM 指示なし = 全員実績で請求 / 公費の扱い 未選択 = 既定 で黙って組んでしまうので、揃うまで押せなくする。
+   * (休止・日割り設定は 読めない/未適用 なら注意文つきで組む従来どおり。読込中 (null) のときだけ待つ)
+   */
+  const densouKey = `${billingMonth}|${currentOfficeId ?? ""}`;
+  const densouInputsReady = !dataLoading && benefitCerts !== null && cmLoadedKey === densouKey && kohiModesLoadedKey === densouKey
+    && pauses !== null && (prorations !== null || prorationError !== null);
+  const densouNotReadyAlert = () => alert("伝送に使うデータ (負担割合証・CM 指示・公費の扱い・休止・日割り設定) をまだ読み込んでいます。少し待ってからもう一度押してください");
+
   const generateTransferData = async () => {
+    if (!densouInputsReady) { densouNotReadyAlert(); return; }
     const [y, m] = billingMonth.split("-").map(Number);
     // 選択中の事業所の事業所番号を優先、なければテナントの番号にフォールバック
     const currentOffice = offices.find(o => o.id === currentOfficeId);
@@ -1391,6 +1419,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   // 返戻=補正して再請求 / 過誤=取下げ後の再請求。いずれも当該月の通常請求として出力する
   // (過誤の取下げ(取消)処理自体は国保連側の別手続き)。
   const generateRebillTransferData = async () => {
+    // 返戻過誤も 負担割合証 (benefitRawForMonth) を使う。CM 指示・公費の扱いは月ごとに読み直すが 足並みを揃えて同じ条件で待つ
+    if (!densouInputsReady) { densouNotReadyAlert(); return; }
     const currentOffice = offices.find((o) => o.id === currentOfficeId);
     const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
     const officeNumber = rawOfficeNumber.replace(/-/g, "");
@@ -1575,7 +1605,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const confirmLeave = () => !isDirty || window.confirm("保存されていない変更があります。破棄して移動しますか？");
   const guardedPrevMonth = () => { if (confirmLeave()) prevMonth(); };
   const guardedNextMonth = () => { if (confirmLeave()) nextMonth(); };
-  const guardedSetSubTab = (id: BillingSubTab) => { if (confirmLeave()) setSubTab(id); };
+  const guardedSetSubTab = (id: BillingSubTab) => { if (confirmLeave()) changeSubTab(id); };
 
   const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
   const [rentalGridClient, setRentalGridClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
@@ -1632,7 +1662,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   if (subTab === "sales") {
     return (
       <div className="flex flex-col h-full bg-white text-sm">
-        <BillingSubTabNav active={subTab} onChange={setSubTab} />
+        <BillingSubTabNav active={subTab} onChange={changeSubTab} />
         <SalesReportTab
           tenantId={tenantId}
           clients={clients}
@@ -1648,7 +1678,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   if (subTab === "monthly") {
     return (
       <div className="flex flex-col h-full bg-white text-sm">
-        <BillingSubTabNav active={subTab} onChange={setSubTab} />
+        <BillingSubTabNav active={subTab} onChange={changeSubTab} />
         <MonthlyInfoTab
           tenantId={tenantId}
           currentOfficeId={currentOfficeId}
@@ -1671,7 +1701,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   if (subTab === "user") {
     return (
       <div className="flex flex-col h-full bg-white text-sm">
-        <BillingSubTabNav active={subTab} onChange={setSubTab} />
+        <BillingSubTabNav active={subTab} onChange={changeSubTab} />
         <UserBillingTab
           tenantId={tenantId}
           currentOfficeId={currentOfficeId}
@@ -1734,8 +1764,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           >{savingFlags ? "保存中…" : isDirty ? "保存 *" : "保存済"}</button>
           <span className="text-amber-600 text-xs">※ 被保険者証情報は別途ほのぼので補完</span>
           {rebillByMonth.length > 0 && (
-            <button onClick={generateRebillTransferData}
-              title="返戻・過誤の対象をサービス提供年月ごとに 1 ファイルずつ出力"
+            <button onClick={generateRebillTransferData} disabled={!densouInputsReady}
+              title={densouInputsReady ? "返戻・過誤の対象をサービス提供年月ごとに 1 ファイルずつ出力" : "伝送に使うデータを読み込み中です"}
               className="border border-orange-500 rounded bg-orange-50 px-3 py-1 text-orange-700 font-semibold hover:bg-orange-100 flex items-center gap-1.5">
               <Download size={13} />返戻過誤 伝送({rebillByMonth.length}月分)
             </button>
@@ -1745,9 +1775,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             className="border border-teal-500 rounded bg-teal-50 px-3 py-1 text-teal-700 font-semibold hover:bg-teal-100 flex items-center gap-1.5">
             <Download size={13} />ケアプラン連携
           </button>
-          <button onClick={generateTransferData}
-            className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5">
-            <Download size={13} />CSV出力
+          <button onClick={generateTransferData} disabled={!densouInputsReady}
+            title={densouInputsReady ? undefined : "伝送に使うデータを読み込み中です"}
+            className="border border-indigo-500 rounded bg-indigo-500 px-3 py-1 text-white font-semibold hover:bg-indigo-600 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-wait">
+            {densouInputsReady ? <Download size={13} /> : <Loader2 size={13} className="animate-spin" />}CSV出力
           </button>
         </div>
       </div>

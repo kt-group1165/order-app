@@ -5,6 +5,7 @@ import { ChevronRight, ChevronLeft, Search, X, Plus, Loader2, Send, FileText, Tr
 import { supabase, Order, OrderItem, Equipment, Client, Supplier, Member, EquipmentPriceHistory, ClientDocument, ClientInsuranceRecord, ClientRentalHistory, ClientHospitalization } from "@/lib/supabase";
 import { getClientDocuments, deleteClientDocument } from "@/lib/documents";
 import { mapWithConcurrency } from "@/lib/concurrency";
+import { cached, invalidateCache } from "@/lib/cache";
 import { monthEndYmd, normalizeYmd, todayYmd } from "@/lib/date-jst";
 import { warekiLabel, ageAt } from "@/lib/renovationDocs";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
@@ -164,7 +165,9 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           // ⚠ 入院データは **単位数計算 (半月ルール・入院控除) に流れる**ので
           //   1000 行で切れると請求額が狂う。同ファイル内の請求タブ側は
           //   fetchAllPaged を使っており、ここだけ素の select だった (2026-08-31 是正)。
-          (async () => {
+          // ★ 2026-11-13: 利用者管理 ⇔ 利用状況 の切替 (ClientsTab を作り直す) で読み直さないよう 60 秒キャッシュ
+          //   (他の clients / order_items 等と同じ lib/cache.ts。入院を書いたら invalidateCache("client_hospitalizations:"))
+          cached(`client_hospitalizations:${tenantId}`, async () => {
             const PAGE = 1000;
             const all: ClientHospitalization[] = [];
             for (let from = 0; ; from += PAGE) {
@@ -180,15 +183,16 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
               if (!data || data.length < PAGE) break;
             }
             return all;
-          })(),
+          }),
           getTenantById(tenantId),
           // 自事業所の割当だけ読む (2026-11-13 高速化: 旧 = テナント全件 約 9,700 行を読んでから office で絞っていた。
           //   ケアサポは約 1,450 行。下の clientOfficeMap と同じ集合になる)
+          //   キーは client_office_assignments: で始める (lib/offices.ts の割当の書込みが invalidateCache で捨てる)
           currentOfficeId
-            ? selectAllPagedParallel<{ client_id: string }>(
+            ? cached(`client_office_assignments:office:${tenantId}:${currentOfficeId}`, () => selectAllPagedParallel<{ client_id: string }>(
                 () => supabase.from("client_office_assignments").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("office_id", currentOfficeId),
                 (from, to) => supabase.from("client_office_assignments").select("client_id").eq("tenant_id", tenantId).eq("office_id", currentOfficeId).order("id").range(from, to),
-              )
+              ))
             : Promise.resolve([] as { client_id: string }[]),
         ]);
         setClients(c);
@@ -352,9 +356,18 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
   //   ⚠ 表 client_benefit_certificates が読めないときは印を出さない (全員「なし」に見えるため)。理由はボタンの title に出す。
   const [benefitCertsLoad, setBenefitCertsLoad] = useState<BenefitCertsLoad | null>(null);
   const [futanFilter, setFutanFilter] = useState(false);
+  // ★ 2026-11-13: 画面を開いた最初の 1 回は 60 秒キャッシュを使う (利用者管理 ⇔ 利用状況 の切替で 約 12,000 行を読み直さない)。
+  //   詳細から一覧に戻ったときは 従来どおり必ず読み直す (キャッシュを捨ててから読む)。読めなかった結果はキャッシュしない
+  const benefitFirstRun = useRef(true);
   useEffect(() => {
     let cancelled = false;
-    loadBenefitCertificates(tenantId).then((r) => { if (!cancelled) setBenefitCertsLoad(r); });
+    const key = `benefit_certs:${tenantId}`;
+    const load = async () => { const r = await loadBenefitCertificates(tenantId); if (!r.available) throw r; return r; };
+    if (!benefitFirstRun.current) invalidateCache(key);
+    benefitFirstRun.current = false;
+    cached(key, load)
+      .catch((r: unknown) => r as BenefitCertsLoad)
+      .then((r) => { if (!cancelled) setBenefitCertsLoad(r); });
     return () => { cancelled = true; };
   // 詳細から一覧に戻ったときにも読み直す
   }, [tenantId, exceptionListVisible]);
@@ -555,6 +568,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
         console.error("事業所への紐付けに失敗:", asgErr.message);
         alert(`利用者は登録しましたが、自事業所への紐付けに失敗しました (一覧の「自事業所」に出ません): ${asgErr.message}`);
       } else {
+        invalidateCache("client_office_assignments:");
         setClientOfficeMap((prev) => new Set([...prev, inserted.id]));
       }
     }
@@ -583,6 +597,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
         console.error("事業所への紐付けに失敗:", asgErr.message);
         alert(`本登録は済みましたが、自事業所への紐付けに失敗しました (一覧の「自事業所」に出ません): ${asgErr.message}`);
       } else {
+        invalidateCache("client_office_assignments:");
         setClientOfficeMap((prev) => new Set([...prev, provisionalId]));
       }
     }
@@ -1339,6 +1354,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           const { error: asgErr } = await supabase.from("client_office_assignments").upsert(assignmentRows, {
             onConflict: "tenant_id,client_id,office_id",
           });
+          invalidateCache("client_office_assignments:");
           if (asgErr) {
             console.error("事業所への紐付けに失敗:", asgErr.message);
             errors.push({ name: "(事業所への紐付け)", user_number: "", message: `${allIds.length} 名を自事業所に紐付けられませんでした: ${asgErr.message}` });
@@ -1499,6 +1515,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           .update({ discharge_date: hospDateInput })
           .eq("id", currentHospId);
         if (!error) {
+          invalidateCache("client_hospitalizations:");
           setHospitalizations(prev => prev.map(h => h.id === currentHospId ? { ...h, discharge_date: hospDateInput } : h));
         }
       } else {
@@ -1506,6 +1523,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           .insert({ tenant_id: tenantId, client_id: client.id, admission_date: hospDateInput })
           .select().single();
         if (!error && data) {
+          invalidateCache("client_hospitalizations:");
           setHospitalizations(prev => [data as ClientHospitalization, ...prev]);
         }
       }
