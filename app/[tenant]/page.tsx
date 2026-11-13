@@ -225,7 +225,9 @@ export default function TenantPage({
   useEffect(() => {
     let active = true;
     getOffices(tenantId)
-      .then((ofs) => { if (active) setOfficeList(ofs.map((o) => ({ id: o.id, name: o.name }))); })
+      // 2026-11-14 user: 選べるのは 福祉用具の 5 事業所 (事業所番号がある事業所) だけ。
+      //   配送ルート (千葉(上り)・市原･袖ケ浦･木更津(下り)・その他) は事業所番号が無いので出さない
+      .then((ofs) => { if (active) setOfficeList(ofs.filter((o) => (o.business_number ?? "").trim() !== "").map((o) => ({ id: o.id, name: o.name }))); })
       .catch((e) => console.error("getOffices に失敗:", e));
     return () => { active = false; };
   }, [tenantId]);
