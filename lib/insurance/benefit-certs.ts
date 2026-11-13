@@ -27,11 +27,17 @@ export type BenefitCertsLoad = {
 
 const COLS = "id, client_id, kind, benefit_rate, valid_from, valid_to, office_id, restriction, insurer_number, insured_number, source";
 
-export async function loadBenefitCertificates(tenantId: string): Promise<BenefitCertsLoad> {
+/**
+ * @param opts.officeId 指定すると office_id = その事業所 の行だけ読む (2026-11-13 高速化)。
+ *   per_office の事業所の画面だけで使うこと (rowsForOffice の per_office 分岐で残る行と同じ)。shared では渡さない
+ */
+export async function loadBenefitCertificates(tenantId: string, opts: { officeId?: string | null } = {}): Promise<BenefitCertsLoad> {
   const empty = new Map<string, BenefitCertDbRow[]>();
+  const own = opts.officeId ?? null;
   // 表の有無は通常の select で聞く (head: true だと 404 の code が取れず「未作成」と見分けられない)。
   // 2026-11-13: 同じ問い合わせで件数も聞く (旧: 有無 → 件数 → ページ の 3 段 → 2 段)
-  const probe = await supabase.from("client_benefit_certificates").select("id", { count: "exact" }).eq("tenant_id", tenantId).limit(1);
+  const probeQ = supabase.from("client_benefit_certificates").select("id", { count: "exact" }).eq("tenant_id", tenantId);
+  const probe = await (own ? probeQ.eq("office_id", own) : probeQ).limit(1);
   if (probe.error) {
     const missing = probe.error.code === "42P01" || probe.error.code === "PGRST205";
     console.error("負担割合証 (client_benefit_certificates) の取得失敗:", probe.error.message);
@@ -46,7 +52,10 @@ export async function loadBenefitCertificates(tenantId: string): Promise<Benefit
   try {
     const rows = await selectAllPagedParallel<BenefitCertDbRow>(
       async () => ({ count: probe.count, error: null }),
-      (from, to) => supabase.from("client_benefit_certificates").select(COLS).eq("tenant_id", tenantId).order("id").range(from, to),
+      (from, to) => {
+        const q = supabase.from("client_benefit_certificates").select(COLS).eq("tenant_id", tenantId);
+        return (own ? q.eq("office_id", own) : q).order("id").range(from, to);
+      },
     );
     const byClient = new Map<string, BenefitCertDbRow[]>();
     for (const r of rows) {

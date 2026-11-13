@@ -464,6 +464,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   //   規則は lib/insurance/cert-month.ts (kaigo-app と同じ中身の純関数)。
   //   表が未適用・読めないときは従来どおり clients.benefit_rate で計算し、理由を 1 行だけ警告に出す。
   const [benefitCerts, setBenefitCerts] = useState<BenefitCertsLoad | null>(null);
+  /** 負担割合証を読み終えた事業所 (per_office は事業所ごとに行が違う。事業所を切り替えた直後に前の事業所の行で伝送しないため) */
+  const [benefitCertsOfficeKey, setBenefitCertsOfficeKey] = useState<string | null>(null);
   // ★ 貸与の休止期間 (2026-11-09 FY-PZ): 休止日は 明細 項10 日数 と 半月按分の判定 から除く。
   //   表 (order_item_pauses) が未適用・読めないときは 休止なし で計算し、伝送の警告に理由を 1 行出す (console.error は lib 側)。
   const [pauses, setPauses] = useState<PausesLoad | null>(null);
@@ -525,9 +527,13 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   useEffect(() => {
     if (!insuranceTabOpened) return;
     let cancelled = false;
-    loadBenefitCertificates(tenantId).then((r) => { if (!cancelled) setBenefitCerts(r); });
+    // ★ 2026-11-13: per_office の事業所なら 自事業所の行だけ読む (benefitRawForMonth の rowsForOffice で残る行と同じ。
+    //   ケアサポ 約 12,000 → 約 2,000 行)。per_office の判定 (offices 1 行) を先に聞く (認定の読込と同じ)
+    loadPerOfficeOfficeIds()
+      .then((ids) => loadBenefitCertificates(tenantId, { officeId: isPerOffice(currentOfficeId, ids) ? currentOfficeId : null }))
+      .then((r) => { if (!cancelled) { setBenefitCerts(r); setBenefitCertsOfficeKey(currentOfficeId ?? ""); } });
     return () => { cancelled = true; };
-  }, [tenantId, insuranceTabOpened]);
+  }, [tenantId, insuranceTabOpened, currentOfficeId]);
   /** その月の給付率 (computeFukuyoguAmounts の benefitRateRaw に渡す文字列)。警告は onWarn、負担割合証なしは noCert に名前を足す */
   const benefitRawForMonth = (client: BillingClient, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
     if (!benefitCerts?.available) return client.benefit_rate;
@@ -1008,7 +1014,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
    * (休止・日割り設定は 読めない/未適用 なら注意文つきで組む従来どおり。読込中 (null) のときだけ待つ)
    */
   const densouKey = `${billingMonth}|${currentOfficeId ?? ""}`;
-  const densouInputsReady = !dataLoading && benefitCerts !== null && cmLoadedKey === densouKey && kohiModesLoadedKey === densouKey
+  const densouInputsReady = !dataLoading && benefitCerts !== null && benefitCertsOfficeKey === (currentOfficeId ?? "") && cmLoadedKey === densouKey && kohiModesLoadedKey === densouKey
     && pauses !== null && (prorations !== null || prorationError !== null);
   const densouNotReadyAlert = () => alert("伝送に使うデータ (負担割合証・CM 指示・公費の扱い・休止・日割り設定) をまだ読み込んでいます。少し待ってからもう一度押してください");
 
