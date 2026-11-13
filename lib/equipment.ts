@@ -20,13 +20,61 @@ export async function getEquipment(tenantId: string, bypassCache = false): Promi
       if (data.length < pageSize) break;
       from += pageSize;
     }
-    return all;
+    return inheritFromParent(all);
   };
   if (bypassCache) {
     invalidateCache(`equipment:${tenantId}`);
     return fetcher();
   }
   return cached(`equipment:${tenantId}`, fetcher);
+}
+
+/**
+ * サイズ・型 (子: parent_product_code あり) に 親の TAIS・種目・価格を写す (2026-11-13)。
+ *   価格と請求は品目 (親) が持つ。子の行の rental_price / tais_code 等は使わない (= 1 TAIS に 1 価格)。
+ *   画面・請求は今までどおり子の product_code で Equipment を引けば 親の値が出る。
+ *   親が見つからない子はそのまま返し、console.error で知らせる (黙って子の値で請求しない)。
+ */
+export function inheritFromParent(all: Equipment[]): Equipment[] {
+  if (!all.some((e) => e.parent_product_code)) return all;
+  const byCode = new Map(all.map((e) => [e.product_code, e]));
+  return all.map((e) => {
+    if (!e.parent_product_code) return e;
+    const p = byCode.get(e.parent_product_code);
+    if (!p) {
+      console.error(`用具マスタ: ${e.product_code} の親 ${e.parent_product_code} が見つかりません`);
+      return e;
+    }
+    return {
+      ...e,
+      tais_code: p.tais_code,
+      category: p.category,
+      kind: p.kind,
+      rental_price: p.rental_price,
+      national_avg_price: p.national_avg_price,
+      price_limit: p.price_limit,
+    };
+  });
+}
+
+/** 子の product_code → 親の product_code (親を持たない品目は含まない) */
+async function fetchParentMap(tenantId: string, codes: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (let i = 0; i < codes.length; i += 150) {
+    const { data, error } = await supabase
+      .from("equipment_master")
+      .select("product_code,parent_product_code")
+      .eq("tenant_id", tenantId)
+      .in("product_code", codes.slice(i, i + 150))
+      .not("parent_product_code", "is", null);
+    if (error) {
+      // 列がまだ無い DB (equipment_master_variants.sql 未適用) = 子は 1 つも無い
+      if (error.code === "42703" || /parent_product_code/.test(error.message)) return map;
+      throw error;
+    }
+    for (const r of data ?? []) if (r.parent_product_code) map.set(r.product_code, r.parent_product_code);
+  }
+  return map;
 }
 
 /** 既存用具を更新 */
@@ -814,8 +862,12 @@ export async function getPriceHistory(
   tenantId: string,
   productCodes: string[]
 ): Promise<EquipmentPriceHistory[]> {
-  const codes = [...new Set(productCodes)];
-  if (codes.length === 0) return [];
+  const asked = [...new Set(productCodes)];
+  if (asked.length === 0) return [];
+  // サイズ・型 (子) の価格は 親の行を使う (2026-11-13)。親の行を取り、子の product_code にも写して返す
+  // → getPriceForMonth(history, 子のコード, …) は今のままで 親の価格を返す
+  const parentOf = await fetchParentMap(tenantId, asked);
+  const codes = [...new Set([...asked, ...parentOf.values()])];
   const out: EquipmentPriceHistory[] = [];
   for (let i = 0; i < codes.length; i += 150) {
     const chunk = codes.slice(i, i + 150);
@@ -832,6 +884,17 @@ export async function getPriceHistory(
       out.push(...((data ?? []) as EquipmentPriceHistory[]));
       if (!data || data.length < 1000) break;
     }
+  }
+  if (parentOf.size) {
+    // 子の行は使わない (価格は親だけが持つ)。子のコードの行を捨て、親の行を子のコードで複製する
+    const children = new Set(parentOf.keys());
+    const own = out.filter((h) => !children.has(h.product_code));
+    const byParent = new Map<string, EquipmentPriceHistory[]>();
+    for (const h of own) (byParent.get(h.product_code) ?? byParent.set(h.product_code, []).get(h.product_code)!).push(h);
+    const aliased: EquipmentPriceHistory[] = [];
+    for (const [child, parent] of parentOf) for (const h of byParent.get(parent) ?? []) aliased.push({ ...h, product_code: child });
+    out.length = 0;
+    out.push(...own, ...aliased);
   }
   // 分割して取ったので 全体を valid_from 昇順 (同日は id) に並べ直す (以前の 1 回取得と同じ並び)
   return out.sort((a, b) => a.valid_from.localeCompare(b.valid_from) || String(a.id).localeCompare(String(b.id)));

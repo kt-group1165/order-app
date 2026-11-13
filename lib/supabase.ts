@@ -144,6 +144,15 @@ export type Equipment = {
   created_at: string;
   updated_at: string;
   sort_order: number | null;
+  // ── サイズ・型 (2026-11-13 migrations/equipment_master_variants.sql。列が無い古い DB では undefined) ──
+  // NULL = 品目 (親)。値あり = サイズ・型 (子) で、価格・TAIS・請求は親のもの (lib/equipment.ts getEquipment が写す)
+  parent_product_code?: string | null;
+  model_number?: string | null;
+  // {種類: 値} 例 {"幅":"91","長さ":"レギュラー","色":"ブルー"}
+  attributes?: Record<string, string> | null;
+  variant_label?: string | null;
+  // 品目 (親) で選べる属性と値 {種類: [値…]}。子は組み合わせを全部作らず、使ったものだけ作る
+  attribute_options?: Record<string, string[]> | null;
 };
 
 // 卸会社
