@@ -115,6 +115,10 @@ const UNTIL = opt("--until") ?? null;
 //   最新月に実績行がある利用者 → 最新月まで使う (その人の最新月は信用する)。
 //   最新月に実績行が 1 行も無い利用者 → 前の月の月末まで続く台を 継続扱いにし notes に PARTIAL_LAST_MARK。
 //   ⚠ 本当に前の月末で終わった台も 継続になる (過大請求の向き)。--until より狭いが 誤りの向きは同じ。基準値に焼かないこと。
+//   実績 (誉田 2026-11-14 batch bebffe89): 11 月に実績あり 80 名 / 無し 1,030 名 → 暫定で継続 1,001 名・3,963 台 (明細 3,703 件に印)。
+//   普通の月の終了率 (月末まで続く台が翌月 1 日に続かない割合) は 7→8 月 1.4% / 8→9 月 2.3% / 9→10 月 0.9%
+//   → 本当は 10/31 終了の台は ★ 36〜91 台 と見込む (品名表記の変化も「続かない」に数えるので上振れ側)。
+//   11 月の提供票が揃ったら --partial-last を外して回し直し、この見込みが当たっていたかを確かめる。
 const PARTIAL_LAST = argv.includes("--partial-last");
 if (PARTIAL_LAST && UNTIL) { console.error("--partial-last と --until は併用しない"); process.exit(1); }
 if (UNTIL && !/^\d{6}$/.test(UNTIL)) { console.error("--until は YYYYMM"); process.exit(1); }
