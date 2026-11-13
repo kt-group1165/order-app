@@ -48,7 +48,7 @@ import {
   type FukuyoguSeikyuRow, type FukuyoguDetailLine,
 } from "../lib/kokuho-densou/build";
 import { certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
-import { fukuyoguServiceStartDate } from "../lib/kokuho-densou/fukuyogu-period";
+import { fukuyoguServiceStartDate, fukuyoguServiceStopDate } from "../lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
 import { serviceClient, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
 
@@ -185,35 +185,8 @@ function compare(hono: ReturnType<typeof receipts>, mine: ReturnType<typeof rece
 }
 
 // ── 診断: 開始年月日・中止年月日を DB の貸与履歴から決めたら ほのぼのとどれだけ合うか ──
-//   (★ 請求画面は渡していない。order_items.rental_start_date が移行時の仮の日付のため。数字を残すための診断)
-const monthBounds = (ym: string) => { const [y, m] = ym.split("-").map(Number); const l = new Date(Date.UTC(y, m, 0)).getUTCDate(); return { first: `${ym}-01`, last: `${ym}-${String(l).padStart(2, "0")}` }; };
-/**
- * 基本 (01) 項21 開始年月日 / 項22 中止年月日 を利用者の貸与履歴から決める。
- *   開始 = その利用者の最初の貸与開始日が当月内なら その日 (月途中から増えた用具は開始にしない)
- *   中止 = 当月に請求する用具が全部 当月内に終わる (翌月に続く用具が無い) なら 最後の終了日
- * @param allRentals その利用者の 介護保険の貸与 全部 (過去月の終了分も含む。キャンセルは除く)
- * @param monthRentals 当月に請求する貸与
- */
-function derivePeriod(
-  allRentals: { rentalStart: string | null; rentalEnd: string | null }[],
-  monthRentals: { rentalStart: string | null; rentalEnd: string | null }[],
-  ym: string,
-): { startDate: string | null; stopDate: string | null } {
-  const { first, last } = monthBounds(ym);
-  const starts = allRentals.map((r) => r.rentalStart?.slice(0, 10)).filter((s): s is string => !!s).sort();
-  const firstStart = starts[0] ?? null;
-  const startDate = firstStart && firstStart >= first && firstStart <= last ? firstStart : null;
-  const ends = monthRentals.map((r) => r.rentalEnd?.slice(0, 10) ?? null);
-  const allEnd = ends.length > 0 && ends.every((e) => e != null && e >= first && e <= last);
-  // 当月の用具は終わっても、別の貸与が翌月以降に続く (月末に入れ替え等) なら中止ではない
-  const continues = allRentals.some((r) => {
-    const s = r.rentalStart?.slice(0, 10) ?? null;
-    const e = r.rentalEnd?.slice(0, 10) ?? null;
-    return s != null && s <= last && (e == null || e > last);
-  });
-  const stopDate = allEnd && !continues ? (ends as string[]).sort()[ends.length - 1] : null;
-  return { startDate, stopDate };
-}
+//   開始・中止とも lib/kokuho-densou/fukuyogu-period.ts の本物 (2026-11-13 に 逐語の derivePeriod から寄せた)。
+//   ★ 請求画面が渡しているのは 開始だけ。中止は 項23 中止理由 が決められないので 案のまま (lib の注記を参照)
 
 /**
  * 貸与の休止期間 (order_item_id → 期間)。★ READ ONLY。
@@ -360,7 +333,7 @@ async function main() {
           insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
       : { ...certFieldsForDensou(c, rec), insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null, careOfficeId: c.care_office_id };
     const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: benefitRaw, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
-    periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, derivePeriod((rentalsByClient.get(cid) ?? []).map(toP), billed.map(toP), MONTH));
+    periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, { startDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH), stopDate: fukuyoguServiceStopDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH) });
     rows.push({
       userName: c.name, insurerNumber: dc.insurerNumber, insuredNumber: dc.insuredNumber,
       birthDate: c.birth_date, gender: c.gender,

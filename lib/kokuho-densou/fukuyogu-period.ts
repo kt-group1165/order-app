@@ -39,3 +39,37 @@ export function fukuyoguServiceStartDate(allRentals: readonly RentalSpan[], ym: 
   }
   return null;
 }
+
+/**
+ * 福祉用具 伝送 基本 (01) 項22 中止年月日 の案 (純関数)。★ 2026-11-13 時点で 請求画面には渡していない (項23 中止理由が決められないため)。
+ *
+ *   中止 = 当月に貸与がある人で、その貸与が全部 当月内に終わり、月末を越えて続く台が無く、
+ *          翌月に新しく始まる台も無い (= 一時中断して翌月に再開する人は中止にしない) なら 最後の終了日。
+ *
+ * ほのぼの KK261004 (提供 2026-09・01 レコード 1,116 件・中止あり 27 件) との突合:
+ *   旧案 (翌月の開始を見ない)  一致 26 / 当方だけ 13 / ほのぼのだけ 1
+ *   この案                    一致 24 / 当方だけ  5 / ほのぼのだけ 3
+ *   当方だけ 5 (田近 康雄・勝畑 百里子・小川 敏江・鈴木 道子・加藤 春夫): ほのぼのの明細の日数が終了日まで切れていない
+ *     (= ほのぼのが請求した時点では まだ終了になっていなかった。終了を後から入れた)。規則の外。
+ *   ほのぼのだけ 3: 菊池 龍也・河名 公平 (理由 3 = 入院。翌月に再開しても中止にしている) /
+ *     河田 都美子 (理由 1。認定の終了日 9/30 を中止にしている。ただし 9 月に認定が終わる 35 名のうち中止は この 1 名だけ)。
+ * ⚠ 項23 中止理由 (1 / 3 入院 / 4 死亡 / 5 その他。27 件の内訳 1:5 / 3:7 / 4:7 / 5:8) は 当方に材料が無い
+ *   (client_hospitalizations は 0 行・死亡日も持っていない)。中止年月日だけ入れて理由を空にはできないので、
+ *   使うなら 理由を人が選ぶ欄が要る。調査: 診断 scripts/fukuyogu-densou-honobono-diff.mts。
+ */
+export function fukuyoguServiceStopDate(allRentals: readonly RentalSpan[], ym: string): string | null {
+  const [y, m] = ym.split("-").map(Number);
+  const first = `${ym}-01`;
+  const last = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+  const nextYm = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  const valid = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+  const spans = allRentals
+    .map((r) => ({ s: (r.rentalStart ?? "").slice(0, 10), e: (r.rentalEnd ?? "").slice(0, 10) || null }))
+    .filter((r) => valid(r.s));
+  const inMonth = spans.filter((r) => r.s <= last && (r.e == null || r.e >= first));
+  if (inMonth.length === 0) return null;
+  if (!inMonth.every((r) => r.e != null && r.e <= last)) return null;
+  if (spans.some((r) => r.s <= last && (r.e == null || r.e > last))) return null;
+  if (spans.some((r) => r.s.slice(0, 7) === nextYm)) return null;
+  return inMonth.map((r) => r.e as string).sort().at(-1) ?? null;
+}
