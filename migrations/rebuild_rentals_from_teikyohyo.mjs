@@ -106,6 +106,12 @@ const SKIP_USERS = new Set((opt("--skip-users") ?? "").split(",").map((s) => s.t
 //   as-of 当日以降の「終了」は まだ確定していない予定なので 継続扱い (end=null) に、as-of より後の「開始」は 入れない。
 //   as-of より後の休止も notes に書かない (予定の休止を確定扱いにしない)。
 const AS_OF = opt("--as-of") ?? null;
+// ★ 2026-11-14: --until YYYYMM — それより後の月の提供票を読まない。
+//   最新月の提供票が途中までしか出ていない (誉田 20261113 の 11 月は 実績 431 行 / 10 月 4,543 行) と、
+//   「最後の月の月末まで続く台だけ継続」の判定で 10 月末まで借りている台が軒並み 10/31 終了になる (誉田で 現利用者 1,121 名中 貸与中 71 名)。
+//   読まなかった月に始まった台は入らない (揃った提供票で回し直すと入る)。
+const UNTIL = opt("--until") ?? null;
+if (UNTIL && !/^\d{6}$/.test(UNTIL)) { console.error("--until は YYYYMM"); process.exit(1); }
 if (AS_OF && !/^\d{4}-\d{2}-\d{2}$/.test(AS_OF)) { console.error("--as-of は YYYY-MM-DD"); process.exit(1); }
 // ★ --as-of で飛ばした 開始予定の台に当たる DB の明細 (先に手で登録された未来開始の明細) を「DB だけ」として消してしまうので併用禁止
 if (AS_OF && REMOVE_DB_ONLY) { console.error("★ --as-of と --remove-db-only は併用できない (as-of より後の開始予定に当たる DB の明細を消してしまう)"); process.exit(1); }
@@ -323,7 +329,9 @@ async function main() {
   const match = makeMatcher(masters);
 
   // 提供票
-  const tfiles = readdirSync(TEIKYO_DIR).filter((f) => /^提供票_\d{6}\.csv$/i.test(f)).sort();
+  const tfilesAll = readdirSync(TEIKYO_DIR).filter((f) => /^提供票_\d{6}\.csv$/i.test(f)).sort();
+  const tfiles = UNTIL ? tfilesAll.filter((f) => f.match(/(\d{6})/)[1] <= UNTIL) : tfilesAll;
+  if (UNTIL) for (const f of tfilesAll.filter((x) => !tfiles.includes(x))) console.log(`★ --until ${UNTIL}: ${f} は読まない (この月に始まった台は入らない)`);
   if (!tfiles.length) throw new Error(`★ ${TEIKYO_DIR} に 提供票_YYYYMM.csv が無い`);
   const all = [];
   const sourceFiles = [];
