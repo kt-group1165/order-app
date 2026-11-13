@@ -1,6 +1,6 @@
 # 福祉用具 (ケアサポ) 毎月の運用手順書
 
-最終更新: 2026-11-13。対象: 介護ショップ ケア・サポート千葉 (事業所番号 1272400050)。
+最終更新: 2026-11-13。対象: 介護ショップ ケア・サポート千葉 (事業所番号 1272400050)。ほかの事業所 (誉田 等) は 7 章、居宅からの提供票 FAX の照合は 8 章。
 提供月を **M** (例 2026-11) と書く。コマンドはすべて `apps/order-app` で実行する。
 
 > ★ ここに書いた script 名・オプションは 2026-11-13 に grep で実在を確認したものだけ。
@@ -181,3 +181,56 @@ npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk ../kaigo-app/伝送デー
   (`lib/insurance/office-scope-rules.ts` rowsForOffice)。検査も同じ範囲で数える。
 - 提供票・月次情報の **氏名には括弧書き (例 「(奈良)」) が付く** ことがある。照合は利用者番号・被保険者番号で。
 - 生年月日・被保番が他事業所と違う人は 介護側へ連絡 (勝手に書き換えない)。
+
+---
+
+## 7. ほかの事業所 (誉田 など) を受け入れるとき (2026-11-13 誉田で確立)
+
+ケアサポ用の script は `--area <拠点>` (または `--office-bn <事業所番号>`) で事業所を切り替えられる。
+既定はケアサポ。事業所の表は `migrations/_fukuyogu_office.mjs` (福祉用具 5 事業所: ケアサポ / 誉田 / 高品 / 花見川 / 茂原)。
+表に無い番号や、area と番号の食い違いは止まる。
+
+置き場は ケアサポと同じ形で `apps/kaigo-app/伝送データ/<拠点>/福祉用具/` (例 `…/誉田/福祉用具/`)。
+
+| 何を | 出し方 (誉田の実測) | 置き場所 |
+|---|---|---|
+| 提供票 | ケアサポと同じ (請求 → CSV → 提供票)。★ 誉田の CSV は 51 列 (頭に「法人名」)。列は名前で引くのでそのまま読める | `用具貸与期間_YYYYMMDD/提供票_YYYYMM.csv` |
+| 用具マスタ | 利用状況 → マスタ他 → マスタ → 福祉用具タブ → 事業者を選ぶ → CSV出力。介護・予防・自費の 3 本 | `マスタ/FYGMST01_用具マスタ_<名前>_YYYYMMDD.CSV` / ファイル名に「予防」「自費」を含む 2 本 |
+| 明細書明細付 | ケアサポと同じ。事業所番号の列で 自前の番号か を確かめる | `YYYYMM/ほのぼのから/KDS0031_*.CSV` |
+| 利用者マスタ | ケアサポと同じ (登録 有 / 無) | `利用者マスタ_YYYYMMDD/` / `利用者マスタ_全件_YYYYMMDD/` |
+
+★ 事業所名の書き方が事業所で違う (ケアサポ「予ケア・サポート千葉」「自費レンタル」/ 誉田「(予)Hanaムツミ福祉用」「Hana自費レンタル」)。
+  予防・自費の判定は `teikyoKindOfOffice` (「予」か「(予)」で始まる / 「自費レンタル」で終わる) にまとめてある。
+
+### 7-1. 順番 (どれも DRY RUN から。DB の全件読みを伴うものは 並行セッションに一報して返事を待つ)
+
+```bash
+# ① ケアサポと重なっていないか (請求の事業所番号・利用者の重なり。READ ONLY)
+npx tsx scripts/fukuyogu-office-overlap-check.mts --area 誉田
+# ② 利用者を作る (利用者マスタが要る)。既存 client (kaigo-app 由来) に当たる人は作らない
+node migrations/create_missing_clients_from_teikyohyo.mjs --area 誉田
+# ③ 貸与を組む。★ 入力途中の月の提供票は外す (--teikyo-dir に完了月だけのフォルダ) — 入れると ほかの全員が前月末で終了扱いになる
+node migrations/rebuild_rentals_from_teikyohyo.mjs --area 誉田 --as-of <今日> --db-cache <控え.json>
+# ④ 貸与はあるのに割当が無い既存 client に 事業所の割当を足す (③ の --execute のあと)
+node migrations/assign_caresapo_for_rental_clients.mjs --area 誉田
+```
+
+- 移行の起点 (仮の開始日) は 提供票の最初の月の 1 日。誉田は R8/5 から → `2026-05-01` と notes `[5/1以前から]`。
+  DRY RUN の「開始月の分布」で 仮置きの割合を見る (誉田 R8/5〜10: 73%)。
+- 用具マスタはその事業所のものを使う (ケアサポのもので代用すると 当たらない実績行が 約半分。誉田のもので 0.4%)。
+- 事業所どうしの用具マスタの違い (同じ TAIS で単位数が違う 等) は
+  `node scripts/fukuyogu-equipment-master-compare.mjs --db-cache <③ の控え> --areas ケアサポ,誉田` (READ ONLY・DB は読まない)。
+- 保険情報の持ち方 (`offices.insurance_scope` shared / per_office) は受け入れる前に user が決める (ケアサポは per_office)。
+
+## 8. 居宅から届く 提供票・別表 の FAX / 写真 を照合する (2026-11-13)
+
+```bash
+# PDF (FAX のスキャン) か 写真 (jpg・何枚でも: 提供票 → 別表 の順に --pdf を並べる)
+node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf> --all
+```
+
+- 1 段目 (ローカル OCR) で 種類・向き・傾き を決め、白紙と裏紙は送らない → 2 段目で Claude (Haiku、怪しいときだけ Sonnet) が読む
+  → DB の控え (12 時間以内なら使い回し。`--refresh-db` で取り直し・全件読み) → 照合 → 一覧 `match_result.csv` / `.html`。
+- 判定: ✅ 確定 / ⚠ 要確認 / ❌ 該当なし / － 対象外 (ケアサポの行が無い)。伏字「●」は推測で埋めない。
+- 費用: 1 ページ 約 0.3 円 (claude.json の summary に記録)。API キーは `order-app/.env.local` の ANTHROPIC_API_KEY。
+- ★ PDF・画像・結果は個人情報。出力 (`--out`) は repo の外 (既定 = OS の一時フォルダ)。
