@@ -16,13 +16,18 @@
     "",
     "■ 0件を目指さない",
     "  ②は制度上すぐには0にならない。増えたらFAILにするだけで、",
-    "  現状の件数をそのまま基準値にする。"
+    "  現状の件数をそのまま基準値にする。",
+    "",
+    "■ 2026-11-14 の更新: ② 267 → 87",
+    "  用具マスタを 品目 (親) + サイズ・型 (子) にまとめ (子 266 行)、子は上限と比べなくなった (子は請求に親の価格を使う)。",
+    "  統合の前 (同じコード) で ② 131 → 統合の後 87。化けた TAIS のサイドレール 4 品目を直した後も 87 (TAIS の直しでは動かない)。",
+    "  ① は 0 のまま。貸与中の超過は ①② とも 0 品目。"
   ],
   "fingerprint": {
-    "equipmentMaster": "29033a3f5b08a910",
+    "equipmentMaster": "5587d994ca8d66d6",
     "ceilings": "4a1087a0c886d9b1"
   },
-  "asOf": "2026-10-15",
+  "asOf": "2026-11-14",
   "dataEntryErrors": {
     "total": 0,
     "rentedItems": 0,
@@ -30,9 +35,9 @@
     "monthlyExcessYen": 0
   },
   "ceilingDrift": {
-    "total": 267,
-    "rentedItems": 1,
-    "rentedLines": 1,
-    "monthlyExcessYen": 150
+    "total": 87,
+    "rentedItems": 0,
+    "rentedLines": 0,
+    "monthlyExcessYen": 0
   }
 }
