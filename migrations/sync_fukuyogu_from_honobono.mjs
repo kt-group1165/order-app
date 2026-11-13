@@ -129,6 +129,18 @@ let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_l
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 
 // ── 小道具 ────────────────────────────────────────────────────────────────
+// 生年月日に受付日らしい日付が入っている利用者 (2026-11-13 誉田で 189 名。例 2026/10/08) は 生年月日を空で作る (user 決定)。
+//   生年月日は 同一人物の突合キーなので、誤った日付を入れると 後で別人と混ざる / 同じ人を見つけられない。
+//   境界 = 2010-01-01 以降 (介護保険の利用者で 16 歳未満は無い)。空にした人は一覧に出す
+const BIRTH_IMPLAUSIBLE_FROM = "2010-01-01";
+function plausibleBirth(x, R) {
+  const b = x.birth || null;
+  if (b && b >= BIRTH_IMPLAUSIBLE_FROM) {
+    R.clients.add(`生年月日が ${BIRTH_IMPLAUSIBLE_FROM} 以降 (受付日などの誤入力とみて 空で作る・ほのぼの側の修正が要る)`, { 利用者番号: x.userNo, 氏名: x.name, ほのぼのの生年月日: b });
+    return null;
+  }
+  return b;
+}
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const countBy = (arr, f) => { const m = {}; for (const x of arr) { const k = f(x); m[k] = (m[k] ?? 0) + 1; } return m; };
 const groupBy = (arr, f) => { const m = new Map(); for (const x of arr) { const k = f(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x); } return m; };
@@ -494,7 +506,7 @@ async function main() {
     subjects.push({
       sid: p.pid, person: p, kds: u, ex: { 利用者番号: p.userNo, 氏名: p.name, 生年月日: p.birth }, careOffice: co,
       client: {
-        name: p.name, furigana: p.kana || null, birth_date: p.birth || null, gender: ["男", "女"].includes(p.gender) ? p.gender : null,
+        name: p.name, furigana: p.kana || null, birth_date: plausibleBirth(p, R), gender: ["男", "女"].includes(p.gender) ? p.gender : null,
         postal_code: p.postal, address: p.address, phone: p.phone, mobile: p.mobile,
         care_level: cert?.care ?? null, certification_start_date: cert?.start ?? null, certification_end_date: cert?.end ?? null,
         insurer_number: cert?.insurer ?? null, insured_number: cert?.insured ?? null, benefit_rate: cert ? rateAt(cert, AS_OF) : null, copay_rate: cert ? clientCopayOf(rateAt(cert, AS_OF)) : null,
@@ -523,7 +535,7 @@ async function main() {
       sid: `kds:${u.key}`, person: null, kds: u, ex: { 保険者: u.insurer, 被保番: u.insured, 利用者番号: u.userNo, 氏名: u.name, 生年月日: u.birth },
       careOffice: careOfficeFor(null, nfkc(rr[C.CARE_OFFICE])),
       client: {
-        name: u.name, furigana: u.kana || null, birth_date: u.birth || null, gender: ["男", "女"].includes(u.gender) ? u.gender : null,
+        name: u.name, furigana: u.kana || null, birth_date: plausibleBirth({ birth: u.birth, userNo: u.userNo, name: u.name }, R), gender: ["男", "女"].includes(u.gender) ? u.gender : null,
         care_level: nCare(rr[C.CARE_LEVEL]) || null, certification_start_date: nDate(rr[C.CERT_START]) || null, certification_end_date: nDate(rr[C.CERT_END]) || null,
         insurer_number: nInsurer(rr[C.INSURER]) || null, insured_number: nInsured(rr[C.INSURED]) || null, benefit_rate: nRate(rr[C.BENEFIT]) || null, copay_rate: clientCopayOf(rr[C.BENEFIT]),
       },
