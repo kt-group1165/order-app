@@ -1,0 +1,13 @@
+{
+  "_readme": [
+    "check:densou-office の基準値。増えたら FAIL。",
+    "officeNull: orders.office_id が NULL の注文 (伝送に入れられない)。2026-11-13 時点 0 (注文 1,621 件すべてケアサポ)。",
+    "multiOfficePairs: 同じ人・同じ月に 2 事業所から介護で借りている組 (billing_late_flags が事業所を持たないので 月遅れが伝染する)。実測値。",
+    "badBusinessNumber: 福祉用具 5 事業所のうち offices.business_number が 10 桁でないもの。0 であること。",
+    "増えた理由を確かめずに --update しないこと。"
+  ],
+  "asOf": "2026-11-13",
+  "officeNull": 0,
+  "multiOfficePairs": 0,
+  "badBusinessNumber": 0
+}
