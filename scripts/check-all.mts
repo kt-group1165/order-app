@@ -68,14 +68,14 @@ const CHECKS: Check[] = [
   //   伝送・請求画面は上限を見ていないので、返戻になる明細はここでしか気づけない。
   { name: "ceiling-rental", script: "check:ceiling-rental", why: "★ 請求に乗る貸与の上限超過 (前月/当月/改定前の見込み。基準値=超過明細のid集合)", slow: true,
     kind: "baseline", knownDiff: 1 }, // KMD-R12 1口 (2026-07 施行の初公表上限 12,850 < 13,000。user判断待ち)
-  { name: "kk-honobono", script: "check:kk-honobono", why: "★ 福祉用具の伝送を ほのぼのの実伝送 KK261004 (提供 2026-09) と全項目で突合。レコード種別ごとの一致数が下がったら FAIL (基準値方式・負のコントロール付き)", slow: true,
-    kind: "baseline" }, // 2026-11-13: 7131-01 832/876 ほか (scripts/fukuyogu-kk-honobono-baseline.json)
+  { name: "kk-honobono", script: "check:kk-honobono", why: "★ 福祉用具の伝送を ほのぼのの実伝送 KK261004 (提供 2026-09) と全項目で、10 月は明細書明細付 KDS0031 (KK 未確定のつなぎ) と KDS にある項目で突合。レコード種別ごと・利用者ごとの金額明細の一致数が下がったら FAIL (基準値方式・負のコントロール付き)", slow: true,
+    kind: "baseline" }, // 2026-11-13: 9月KK 7131-01 836/876・金額明細 1105/1116 / 10月KDS 金額明細 1108/1116 ほか (scripts/fukuyogu-kk-honobono-baseline.json)
 ];
 
 /** ★ この一覧が見ていないもの。緑でも安心しないための明示 */
 const NOT_COVERED = [
   // 2026-11-12: 半月按分・日割りの単位は check:proration で ほのぼのの提供票 (入力側) と突合するようになった
-  "福祉用具の伝送の実出力照合は KK261004 (提供 2026-09) の 1 か月だけ (check:kk-honobono)。10 月以降の KK は未入手。月遅れ分 (KK261001〜003) は範囲外",
+  "福祉用具の伝送の実出力照合は KK261004 (提供 2026-09) の全項目と、10 月は明細書明細付 (KDS にある 01/02 の項目のみ。10 集計・7111 は見ていない) だけ (check:kk-honobono)。10 月の KK は未確定。月遅れ分 (KK261001〜003・KDS の提供月以外の行) は範囲外",
   "日割り × 入院 / 日割り × 月途中の公費 — ほのぼのの実例が無い (伝送時に警告だけ出す)",
   "住宅改修 — 請求の実装が存在しない",
   "移動支援 (千葉市) — 伝送に乗らず市へExcel直接請求のため国保連系チェックの対象外",

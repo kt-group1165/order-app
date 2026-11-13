@@ -4,6 +4,7 @@
  *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk <KK261004.CSV> [--month 2026-09]
  *        [--db-cache <json>] [--refresh] [--out <json>] [--benefit-from-csv] [--pauses-from-notes | --no-pauses]
  *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kds <KDS0031_明細書明細付.CSV> [--month 2026-10] …
+ *   [--db-base <別の月の控え json>] … 全件読みをせず、月で絞る 2 表 (単位上書き・月遅れフラグ) だけ読み直して使い回す
  *
  *   ★ --kds (2026-11-13): KK がまだ出せない月 (ほのぼので未確定) は 明細書明細付 KDS0031 を答えにする。
  *   KDS の行から 7131/7132 のレセプト (01 基本 + 02 明細) を組み、KK と同じ比較の口に乗せる。
@@ -49,7 +50,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PROVIDER_BN, TENANT, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, readKds0031, C, type ItemRow,
+  PROVIDER_BN, TENANT, loadSnapshot, rebaseSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, readKds0031, C, type ItemRow,
 } from "./_honobono-sync-core.mjs";
 import {
   buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
@@ -311,7 +312,9 @@ async function main() {
   const CACHE = arg("--db-cache") ?? join(tmpdir(), `fukuyogu-densou-db-${MONTH}.json`);
   if (hk) console.log(`ほのぼの: ${KK}\n  提供年月 ${MONTH} / データ ${hk.recs.length} レコード / コントロール ${hk.control.join(",")}`);
   else console.log(`ほのぼの (明細書明細付): ${KDS}\n  ${kds!.rows.length} 行 / 提供年月 ${[...kds!.monthCount].map(([k, v]) => `${k}:${v}`).join(" ")} → 比べるのは ${MONTH} の行だけ (月遅れ行は外す)\n  ★ KDS にある項目だけを比べる (10 集計・7111 は比べない。冒頭の注記)`);
-  const snap = await loadSnapshot(MONTH, CACHE, process.argv.includes("--refresh"));
+  // --db-base <json>: 別の月の控えを使い回す (月で絞る 2 表だけ読み直す。check:kk-honobono で全件読みを 1 回にする)
+  const DB_BASE = arg("--db-base");
+  const snap = DB_BASE ? await rebaseSnapshot(DB_BASE, MONTH, CACHE) : await loadSnapshot(MONTH, CACHE, process.argv.includes("--refresh"));
   const office = snap.offices.find((o) => (o.business_number ?? "").replace(/-/g, "") === PROVIDER_BN);
   if (!office) throw new Error(`offices に business_number=${PROVIDER_BN} が無い`);
   const pausesByItem = await loadPauses();
@@ -452,6 +455,8 @@ async function main() {
   if (kr?.dupKeys.length) console.log(`\n  ⚠ KDS: 同じ (様式, 保険者, 被保番) に別のレセプト番号 ${kr.dupKeys.length} 件 (2 本目以降は比べない): ${kr.dupKeys.slice(0, 5).join(" / ")}`);
 
   // ── レセプト単位の金額一致 (KK 版・KDS 版で同じ物差し。給付率・保険単位/請求/負担・公費1 単位/請求/本人負担 + 明細の (コード,TAIS,日数,単位) 多重集合) ──
+  //   --out の stat に "金額明細": [一致, ほのぼののレセプト数] として載せる (check:kk-honobono の基準値)
+  let receiptAmt: [number, number] = [0, 0];
   {
     const AMT = [28, 32, 33, 34, 38, 39, 40];
     const z = (x: string | undefined) => (x ?? "") === "0" ? "" : (x ?? "");
@@ -468,6 +473,7 @@ async function main() {
     }
     console.log(`\n══ レセプト単位 金額+明細の一致 ══\n  一致 ${same} / 両方にある ${both} (ほのぼの ${hono.byKey.size} / 新 ${mine.byKey.size})`);
     for (const x of ng.slice(0, Number(process.env.DIFF_SHOW ?? 10))) console.log(`    - ${x}`);
+    receiptAmt = [same, hono.byKey.size];
   }
 
   console.log("\n══ レコード種別ごとの一致 (ほのぼの側の件数が分母。書式差は無視して値で比較) ══");
@@ -561,7 +567,10 @@ async function main() {
 
   const out = arg("--out");
   if (out) {
-    writeFileSync(out, JSON.stringify({ month: MONTH, stat, warnings: built.warnings, rec: B.rec, f7111: B.f7111, f01: B.f01, f02: B.f02, f10: B.f10, fmt: B.fmt }, null, 1));
+    // KDS 版は 10 集計・7111 を比べていないので stat から外す (0 / n が基準値に焼き付かないように)
+    const outStat: Record<string, [number, number]> = Object.fromEntries(Object.entries(stat).filter(([k]) => !(kds && (k === "7111" || k.endsWith("-10")))));
+    outStat["金額明細"] = receiptAmt;
+    writeFileSync(out, JSON.stringify({ month: MONTH, source: kds ? "KDS" : "KK", stat: outStat, warnings: built.warnings, rec: B.rec, f7111: B.f7111, f01: B.f01, f02: B.f02, f10: B.f10, fmt: B.fmt }, null, 1));
     console.log(`\n→ ${out}`);
   }
   console.log(kds

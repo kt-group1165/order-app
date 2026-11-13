@@ -219,6 +219,39 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
   return snap;
 }
 
+/**
+ * 別の月の控え (loadSnapshot の保存物) を month 用にする (★ SELECT のみ)。
+ * 月で絞って読んでいるのは billing_unit_overrides と billing_late_flags だけなので、その 2 表だけ読み直し、
+ * 残り (clients・認定・貸与 等の全件) は控えを使い回す。check:kk-honobono で 2 か月を回すときの全件読みを 1 回にするため (2026-11-13)。
+ */
+export async function rebaseSnapshot(basePath: string, month: string, cachePath: string): Promise<Snapshot> {
+  const base = JSON.parse(readFileSync(basePath, "utf8")) as Snapshot;
+  if (base.month === month) return base;
+  const { createClient } = await import("@supabase/supabase-js");
+  const env = readEnv();
+  if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("kaigo-app/.env.local に SUPABASE_URL / SERVICE_ROLE_KEY が無い");
+  const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  async function byMonth<T>(table: string, select: string): Promise<T[]> {
+    const out: T[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from(table).select(select).eq("tenant_id", TENANT).eq("month", month).order("id").range(from, from + 999);
+      if (error) throw new Error(`${table}: ${error.message}`);
+      out.push(...((data ?? []) as T[]));
+      if ((data ?? []).length < 1000) break;
+    }
+    console.log(`  ${table.padEnd(26)} ${out.length} 行 (${month} を読み直し)`);
+    return out;
+  }
+  const snap: Snapshot = {
+    ...base, month,
+    overrides: await byMonth<OverrideRow>("billing_unit_overrides", "id,client_id,month,order_item_id,units_override"),
+    late: await byMonth<LateRow>("billing_late_flags", "id,client_id,month"),
+  };
+  console.log(`DB: ${basePath} (取得 ${base.fetchedAt}・${base.month}) を ${month} 用に使い回す (月で絞る 2 表だけ読み直し)`);
+  writeFileSync(cachePath, JSON.stringify(snap));
+  return snap;
+}
+
 // ── 本物の計算関数 (BillingTab / 伝送と同じもの) ────────────────────────
 export async function loadLibs() {
   const { halfMonthUnits, halfMonthFlags, hospitalizationRanges } = await import("../lib/half-month-units");
