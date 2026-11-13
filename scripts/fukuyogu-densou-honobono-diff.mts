@@ -575,6 +575,63 @@ async function main() {
   }
   why.print("原因の切り分け (診断)");
 
+  // ── 残差の型分け (2026-11-14): レセプト 1 本に型を 1 つだけ付け、型ごとの件数と 保険請求額の向き・合計を出す ──
+  //   「一致率 95%」の残りが何かを 1 本ずつ言えるようにする (介護保険 7131 の残差の型分けと同じ形)。
+  //   型は上から順に最初に当たったもの。金額 = 01 項34 保険請求額 (新 − ほのぼの。+ = 当方が多い = 過大の向き)。
+  {
+    const AMT = [28, 32, 33, 34, 38, 39, 40];
+    const z = (x: string | undefined) => (x ?? "") === "0" ? "" : (x ?? "");
+    const det = (r: Receipt) => r.d.map((d) => `${d.v[6]}${d.v[7]}|${d.v[17]}|${z(d.v[9])}|${z(d.v[13])}`).sort().join(";");
+    const yen = (r: Receipt | undefined) => Number(r?.h.v[33] ?? 0) || 0;
+    type T = { n: number; plus: number; minus: number; ex: string[] };
+    const types = new Map<string, T>();
+    const put = (t: string, diff: number, ex: string) => {
+      const x = types.get(t) ?? { n: 0, plus: 0, minus: 0, ex: [] };
+      x.n++; if (diff > 0) x.plus += diff; else x.minus += diff; if (x.ex.length < 5) x.ex.push(ex);
+      types.set(t, x);
+    };
+    const swap = (key: string) => (key.startsWith("7131") ? "7132" : "7131") + key.slice(4);
+    const keys = new Set([...hono.byKey.keys(), ...mine.byKey.keys()]);
+    let total = 0;
+    for (const key of keys) {
+      const h = hono.byKey.get(key), m = mine.byKey.get(key);
+      const nm = nameOf(key);
+      total++;
+      if (h && m) {
+        const amt = AMT.filter((i) => z(h.h.v[i]) !== z(m.h.v[i]));
+        const d = yen(m) - yen(h);
+        const ex = `${nm} ${key} 保険請求 ほ${h.h.v[33]}/新${m.h.v[33]}`;
+        if (amt.length === 0 && det(h) === det(m)) { put("一致 (金額・明細とも)", 0, ex); continue; }
+        const hSum = h.d.reduce((s, x) => s + Number(x.v[13]), 0), mSum = m.d.reduce((s, x) => s + Number(x.v[13]), 0);
+        if (h.s ? h.s.v[8] !== h.s.v[9] : hSum > Number(h.h.v[32])) put("両方: ほのぼのは計画単位数で頭打ち (CM 指示単位数)", d, ex);
+        else if (hSum !== mSum) put("両方: 明細の単位数合計が違う (用具・台数・日割)", d, `${ex} 明細合計 ほ${hSum}/新${mSum}`);
+        else if (h.h.v[28] !== m.h.v[28]) put("両方: 保険給付率が違う (負担割合)", d, `${ex} 給付率 ほ${h.h.v[28]}/新${m.h.v[28]}`);
+        else if (h.h.v[6] !== m.h.v[6] || amt.some((i) => i >= 38)) put("両方: 公費が違う (有無・単位・本人負担)", d, ex);
+        else if (amt.length) put("両方: 金額項目だけ違う (その他)", d, `${ex} 項${amt.map((i) => i + 1).join(",")}`);
+        else put("両方: 金額は同じで明細の書き方だけ違う (コード・TAIS・日数)", d, ex);
+        continue;
+      }
+      if (h && !m) {
+        if (mine.byKey.has(swap(key))) { put("様式違い (7131↔7132。ほのぼの側の行)", 0, `${nm} ${key}`); continue; }
+        put("ほのぼのだけ (当方に請求が無い。理由は上の「原因の切り分け」)", -yen(h), `${nm} ${key} 保険請求 ${h.h.v[33]}`);
+        continue;
+      }
+      if (m && !h) {
+        if (hono.byKey.has(swap(key))) { put("様式違い (7131↔7132。当方側の行)", 0, `${nm} ${key}`); continue; }
+        put("当方だけ (ほのぼのは請求していない)", yen(m), `${nm} ${key} 保険請求 ${m.h.v[33]}`);
+      }
+    }
+    console.log(`\n══ 残差の型分け (レセプト ${total} 本 = ほのぼの ${hono.byKey.size} ∪ 当方 ${mine.byKey.size}。1 本に型 1 つ) ══`);
+    console.log("  ★ 前提: 貸与は 2026-11-14 に 提供票 (入力側) から組み直した値。それより前の一致率は 請求の出力 (KDS0031) から作った貸与で測っていて循環していた。");
+    console.log("  ★ 比べているのは 計算規則 (半月按分・給付率・公費・頭打ち・7131/7132) と 入力 (利用者・保険・貸与) の一致。");
+    console.log("    品目を請求の出力で決めた台 (notes [品目は請求の出力で特定]) と 暫定で継続にした台 ([暫定: …]) を含む。");
+    console.log("  金額 = 01 項34 保険請求額の差 (当方 − ほのぼの)。+ = 当方が多い (過大の向き) / − = 当方が少ない (不足の向き)");
+    for (const [t, x] of [...types].sort((a, b) => b[1].n - a[1].n)) {
+      console.log(`  ${String(x.n).padStart(5)}  ${t}${x.plus || x.minus ? `   過大 +${x.plus.toLocaleString()} 円 / 不足 ${x.minus.toLocaleString()} 円` : ""}`);
+      if (!t.startsWith("一致")) for (const e of x.ex) console.log(`           - ${e}`);
+    }
+  }
+
   // ── 負のコントロール: 新システム側を 1 か所わざと壊して検出できるか ──
   console.log("\n══ 負のコントロール ══");
   const broken = parseKk(built.content);
