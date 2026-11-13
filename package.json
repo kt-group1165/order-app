@@ -40,7 +40,8 @@
     "check:proration": "tsx scripts/proration-teikyohyo-check.mts",
     "check:cert-status": "tsx scripts/cert-status-rule-check.mts",
     "check:month-ready": "tsx scripts/month-ready-check.mts",
-    "check:kk-honobono": "tsx scripts/fukuyogu-kk-honobono-check.mts"
+    "check:kk-honobono": "tsx scripts/fukuyogu-kk-honobono-check.mts",
+    "check:fygmst-split": "tsx scripts/fygmst-price-split-check.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",

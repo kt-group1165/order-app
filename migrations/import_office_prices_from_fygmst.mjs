@@ -315,7 +315,7 @@ for (const [tais, rows] of byTais) {
   if (overRows.length) R.overCeil.push({ TAIS: tais, 上限: cap, 外した行: overRows.map(label).join(" "), 残した行: poolRaw.filter((r) => !overRows.includes(r)).map(label).join(" "), 外した: CEILING_FILTER });
   const poolBase = CEILING_FILTER ? poolRaw.filter((r) => !overRows.includes(r)) : poolRaw;
   // 同じ TAIS の使用中の価格が 5 倍以上割れている (打ち間違いの疑い) は 数えて出す
-  { const us = poolRaw.map((r) => r.units); if (Math.max(...us) >= 5 * Math.min(...us)) R.split5.push({ TAIS: tais, 行: poolRaw.map(label).join(" "), 上限: cap ?? "-" }); }
+  { const us = poolRaw.map((r) => r.units).filter((u) => u > 0); if (us.length > 1 && Math.max(...us) >= 5 * Math.min(...us)) R.split5.push({ TAIS: tais, 行: poolRaw.map(label).join(" "), 上限: cap ?? "-" }); }
   const byId = poolBase.reduce((a, b) => (b.id > a.id ? b : a));
   const cur = IS_CARESAPO ? byId : poolBase.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
   const name = cur.abbr || cur.name;
