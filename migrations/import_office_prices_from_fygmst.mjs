@@ -27,7 +27,7 @@
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir } from "./_fukuyogu_office.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null; };
@@ -74,6 +74,36 @@ const files = readdirSync(mdir).filter((f) => /^FYGMST.*\.csv$/i.test(f) && !/�
 const byTais = new Map();
 for (const f of files) for (const r of readMaster(join(mdir, f))) { if (!byTais.has(r.tais)) byTais.set(r.tais, []); byTais.get(r.tais).push(r); }
 
+// ★ 2026-11-13: 提供票 (入力側) で 実際に使われている行を優先する (誉田の ◎ と 無印 で、無印は ID が新しいのに ほぼ使われていなかった)
+//   提供票の実績行の「(略称)」と 月額の単位数 (全額 = 概算単位・半額 = ×2) で FYGMST01 の行に当てる
+//   use = 実績行の数 / fresh = 新しく始まった (利用者, 行) の数 (提供票の最初の月より後に初めて出たもの)
+const useOf = new Map(), freshOf = new Map();
+const TDIR = latestTeikyoDir(FO.dir);
+if (TDIR) {
+  const firstSeen = new Map();
+  const tfiles = readdirSync(TDIR).filter((f) => /^提供票_\d{6}\.csv$/i.test(f)).sort();
+  for (const f of tfiles) {
+    const lines = new TextDecoder("shift-jis").decode(readFileSync(join(TDIR, f))).split(/\r\n|\n/).filter((l) => l.length > 0);
+    const head = parseCsvLine(lines[0]);
+    const c = Object.fromEntries(["利用者番号", "提供年月", "サービス内容", "予定／実績", "日割区分", "概算単位数"].map((k) => { const i = head.indexOf(k); if (i < 0) throw new Error(`★ ${f} に列「${k}」が無い`); return [k, i]; }));
+    for (const r of lines.slice(1).map(parseCsvLine)) {
+      if (nf(r[c["予定／実績"]]) !== "実績") continue;
+      const m = nf(r[c.サービス内容]).match(/貸与[（(](.*)[)）]$/);
+      const u = Number(r[c.概算単位数] || 0), hw = nf(r[c.日割区分]);
+      const full = hw === "全額" ? u : hw === "半額" ? u * 2 : null;
+      if (!m || full == null) continue;
+      const k = `${nf(m[1])}|${full}`;
+      useOf.set(k, (useOf.get(k) ?? 0) + 1);
+      const pk = `${nf(r[c.利用者番号])}|${k}`, ym = nf(r[c.提供年月]);
+      if (!firstSeen.has(pk) || firstSeen.get(pk) > ym) firstSeen.set(pk, ym);
+    }
+  }
+  const minYm = [...firstSeen.values()].sort()[0];
+  for (const [pk, ym] of firstSeen) if (ym > minYm) { const k = pk.slice(pk.indexOf("|") + 1); freshOf.set(k, (freshOf.get(k) ?? 0) + 1); }
+}
+const usedOf = (r) => useOf.get(`${r.abbr}|${r.units}`) ?? 0;
+const freshOfRow = (r) => freshOf.get(`${r.abbr}|${r.units}`) ?? 0;
+
 const snap = JSON.parse(readFileSync(CACHE, "utf8"));
 const hist = snap.priceHist ?? [];
 const commonPrice = (e, ym) => {
@@ -84,7 +114,7 @@ const eqByTais = new Map();
 for (const e of snap.equipment ?? []) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], J: [], G: [], diffFromIdMax: [] };
+const R = { P1: [], P2: [], P3: [], J: [], G: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
 /** 誉田の世代の記号 (略称 → 商品名称 の先頭)。★ = 最新・最安 / ☆ = その前 / ◎◇▲ = ☆ より前 / 無印 = 古いか 世代の分かれていない品目 */
 const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
 const genRank = (r) => ({ "★": 4, "☆": 3, "◎": 2, "◇": 2, "▲": 2 })[genMark(r)] ?? 1;
@@ -92,14 +122,22 @@ for (const [tais, rows] of byTais) {
   const act = rows.filter((r) => !r.stop);
   if (!act.length) continue; // 中止だけの品目は作らない
   const curCands = IS_CARESAPO ? act.filter((r) => !r.name.startsWith("●")) : act;
-  const pool = curCands.length ? curCands : act;
-  const byId = pool.reduce((a, b) => (b.id > a.id ? b : a));
-  // ケアサポ: ● の無い行の ID 最大 / それ以外 (誉田): 記号の優先、同じ記号なら ID 最大
-  const cur = IS_CARESAPO ? byId : pool.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
+  const poolBase = curCands.length ? curCands : act;
+  const pick = (rs) => rs.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
+  const byId = poolBase.reduce((a, b) => (b.id > a.id ? b : a));
+  // ケアサポ: ● の無い行の ID 最大 / それ以外 (誉田): 提供票で 新しく使われている行 → 使われている行 → 全部 の順に絞り、その中で 記号の優先・同じ記号なら ID 最大
+  const freshRows = poolBase.filter((r) => freshOfRow(r) > 0), usedRows = poolBase.filter((r) => usedOf(r) > 0);
+  const pool = IS_CARESAPO ? poolBase : freshRows.length ? freshRows : usedRows.length ? usedRows : poolBase;
+  const cur = IS_CARESAPO ? byId : pick(pool);
+  const curSym = IS_CARESAPO ? byId : pick(poolBase); // 記号だけで選んだ行 (提供票を見ない)
   if (!IS_CARESAPO && cur !== byId) R.diffFromIdMax.push({ TAIS: tais, 記号で選んだ行: `${cur.id} ${cur.abbr || cur.name} ${cur.units * 10}円`, ID最大の行: `${byId.id} ${byId.abbr || byId.name} ${byId.units * 10}円`, 価格が違う: cur.units !== byId.units });
+  if (!IS_CARESAPO && cur !== curSym) R.diffFromSym.push({ TAIS: tais, 提供票で選んだ行: `${cur.id} ${cur.abbr || cur.name} ${cur.units * 10}円 (新規 ${freshOfRow(cur)}・実績 ${usedOf(cur)})`, 記号だけで選んだ行: `${curSym.id} ${curSym.abbr || curSym.name} ${curSym.units * 10}円 (新規 ${freshOfRow(curSym)}・実績 ${usedOf(curSym)})`, 価格が違う: cur.units !== curSym.units });
   const price = cur.units * 10;
-  const others = [...new Set(act.map((r) => r.units))].filter((u) => u !== cur.units);
-  if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}`).join(" ") });
+  // 古い世代の候補 (G) は 提供票で使われている行の価格だけ。使われていない行は「使われていない行」に数える (品目は P1 で足すが 価格の行は作らない)
+  const unusedRows = IS_CARESAPO ? [] : act.filter((r) => r !== cur && usedOf(r) === 0);
+  if (unusedRows.length) R.unused.push({ TAIS: tais, 行: unusedRows.map((r) => `${r.id}:${r.abbr || r.name}:${r.units * 10}円`).join(" ") });
+  const others = [...new Set(act.filter((r) => !unusedRows.includes(r)).map((r) => r.units))].filter((u) => u !== cur.units);
+  if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}${IS_CARESAPO ? "" : `(新${freshOfRow(r)}/実${usedOf(r)})`}`).join(" ") });
   const eqs = eqByTais.get(tais) ?? [];
   if (!eqs.length) { R.P1.push({ TAIS: tais, 名前: cur.abbr || cur.name, 種目: cur.cat, 価格: price }); continue; }
   const cps = [...new Set(eqs.map((e) => `${commonPrice(e, vfYm)}|${commonPrice(e, MONTH)}`))];
@@ -150,6 +188,9 @@ const p3rows = R.P3.reduce((s, x) => s + x.品目コード.length, 0);
 if (!IS_CARESAPO) {
   console.log(`\n  記号の優先で選んだ行が ID 最大の行と違う TAIS: ${R.diffFromIdMax.length} (うち価格も違う ${R.diffFromIdMax.filter((x) => x.価格が違う).length})`);
   for (const x of R.diffFromIdMax.slice(0, Number(process.env.SHOW_DIFF ?? 10))) console.log(`      - ${JSON.stringify(x)}`);
+  console.log(`  提供票の使用で選んだ行が 記号だけで選んだ行と違う TAIS: ${R.diffFromSym.length} (うち価格も違う ${R.diffFromSym.filter((x) => x.価格が違う).length})  ※ 提供票 ${TDIR ? TDIR.split(/[\\/]/).pop() : "★ 無い"}`);
+  for (const x of R.diffFromSym.slice(0, Number(process.env.SHOW_DIFF ?? 10))) console.log(`      - ${JSON.stringify(x)}`);
+  console.log(`  提供票で使われていない行がある TAIS: ${R.unused.length} (行 ${R.unused.reduce((s, x) => s + x.行.split(" ").length, 0)}。古い世代の候補にしない・価格の行は作らない)`);
 }
 console.log(`\n  P3 の内訳: 事業所の方が高い ${R.P3.filter((x) => x.差 > 0).length} / 安い ${R.P3.filter((x) => x.差 < 0).length}`);
 console.log(`★ ${VALID_FROM.slice(0, 7)}〜${MONTH} に ${FO.area} の注文で貸与していた明細が使っていた品目 ${hitCodes.size} (明細 ${hit.length} 本) は P3 から外して J に回した → P3 で請求額が変わる明細は 0 本`);
