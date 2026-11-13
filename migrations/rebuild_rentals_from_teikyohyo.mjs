@@ -354,12 +354,16 @@ async function main() {
     if (EXECUTE) throw new Error(`★ 利用者マスタが無い (${UM_DIR})。--execute は 利用者マスタを置いてから`);
     console.log(`⚠ 利用者マスタが無い (${relPath(UM_DIR)}) — DRY RUN なので (保険者, 被保番) の引き当て無し (利用者番号・氏名だけ) で続ける。結果は参考`);
   } else {
-  const ukF = readdirSync(UM_DIR).find((f) => f.startsWith("介護保険_") && /\.csv$/i.test(f));
-  if (!ukF) throw new Error(`★ ${UM_DIR} に 介護保険_*.CSV が無い`);
-  const UK = readSjis(join(UM_DIR, ukF));
-  sourceFiles.push({ path: relPath(UK.path), sha256: sha256(UK.path), rows: UK.rows.length, kind: "利用者管理 介護保険" });
-  { const a = colOf(UK, "利用者番号"), b = colOf(UK, "保険者番号"), c = colOf(UK, "被保険者番号");
-    for (const r of UK.rows) { const k = `${nInsurer(r[b])}|${nInsured(r[c])}`; if (k.startsWith("|") || k.endsWith("|")) continue; const no = nfkc(r[a]); if (!keysOf.has(no)) keysOf.set(no, new Set()); keysOf.get(no).add(k); } }
+  // ★ 2026-11-13: 登録有 に加えて 登録無 (元利用者) の介護保険も鍵にする (登録無にしか居ない人も 保険者+被保番 で引けるように。生年月日に頼らない)
+  for (const [dir, must, kind] of [[UM_DIR, true, "利用者管理 介護保険"], [UM_DIR_OFF, false, "利用者管理 介護保険 (登録無)"]]) {
+    if (!dir || !existsSync(dir)) continue;
+    const ukF = readdirSync(dir).find((f) => f.startsWith("介護保険_") && /\.csv$/i.test(f));
+    if (!ukF) { if (must) throw new Error(`★ ${dir} に 介護保険_*.CSV が無い`); continue; }
+    const UK = readSjis(join(dir, ukF));
+    sourceFiles.push({ path: relPath(UK.path), sha256: sha256(UK.path), rows: UK.rows.length, kind });
+    const a = colOf(UK, "利用者番号"), b = colOf(UK, "保険者番号"), c = colOf(UK, "被保険者番号");
+    for (const r of UK.rows) { const k = `${nInsurer(r[b])}|${nInsured(r[c])}`; if (k.startsWith("|") || k.endsWith("|")) continue; const no = nfkc(r[a]); if (!keysOf.has(no)) keysOf.set(no, new Set()); keysOf.get(no).add(k); }
+  }
   // ★ 2026-11-13: 利用者番号 → 生年月日 (基本情報。登録有 + 登録無)。氏名だけで引くとき・候補が複数のときに 生年月日の一致を必須にする (_name_birth_match.mjs)
   //   同じ番号に違う生年月日が 2 つ以上あれば 使わない (null)
   for (const dir of [UM_DIR, UM_DIR_OFF]) {

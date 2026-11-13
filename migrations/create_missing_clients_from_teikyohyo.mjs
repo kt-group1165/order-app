@@ -24,6 +24,9 @@
  *   1e039e1 の初版は 13 名の保険を 請求の出力 KDS0031 から作っていた。user 方針
  *   「移行データは入力側から取る。請求の出力は答え合わせだけ」(memory feedback_migration_from_input_not_billing_output) に
  *   合わせて、★ 属性・認定・公費・負担割合証は 利用者マスタ (有+無) から作る形に直した (FY-N2)。KDS0031 は作った値と比べるだけ。
+ *   ★ 例外 (2026-11-13 ★福祉用具新ソフト経由の方針): 居宅 (care_office_id) だけは KDS0031 の居宅の事業所番号で先に引く
+ *     (支援事業所の名前が care_offices と合わない人が多いため)。包括 (あんしんケアセンター等) の人は除く
+ *     (KDS の番号は委託先なので 委託元と取り違える)。認定・単位数には KDS を使わない
  *
  * ── 作り方 (sync_fukuyogu_from_honobono.mjs の新規作成と同じ列の入れ方) ──────────────────────
  *   clients: 基本情報 (氏名・カナ・性別・生年月日・住所・電話・死亡日→status=deceased) + 「最後に貸与した月の末日」に有効な認定
@@ -305,8 +308,8 @@ async function main() {
   console.log(`  負担割合証等: ${JSON.stringify(burdenStats)}`);
   if (overlap.length) console.log(`  有と無の両方に出た人 ${overlap.length} 名 (行が同じなので 1 人として扱う。有を残す): ${overlap.join(", ")}`);
   const umByNo = groupBy(pAll, (p) => p.userNo);
-  const umKeys = new Map(); // 利用者番号 → (保険者|被保番)。rebuild は「有」の介護保険 CSV だけで引く
-  for (const p of pAll) if (p.reg === "有") for (const k of p.keys) { if (!umKeys.has(p.userNo)) umKeys.set(p.userNo, new Set()); umKeys.get(p.userNo).add(k); }
+  const umKeys = new Map(); // 利用者番号 → (保険者|被保番)。rebuild と同じく 登録有 + 登録無 の介護保険で引く (★ 2026-11-13 に 登録無 も足した)
+  for (const p of pAll) for (const k of p.keys) { if (!umKeys.has(p.userNo)) umKeys.set(p.userNo, new Set()); umKeys.get(p.userNo).add(k); }
 
   // KDS0031 (4〜9 月の伝送の控え) — ★ 答え合わせだけ (作る値には使わない)
   const kdsBy = new Map();
@@ -315,7 +318,7 @@ async function main() {
     for (const f of fs) {
       const p = join(FUKUYOGU, d, "ほのぼのから", f);
       const { rows } = readKds0031(p);
-      sourceFiles.push({ path: relPath(p), sha256: sha256(p), rows: rows.length, kind: "KDS0031 (答え合わせだけ。作る値には使わない)" });
+      sourceFiles.push({ path: relPath(p), sha256: sha256(p), rows: rows.length, kind: "KDS0031 (居宅の事業所番号だけ入力に使う。ほかは答え合わせだけ)" });
       for (const r of rows) {
         if (!nfkc(r[13]).includes("基本")) continue; // レコード種別 = 基本情報レコード
         const no = nfkc(r[C.USER_NO]);
@@ -357,6 +360,26 @@ async function main() {
     return hit.length === 1 ? { co: hit[0], no: nfkc(hit[0].office_number) || null, how: "支援事業所名" } : { co: null, no: null, how: hit.length > 1 ? "名前が複数一致" : "名前が一致しない" };
   };
   const desc = (c) => `${c.name}/${c.user_number}/${c.birth_date ?? "-"}${c.deleted_at ? "/削除済" : ""}`;
+  /** 包括 (地域包括支援センター。千葉市は「あんしんケアセンター」) の人か (利用者マスタの支援事業所名で見る) */
+  const HOKATSU = /あんしんケアセンター|地域包括|包括支援|高齢者相談センター|あんしんすこやか/;
+  const isHokatsu = (c) => HOKATSU.test(nfkc(c?.officeFull ?? "")) || HOKATSU.test(nfkc(c?.office ?? ""));
+  /**
+   * ★ 居宅の事業所番号を KDS0031 (請求の出力) から引く。居宅の番号だけに使う (認定・単位数には使わない)。
+   * 対象月 (認定を決めた月) の行 → 無ければ最新月の行。被保番が その認定と同じ行だけ。番号が 1 つに決まり、care_offices に 1 件だけあるとき
+   */
+  const careOfficeFromKds = (userNo, c, ym) => {
+    if (!c || isHokatsu(c)) return null;
+    const rows = (kdsBy.get(userNo) ?? []).map((x) => x.r).filter((r) => nInsured(r[C.INSURED]) === c.insured && nfkc(r[C.CARE_OFFICE]));
+    if (!rows.length) return null;
+    const ymOfRow = (r) => nfkc(r[C.SVC_MONTH]).replace("/", "-").slice(0, 7);
+    const inMonth = rows.filter((r) => ymOfRow(r) === ym);
+    const latest = [...rows].sort((a, b) => ymOfRow(b).localeCompare(ymOfRow(a)));
+    const pick = inMonth.length ? inMonth : latest.filter((r) => ymOfRow(r) === ymOfRow(latest[0]));
+    const nos = [...new Set(pick.map((r) => nfkc(r[C.CARE_OFFICE])))];
+    if (nos.length !== 1) return null;
+    const hit = coByNo.get(nos[0]) ?? [];
+    return hit.length === 1 ? { co: hit[0], no: nos[0], how: "KDS の居宅番号" } : null;
+  };
 
   // ── 対象 = 提供票の利用者で DB に何の手掛かりも無い人 (rebuild の「引けない」と同じ集合になるはず) ──
   const ops = [];
@@ -426,8 +449,10 @@ async function main() {
     const asOf = certMonth ? monthEnd(certMonth) : null;
     if ((kinds.includes("介護") || kinds.includes("予防")) && !cert) R.注意.push(`★ ${kinds.join("+")} の貸与があるが 貸与月 (${R.月}) に有効な認定が 利用者マスタに無い (clients の認定系の列は空)`);
     if (cert && certMonth !== months[months.length - 1]) R.注意.push(`最後の貸与月 ${months[months.length - 1]} に有効な認定が無い → ${certMonth} 末日の認定で clients を埋める`);
-    const co = careOfficeOf(cert);
-    if (cert && !co.co && co.how !== "支援事業所なし") R.注意.push(`居宅 (支援事業所「${cert.officeFull ?? cert.office}」) が care_offices に引けない (${co.how}。care_office_id は書かない)`);
+    const coK = careOfficeFromKds(userNo, cert, certMonth);
+    const co = coK ?? careOfficeOf(cert);
+    if (coK) R.居宅 = "KDS の番号"; else if (co.co) R.居宅 = "名前"; else if (cert && isHokatsu(cert)) R.居宅 = "包括 (KDS を使わない)";
+    if (cert && !co.co && co.how !== "支援事業所なし") R.注意.push(`居宅 (支援事業所「${cert.officeFull ?? cert.office}」) が care_offices に引けない (${isHokatsu(cert) ? "包括のため KDS の番号は使わない・" : ""}${co.how}。care_office_id は書かない)`);
     const name = P ? P.name : nfkc(tName).replace(/\s*[(（][^)）]*[)）]\s*$/, "").trim();
     if (fold(name) !== fold(tName) || nf(name) !== nf(tName)) R.注意.push(`氏名: 提供票「${tName}」→ 利用者マスタ「${name}」${P?.sameName ? ` (同名識別 ${P.sameName})` : ""}`);
     const cid = newId("client");
@@ -452,7 +477,7 @@ async function main() {
     for (const c of [...certs].sort((a, b) => a.start.localeCompare(b.start))) {
       const at = c.end && asOf && c.end < asOf ? c.end : !asOf || asOf < c.start ? c.start : asOf;
       const r8 = rateAt(P, c, at);
-      const gco = careOfficeOf(c);
+      const gco = (c === cert ? coK : null) ?? careOfficeOf(c); // KDS の番号は clients に使った世代 (対象月の認定) だけ
       ops.push({ table: "client_insurance_records", action: "insert", id: newId("ins"), cid, why: `利用者マスタ (利用登録${c.reg}) の認定 (全世代)`, ref: { ...ex, 認定: `${c.care ?? "(空)"}/${c.start}〜${c.end}` },
         src: { file: relPath(findCsv(umFiles(c.reg), "介護保険_")), key: `ほのぼの利用者番号:${userNo}|${c.insurer}|${c.insured}|認定開始:${c.start}`, ref: c.raw },
         row: {
@@ -583,9 +608,12 @@ async function main() {
   console.log(`insert のキー集合 (表ごとの種類数。1 であること): ${JSON.stringify(Object.fromEntries(Object.entries(keySets).map(([t, v]) => [t, v.size])))}`);
   console.log(`作る利用者: ${results.filter((r) => r.状態 === "計画").length} 名 / 止めた: ${results.filter((r) => r.状態 !== "計画").map((r) => `${r.利用者番号} ${r.氏名}`).join(", ") || "なし"}`);
   const doubt = results.filter((r) => r.状態 === "計画" && r.注意.some((x) => x.startsWith("★ 同じ人の疑いあり")));
+  const planned = results.filter((r) => r.状態 === "計画");
+  const coCnt = {}; for (const r of planned) { const k = r.居宅 ?? "決まらない (支援事業所なし を含む)"; coCnt[k] = (coCnt[k] ?? 0) + 1; }
+  console.log(`居宅 (care_office_id) の決め方: ${JSON.stringify(coCnt)}`);
   console.log(`★ 同じ人の疑いあり (別人として作る) ${doubt.length} 名: ${doubt.map((r) => `${r.利用者番号} ${r.氏名}`).join(", ") || "なし"}`);
   console.log("trigger: client_insurance_records の追加で care_plan_elements 等が作られる → 実行時に「書込み → 掃除」(参照先がこの batch の行のものだけ消して記録)");
-  console.log(`\n== 答え合わせ (KDS0031 = 請求の出力。★ 作る値には使っていない) 対象 ${kdsCheck.length} 名 / 一致 ${kdsCheck.filter((x) => x.一致).length} / 差あり ${kdsCheck.filter((x) => !x.一致).length}`);
+  console.log(`\n== 答え合わせ (KDS0031 = 請求の出力。★ 居宅の番号のほかは 作る値に使っていない。居宅は 支援事業所の名前で引いた値と比べる) 対象 ${kdsCheck.length} 名 / 一致 ${kdsCheck.filter((x) => x.一致).length} / 差あり ${kdsCheck.filter((x) => !x.一致).length}`);
   for (const x of kdsCheck.filter((y) => !y.一致)) { console.log(`   ${x.利用者番号} ${x.氏名} (KDS ${x.KDS月.join(",")})`); for (const d of x.差) console.log(`       ${d}`); }
   console.log(`\n== 全件比較 (READ ONLY・直さない) 利用者マスタ 有 ${full.有} + 無 ${full.無} = ${full.利用者マスタ} 名`);
   console.log(`   DB に居る ${full.DBに居る} (${JSON.stringify(full.引き当て方)}) / 複数に当たる ${full.複数に当たる} / DB に居ない ${full.DBに居ない} (有 ${full.DBに居ない_有 ?? 0} / 無 ${full.DBに居ない_無 ?? 0}。今回作る ${full.DBに居ない_今回作る} / 提供票に居る他 ${full.DBに居ない_提供票に居る他} / 提供票に居ない ${full.DBに居ない_提供票に居ない})`);
