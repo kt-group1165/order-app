@@ -52,7 +52,13 @@ async function selectAll(sb, table, select) {
 }
 
 const TAIS = /^\d{5}-[0-9A-Z]{6}$/;
-const normTais = (s) => String(s ?? "").normalize("NFKC").toUpperCase().replace(/\s/g, "");
+// ハイフンが化けた TAIS (「00167?000197」) も 1 文字だけ「-」に戻して 同じ組に入れる (化けた行は子になり、TAIS は親のものを使う。tais_code 自体は書き換えない)
+const normTais = (s) => {
+  const t = String(s ?? "").normalize("NFKC").toUpperCase().replace(/\s/g, "");
+  const m = t.match(/^(\d{5})[?？‐－―ー–—](.{6})$/);
+  return m ? `${m[1]}-${m[2]}` : t;
+};
+const rawTaisOk = (e) => TAIS.test(String(e.tais_code ?? "").normalize("NFKC").toUpperCase().replace(/\s/g, ""));
 const normCat = (c) => String(c ?? "").replace(/^認知症老人/, "");
 const MONTHS = [];
 for (let y = 2024; y <= 2027; y++) for (let m = 1; m <= 12; m++) MONTHS.push(`${y}-${String(m).padStart(2, "0")}-01`);
@@ -83,7 +89,7 @@ function plan(snap) {
   }
   const fmt = (r) => ({ id: r.id, product_code: r.product_code, 名前: r.name, 種目: r.category, 単位数: r.rental_price,
     価格履歴: (hist.get(r.product_code) ?? []).map(([v, p]) => `${v}:${p}`).join(" "), 発注明細: used.get(r.product_code) ?? 0 });
-  const out = { A: [], B: [], M: [], groups: groups.size, skip };
+  const out = { A: [], B: [], M: [], garbledParent: [], groups: groups.size, skip };
   for (const [k, rows] of groups) {
     if (rows.length < 2) continue;
     const tais = k.split("|")[1];
@@ -93,12 +99,14 @@ function plan(snap) {
     if (why) { out.M.push({ tais, why, rows: rows.map(fmt) }); continue; }
     const sorted = [...rows].sort((a, b) =>
       (used.get(b.product_code) ?? 0) - (used.get(a.product_code) ?? 0) ||
+      rawTaisOk(b) - rawTaisOk(a) ||
       (b.product_code === tais) - (a.product_code === tais) ||
       a.product_code.localeCompare(b.product_code));
     const [parent, ...children] = sorted;
     const pk = priceKey(parent);
     const tag = children.every((c) => priceKey(c) === pk) ? "A" : "B";
-    out[tag].push({ tais, parent: fmt(parent), children: children.map((c) => ({ ...fmt(c), 同じ価格: priceKey(c) === pk, variant_label: c.name, 元のvariant_label: c.variant_label ?? null })) });
+    if (!rawTaisOk(parent)) out.garbledParent.push(`${tais} ${parent.product_code}「${parent.name}」 (tais_code=${parent.tais_code})`);
+    out[tag].push({ tais, parent: fmt(parent), children: children.map((c) => ({ ...fmt(c), TAIS化け: !rawTaisOk(c), 同じ価格: priceKey(c) === pk, variant_label: c.name, 元のvariant_label: c.variant_label ?? null })) });
   }
   return out;
 }
@@ -112,6 +120,10 @@ function report(p, fetchedAt, n) {
   console.log(`■ B まとめる (価格の違う行は発注明細 0 = 子の価格は使わなくなる): ${p.B.length} 組 / 子 ${kids(p.B)} 行`);
   console.log(`■ M 判断が要る (書かない): ${p.M.length} 組 / ${p.M.reduce((s, g) => s + g.rows.length, 0)} 行`);
   for (const g of p.M) console.log(`   M ${g.tais} ${g.why}: ${g.rows.map((r) => `${r.product_code}「${r.名前}」${r.種目} ${r.単位数} 発注${r.発注明細}`).join(" / ")}`);
+  const garbledKids = [...p.A, ...p.B].flatMap((g) => g.children.filter((c) => c.TAIS化け)).map((c) => c.product_code);
+  console.log(`■ TAIS が化けた行で 子になるもの ${garbledKids.length}: ${garbledKids.join(" ")}`);
+  console.log(`■ ⚠ 親の TAIS が化けている組 ${p.garbledParent.length} (TAIS を直すまで 上限チェック・請求で TAIS が崩れたまま)`);
+  for (const x of p.garbledParent) console.log(`   ${x}`);
   console.log(`■ 子にする行 合計 ${kids(p.A) + kids(p.B)} (--execute --expect にこの数を渡す)`);
 }
 
