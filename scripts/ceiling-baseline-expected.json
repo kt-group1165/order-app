@@ -29,15 +29,24 @@
     "  ① 1 件 = 01339-000007 楽起 縦型 20,000 (上限 2,330・8.6 倍)。TAIS か価格の取り違えの疑い → 誉田に確認 (docs/homda-office-prices-2026-11.md §6)。",
     "  ② 60 件 = 誉田の FYGMST01 の価格が 今の上限を超えている (1.01〜1.72 倍)。上限の改定に ほのぼの側が追従していない疑い。誉田に確認する。",
     "  貸与中 6 品目 13 口 (月 ¥2,600) は 前からの 87 件の品目を 誉田の貸与 (batch 46b83e5b) が使っているもの (EQ-000446・EQ-000158・EQ-000692・EQ-000558・EQ-000814・EQ-000933)。誉田の請求額は 誉田の価格の行があればそちら (この検査は見ていない)。",
-    "  ⚠ この検査は equipment_master.rental_price だけを見る。事業所の価格の行 (equipment_price_history.office_id) は見ていない (誉田の行 300)。"
+    "  ⚠ (この時点では equipment_master.rental_price だけを見ていた。事業所の価格の行は 下の ③ で見るようにした)",
+    "",
+    "■ ③ 事業所の価格の行 (2026-11-14 追加)",
+    "  equipment_price_history の office_id がある行のうち (品目, 事業所) ごとに 今日時点で効いている行を、品目の TAIS の上限と比べる。",
+    "  貸与中 = その事業所の注文で 介護の貸与中・終了の明細。①② と同じく 件数か貸与中の口数が増えたら FAIL。一覧は --list。",
+    "",
+    "■ 2026-11-14 の更新 (3 回目): ① 1 → 0 / ③ を足した (25)",
+    "  ① の 楽起 縦型 (01339-000007) は 20,000 → 2,000 に直した (batch d91168a6・migrations/fix_homda_rakki_price_typo.mjs)。FYGMST01 の打ち間違いの行を 取込が ID 最大で拾っていた。",
+    "  取込の決め方も 上限の 2 倍以上の行は候補にしないよう直した (import_office_prices_from_fygmst.mjs・負のコントロール --no-ceiling-filter)。",
+    "  ③ 25 件 = 全部 誉田の価格の行 (1.01〜1.31 倍・2 倍以上 0・貸与中 0)。誉田の FYGMST01 の価格が 上限の改定に追従していない疑い (② の 60 件と同じ型) → 誉田に確認 (docs/homda-office-prices-2026-11.md §6)。"
   ],
   "fingerprint": {
-    "equipmentMaster": "0e132b875471e4aa",
+    "equipmentMaster": "da90928fcacd20da",
     "ceilings": "4a1087a0c886d9b1"
   },
   "asOf": "2026-11-14",
   "dataEntryErrors": {
-    "total": 1,
+    "total": 0,
     "rentedItems": 0,
     "rentedLines": 0,
     "monthlyExcessYen": 0
@@ -47,5 +56,12 @@
     "rentedItems": 6,
     "rentedLines": 13,
     "monthlyExcessYen": 2600
+  },
+  "officeRows": {
+    "total": 25,
+    "dataEntryErrors": 0,
+    "rentedItems": 0,
+    "rentedLines": 0,
+    "monthlyExcessYen": 0
   }
 }

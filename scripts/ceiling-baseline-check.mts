@@ -101,7 +101,8 @@ async function main() {
 
   type EM = { product_code: string; tais_code: string | null; name: string; rental_price: number | null; parent_product_code?: string | null };
   type Ceil = { tais_code: string; effective_from: string; ceiling_price: number };
-  type Item = { product_code: string; status: string | null; payment_type: string | null };
+  type Item = { product_code: string; status: string | null; payment_type: string | null; order_id: string };
+  type Hist = { product_code: string; office_id: string | null; valid_from: string; rental_price: number };
 
   // ★ 2026-11-13: 用具マスタが「品目 (親) + サイズ・型 (子)」の 2 段になった (equipment_master_variants.sql)。
   //   子は請求に自分の価格を使わない (getEquipment・getPriceHistory が親の価格・TAIS を使う) ので、上限と比べるのは 親だけ。
@@ -111,7 +112,10 @@ async function main() {
   const em = emAll.filter((e) => !e.parent_product_code);
   if (emAll.length !== em.length) console.log(`(用具マスタの子 ${emAll.length - em.length} 行は 上限と比べない。親 ${em.length} 行で判定)`);
   const ceil = await all<Ceil>("equipment_price_ceilings", "tais_code, effective_from, ceiling_price");
-  const items = await all<Item>("order_items", "product_code, status, payment_type");
+  const items = await all<Item>("order_items", "product_code, status, payment_type, order_id");
+  // ③ 事業所の価格の行 (2026-11-14 追加: 誉田の行 300。品目の価格だけ見ていると 事業所の行の上限超過に気づけない)
+  const hist = await all<Hist>("equipment_price_history", "product_code, office_id, valid_from, rental_price");
+  const orderOffice = new Map((await all<{ id: string; office_id: string | null }>("orders", "id, office_id")).map((o) => [o.id, o.office_id]));
 
   // ── 指紋 (値のハッシュ。行数ではない) ──
   const hash = (rows: unknown[]) => createHash("sha256").update(JSON.stringify(rows)).digest("hex").slice(0, 16);
@@ -146,6 +150,33 @@ async function main() {
     else drift.push(row);
   }
 
+  // ── ③ 事業所の価格の行: (品目, 事業所) ごとに 今日時点で効いている行を 上限と比べる (TAIS は 品目の TAIS) ──
+  const taisOf = new Map(em.map((e) => [e.product_code, e.tais_code]));
+  const nameOf = new Map(em.map((e) => [e.product_code, e.name]));
+  const effective = new Map<string, Hist>();
+  for (const h of hist) {
+    if (!h.office_id || h.valid_from > todayIso) continue;
+    const k = `${h.product_code}|${h.office_id}`;
+    const cur = effective.get(k);
+    if (!cur || cur.valid_from < h.valid_from) effective.set(k, h);
+  }
+  const officeOver: { code: string; office: string; name: string; price: number; ceiling: number; ratio: number }[] = [];
+  for (const h of effective.values()) {
+    const j = judgeCeiling(taisOf.get(h.product_code) ?? null, h.rental_price, todayIso, idx);
+    if (j.kind !== "over") continue;
+    officeOver.push({ code: h.product_code, office: h.office_id!, name: nameOf.get(h.product_code) ?? "?", price: h.rental_price, ceiling: j.ceiling, ratio: h.rental_price / j.ceiling });
+  }
+  const rentedByCodeOffice = new Map<string, number>();
+  for (const i of items) if (i.payment_type === "介護" && (i.status === "rental_started" || i.status === "terminated")) { const k = `${i.product_code}|${orderOffice.get(i.order_id)}`; rentedByCodeOffice.set(k, (rentedByCodeOffice.get(k) ?? 0) + 1); }
+  const officeRented = officeOver.filter((r) => rentedByCodeOffice.has(`${r.code}|${r.office}`));
+  const officeRows = {
+    total: officeOver.length,
+    dataEntryErrors: officeOver.filter((r) => r.ratio >= DATA_ENTRY_ERROR_RATIO).length,
+    rentedItems: officeRented.length,
+    rentedLines: officeRented.reduce((s, r) => s + (rentedByCodeOffice.get(`${r.code}|${r.office}`) ?? 0), 0),
+    monthlyExcessYen: officeRented.reduce((s, r) => s + (r.price - r.ceiling) * (rentedByCodeOffice.get(`${r.code}|${r.office}`) ?? 0), 0),
+  };
+
   const summarize = (rows: typeof dataEntryErrors) => {
     const rentedRows = rows.filter((r) => rentedCodes.has(r.code));
     const rentedLines = rentedRows.reduce((s, r) => s + (rentedCountByCode.get(r.code) ?? 0), 0);
@@ -155,10 +186,13 @@ async function main() {
   const current = {
     dataEntryErrors: summarize(dataEntryErrors),
     ceilingDrift: summarize(drift),
+    officeRows,
   };
 
   console.log(`【分母】equipment_master ${em.length} 件 / 上限価格マスタ ${ceil.length} 行 / 判定基準日 ${todayIso}\n`);
   console.log(`① 入力ミス濃厚 (上限の${DATA_ENTRY_ERROR_RATIO}倍以上): ${current.dataEntryErrors.total} 件 (うち貸与中 ${current.dataEntryErrors.rentedItems} 品目 / ${current.dataEntryErrors.rentedLines} 口 / 月超過 ¥${current.dataEntryErrors.monthlyExcessYen.toLocaleString()})`);
+  console.log(`③ 事業所の価格の行 (今効いている行 ${effective.size}) の上限超過: ${officeRows.total} 件 (うち 2 倍以上 ${officeRows.dataEntryErrors} / 貸与中 ${officeRows.rentedItems} 品目 / ${officeRows.rentedLines} 口 / 月超過 ¥${officeRows.monthlyExcessYen.toLocaleString()})`);
+  if (process.argv.includes("--list")) for (const r of [...officeOver].sort((a, b) => b.ratio - a.ratio)) console.log(`    ③ ${r.code} ${r.name} ${r.price}/${r.ceiling} (${r.ratio.toFixed(2)} 倍) 事業所 ${r.office.slice(0, 8)}${rentedByCodeOffice.has(`${r.code}|${r.office}`) ? ` 貸与中 ${rentedByCodeOffice.get(`${r.code}|${r.office}`)} 口` : ""}`);
   console.log(`② 上限改定への追従漏れ: ${current.ceilingDrift.total} 件 (うち貸与中 ${current.ceilingDrift.rentedItems} 品目 / ${current.ceilingDrift.rentedLines} 口 / 月超過 ¥${current.ceilingDrift.monthlyExcessYen.toLocaleString()})`);
 
   type Baseline = {
@@ -167,6 +201,7 @@ async function main() {
     asOf: string;
     dataEntryErrors: { total: number; rentedItems: number; rentedLines: number; monthlyExcessYen: number };
     ceilingDrift: { total: number; rentedItems: number; rentedLines: number; monthlyExcessYen: number };
+    officeRows?: { total: number; dataEntryErrors: number; rentedItems: number; rentedLines: number; monthlyExcessYen: number };
   };
 
   let baseline: Baseline | null = null;
@@ -204,7 +239,16 @@ async function main() {
         "  ① 1 件 = 01339-000007 楽起 縦型 20,000 (上限 2,330・8.6 倍)。TAIS か価格の取り違えの疑い → 誉田に確認 (docs/homda-office-prices-2026-11.md §6)。",
         "  ② 60 件 = 誉田の FYGMST01 の価格が 今の上限を超えている (1.01〜1.72 倍)。上限の改定に ほのぼの側が追従していない疑い。誉田に確認する。",
         "  貸与中 6 品目 13 口 (月 ¥2,600) は 前からの 87 件の品目を 誉田の貸与 (batch 46b83e5b) が使っているもの (EQ-000446・EQ-000158・EQ-000692・EQ-000558・EQ-000814・EQ-000933)。誉田の請求額は 誉田の価格の行があればそちら (この検査は見ていない)。",
-        "  ⚠ この検査は equipment_master.rental_price だけを見る。事業所の価格の行 (equipment_price_history.office_id) は見ていない (誉田の行 300)。",
+        "  ⚠ (この時点では equipment_master.rental_price だけを見ていた。事業所の価格の行は 下の ③ で見るようにした)",
+        "",
+        "■ ③ 事業所の価格の行 (2026-11-14 追加)",
+        "  equipment_price_history の office_id がある行のうち (品目, 事業所) ごとに 今日時点で効いている行を、品目の TAIS の上限と比べる。",
+        "  貸与中 = その事業所の注文で 介護の貸与中・終了の明細。①② と同じく 件数か貸与中の口数が増えたら FAIL。一覧は --list。",
+        "",
+        "■ 2026-11-14 の更新 (3 回目): ① 1 → 0 / ③ を足した (25)",
+        "  ① の 楽起 縦型 (01339-000007) は 20,000 → 2,000 に直した (batch d91168a6・migrations/fix_homda_rakki_price_typo.mjs)。FYGMST01 の打ち間違いの行を 取込が ID 最大で拾っていた。",
+        "  取込の決め方も 上限の 2 倍以上の行は候補にしないよう直した (import_office_prices_from_fygmst.mjs・負のコントロール --no-ceiling-filter)。",
+        "  ③ 25 件 = 全部 誉田の価格の行 (1.01〜1.31 倍・2 倍以上 0・貸与中 0)。誉田の FYGMST01 の価格が 上限の改定に追従していない疑い (② の 60 件と同じ型) → 誉田に確認 (docs/homda-office-prices-2026-11.md §6)。",
       ],
       fingerprint: { equipmentMaster: emFingerprint, ceilings: ceilFingerprint },
       asOf: todayIso,
@@ -223,7 +267,9 @@ async function main() {
     current.dataEntryErrors.total > baseline.dataEntryErrors.total ||
     current.dataEntryErrors.rentedLines > baseline.dataEntryErrors.rentedLines ||
     current.ceilingDrift.total > baseline.ceilingDrift.total ||
-    current.ceilingDrift.rentedLines > baseline.ceilingDrift.rentedLines;
+    current.ceilingDrift.rentedLines > baseline.ceilingDrift.rentedLines ||
+    (baseline.officeRows != null && (current.officeRows.total > baseline.officeRows.total || current.officeRows.rentedLines > baseline.officeRows.rentedLines));
+  if (!baseline.officeRows) console.log("  ⚠ 基準値に ③ (事業所の価格の行) が無い — --update で足す (それまで ③ は合否に入れない)");
 
   if (!worse) {
     console.log("\n✓ PASS (基準値以下)");
