@@ -44,6 +44,7 @@ import { BILLING_CERT_SELECT, type BillingCertRow } from "@/lib/insurance/billin
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
 import { findRentalOverruns, indexCeilings, countUnjudgeable, type CeilingRentalLine } from "@/lib/ceilingCheck";
+import { planDensouOffice } from "@/lib/kokuho-densou/densou-office";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
@@ -1053,19 +1054,24 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const generateTransferData = async () => {
     if (!densouInputsReady) { densouNotReadyAlert(); return; }
     const [y, m] = billingMonth.split("-").map(Number);
-    // 選択中の事業所の事業所番号を優先、なければテナントの番号にフォールバック
-    const currentOffice = offices.find(o => o.id === currentOfficeId);
-    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
-    const officeNumber = rawOfficeNumber.replace(/-/g, "");
-    if (currentOfficeId && !currentOffice?.business_number) {
-      alert(`事業所「${currentOffice?.name ?? ""}」に事業所番号が設定されていません。設定タブで登録してください。`);
-      return;
-    }
+    // ★ 2026-11-13: 請求の事業所番号 = 実際に貸した事業所 (orders.office_id) の番号。
+    //   以前は 事業所未選択 (全事業所) のとき テナントの番号 (空) で 全事業所の明細を 1 本にまとめて出していた。
+    //   どの明細を どの番号で出すか・止めるかは lib/kokuho-densou/densou-office.ts (check:densou-office と同じ関数)
+    const officePlan = planDensouOffice(
+      clientGroups.flatMap((g) => g.items.map((it) => ({ itemId: it.id, orderOfficeId: ordersById.get(it.order_id)?.office_id ?? null }))),
+      currentOfficeId, offices,
+    );
+    if (officePlan.blockers.length) { alert(officePlan.blockers.join("\n")); return; }
+    const officeNumber = officePlan.officeNumber!;
+    const officeIncluded = new Set(officePlan.included);
     const lateClientIdsCsv = new Set<string>([
       ...autoLateClients,
       ...Array.from(lateFlags.keys()),
     ]);
-    const billingGroups = clientGroups.filter((g) => !lateClientIdsCsv.has(g.client.id));
+    const billingGroups = clientGroups
+      .filter((g) => !lateClientIdsCsv.has(g.client.id))
+      .map((g) => ({ ...g, items: g.items.filter((it) => officeIncluded.has(it.id)) }))
+      .filter((g) => g.items.length > 0);
     // 要介護度をコードにできず外した人 (月遅れ扱い) は確認ダイアログにも出す
     const noCareLevelNames = clientGroups.filter((g) => noCareLevelClients.has(g.client.id)).map((g) => g.client.name);
 
@@ -1105,7 +1111,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     //   (実例: KMD-R12 13,000 円。2026-07 施行の公表で上限 12,850 円が初めて付き、以後毎月超過)。
     //   判定は lib/ceilingCheck.ts (check:ceiling-rental と同じ関数)。読めなくても伝送は止めない。
     let ceilingIndex: ReturnType<typeof indexCeilings> | null = null;
-    const preWarnings: string[] = [];
+    const preWarnings: string[] = [...officePlan.warnings];
     const benefitNoCert: string[] = []; // 負担割合証なしで認定行の給付率を使った利用者 (FY-H)
     try {
       ceilingIndex = indexCeilings(await getCeilingPrices(tenantId));
@@ -1313,19 +1319,23 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const generateCareplanJissekiCsv = () => {
     const [y, m] = billingMonth.split("-").map(Number);
     const currentOffice = offices.find(o => o.id === currentOfficeId);
-    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
-    const senderOfficeNumber = rawOfficeNumber.replace(/-/g, "");
-    if (!senderOfficeNumber) {
-      alert("送信元の事業所番号が設定されていません。設定タブで登録してください。");
-      return;
-    }
+    // ★ 2026-11-13: 送信元 = 実際に貸した事業所 (lib/kokuho-densou/densou-office.ts。伝送と同じ決め方)
+    const officePlan = planDensouOffice(
+      clientGroups.flatMap((g) => g.items.map((it) => ({ itemId: it.id, orderOfficeId: ordersById.get(it.order_id)?.office_id ?? null }))),
+      currentOfficeId, offices,
+    );
+    if (officePlan.blockers.length) { alert(officePlan.blockers.join("\n")); return; }
+    const senderOfficeNumber = officePlan.officeNumber!;
+    const officeIncluded = new Set(officePlan.included);
     const senderOfficeName = currentOffice?.name || tenantInfo?.name || "";
     const monthStartIso = `${billingMonth}-01`;
 
     // 実績票の送信単位 = サービス種類コード + 事業所番号ごと → 担当居宅事業所ごとにグルーピング
     const byCareOffice = new Map<string, { officeName: string; officeNumber: string; users: FukuyoguJissekiUser[] }>();
-    const preWarnings: string[] = [];
-    for (const { client, items } of clientGroups) {
+    const preWarnings: string[] = [...officePlan.warnings];
+    for (const { client, items: itemsAll } of clientGroups) {
+      const items = itemsAll.filter((it) => officeIncluded.has(it.id)); // 選んだ事業所の注文だけ (densou-office)
+      if (items.length === 0) continue;
       const careOffice = client.care_office_id
         ? careOfficeById.get(client.care_office_id) ?? null
         : null;
@@ -1470,18 +1480,20 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const generateRebillTransferData = async () => {
     // 返戻過誤も 負担割合証 (benefitRawForMonth) を使う。CM 指示・公費の扱いは月ごとに読み直すが 足並みを揃えて同じ条件で待つ
     if (!densouInputsReady) { densouNotReadyAlert(); return; }
-    const currentOffice = offices.find((o) => o.id === currentOfficeId);
-    const rawOfficeNumber = currentOffice?.business_number || tenantInfo?.business_number || "";
-    const officeNumber = rawOfficeNumber.replace(/-/g, "");
-    if (currentOfficeId && !currentOffice?.business_number) {
-      alert(`事業所「${currentOffice?.name ?? ""}」に事業所番号が設定されていません。設定タブで登録してください。`);
-      return;
-    }
+    // ★ 2026-11-13: 通常の伝送と同じく 実際に貸した事業所の番号で出す (lib/kokuho-densou/densou-office.ts)。
+    //   以前は rebillByMonth が 事業所で絞っておらず、選んだ事業所の番号で その利用者の全事業所の明細を出していた
+    const officePlan = planDensouOffice(
+      rebillByMonth.flatMap(([, entries]) => entries.flatMap((e) => e.items.map((it) => ({ itemId: it.id, orderOfficeId: ordersById.get(it.order_id)?.office_id ?? null })))),
+      currentOfficeId, offices,
+    );
+    if (officePlan.blockers.length) { alert(officePlan.blockers.join("\n")); return; }
+    const officeNumber = officePlan.officeNumber!;
+    const officeIncluded = new Set(officePlan.included);
     if (rebillByMonth.length === 0) {
       alert("返戻・過誤の対象がありません。");
       return;
     }
-    const allWarnings: string[] = [];
+    const allWarnings: string[] = [...officePlan.warnings];
     let fileCount = 0;
     // 軽度者 原則対象外品目 × 例外給付記録なし の警告 (B-6d)。generateTransferData と同じロジック。
     let exceptionGrants: Awaited<ReturnType<typeof getExceptionGrants>> = [];
@@ -1521,7 +1533,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (prorationNotice) allWarnings.push(`[${ym}] ${prorationNotice}`);
       const benefitNoCert: string[] = []; // 負担割合証なしで認定行の給付率を使った利用者 (FY-H)
       const rows: FukuyoguSeikyuRow[] = [];
-      for (const { client, items } of entries) {
+      for (const { client, items: itemsAll } of entries) {
+        const items = itemsAll.filter((it) => officeIncluded.has(it.id)); // 選んだ事業所の注文だけ (densou-office)
+        if (items.length === 0) continue;
         const details: FukuyoguDetailLine[] = [];
         const lineDates: { rentalStart: string | null; rentalEnd: string | null; pauses: DateRange[] }[] = [];
         let totalUnits = 0;

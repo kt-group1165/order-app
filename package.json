@@ -19,6 +19,7 @@
     "check:densou-builder-diff": "cd ../kaigo-app && npx tsx scripts/densou-builder-cross-diff.mts",
     "check:careplan-jisseki": "tsx scripts/careplan-jisseki-verify.mts",
     "check:ceiling-all": "tsx scripts/ceiling-check.mts",
+    "check:densou-office": "tsx scripts/densou-office-check.mts",
     "check:ceiling-rental": "tsx scripts/ceiling-rental-check.mts",
     "check:pnl-half-month": "tsx scripts/pnl-half-month-rounding-check.mts",
     "check:fukuyogu-coverage": "tsx scripts/fukuyogu-coverage-check.mts",
