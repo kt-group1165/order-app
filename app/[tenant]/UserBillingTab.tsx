@@ -1,11 +1,11 @@
 "use client";
 
+import { type BillingClient } from "@/lib/billing-client-cols";
 import { type BillingCertRow } from "@/lib/insurance/billing-cert-cols";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, ChevronLeft, ChevronRight, Printer, FileText, Receipt } from "lucide-react";
 import { monthEndYmd } from "@/lib/date-jst";
 import type {
-  Client,
   Equipment,
   EquipmentPriceHistory,
   Order,
@@ -68,7 +68,7 @@ type LineItem = {
 };
 
 type Row = {
-  client: Client;
+  client: BillingClient;
   ins: BillingCertRow | null;
   careOffice: CareOffice | null;
   lineItems: LineItem[];
@@ -495,7 +495,7 @@ export default function UserBillingTab({
 }: {
   tenantId: string;
   currentOfficeId: string | null;
-  clients: Client[];
+  clients: BillingClient[];
   orderItems: OrderItem[];
   orders: Order[];
   equipment: Equipment[];

@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { FileWarning, Loader2, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, X } from "lucide-react";
-import { supabase, Client, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
-import { getClients } from "@/lib/clients";
+import { supabase, ClientDocument, ClientInsuranceRecord, DocTask, DocTaskStatus } from "@/lib/supabase";
+import { getClientsCols } from "@/lib/clients";
+import { DOC_TASK_CLIENT_COLS, type DocTaskClient } from "@/lib/billing-client-cols";
 import { getDocTasks, insertCertRenewalTask, markDocTaskReceived, mergeDocTasks, findMergeCandidates, completeDocTask, findExistingDocForTask, type MergeCandidateGroup } from "@/lib/docTasks";
 import { todayYmd, addDaysYmd } from "@/lib/date-jst";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
@@ -155,7 +156,7 @@ export default function DocTasksTab({
   const [tasks, setTasks] = useState<DocTask[]>([]);
   // 認定更新の仮想タスクに使う 3 列だけ持つ (2026-11-13: select("*") → 列を絞って転送量を減らす)
   const [insuranceRecords, setInsuranceRecords] = useState<CertEndRow[]>([]);
-  const [clientById, setClientById] = useState<Map<string, Client>>(new Map());
+  const [clientById, setClientById] = useState<Map<string, DocTaskClient>>(new Map());
   const [careplanByClient, setCareplanByClient] = useState<Map<string, string>>(new Map()); // clientId → 最新 care_plan の created_at
   // B-2n: 「作成済書類で完了」の候補判定用 (書類タスク経由以外で作られた書類)
   const [clientDocs, setClientDocs] = useState<DocLite[]>([]);
@@ -198,11 +199,12 @@ export default function DocTasksTab({
           // 3. clients (office 絞り込み) — task client_id 解決と cert_renewal 表示用
           //    2026-11-12: 事業所で絞るときは 割当 (client_office_assignments) の利用者も含める (office_id だけだと高品などで 0 名)
           officeIds && officeIds.length > 0
-            ? Promise.all(officeIds.map((oid) => getClients(tenantId, { officeId: oid, bypassCache: true })))
+            // 列は書類タスクで使う分だけ (lib/billing-client-cols.ts DOC_TASK_CLIENT_COLS。旧 select("*") 47 列)
+            ? Promise.all(officeIds.map((oid) => getClientsCols(tenantId, { officeId: oid, bypassCache: true }, DOC_TASK_CLIENT_COLS)))
                 .then((lists) => [...new Map(lists.flat().map((c) => [c.id, c])).values()])
-            : selectAllPagedParallel<Client>(
+            : selectAllPagedParallel<DocTaskClient>(
                 () => supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).is("deleted_at", null),
-                (from, to) => supabase.from("clients").select("*").eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, to),
+                (from, to) => supabase.from("clients").select(DOC_TASK_CLIENT_COLS.join(", ")).eq("tenant_id", tenantId).is("deleted_at", null).order("id").range(from, to),
               ),
           // 5. client_documents (rental_report 以外の全 type)
           //    - care_plan: cert_renewal で「対応 care_plan が無い場合のみ」絞るため
@@ -424,7 +426,7 @@ export default function DocTasksTab({
   // 人 → 書類 → 発生要因 の 3 階層 grouped view
   const groupedByClient = useMemo(() => {
     type DocGroup = { docType: string; rows: DocTaskRow[]; mergeGroup: MergeCandidateGroup | undefined };
-    type ClientGroup = { clientId: string; client: Client | undefined; docGroups: DocGroup[]; totalCount: number };
+    type ClientGroup = { clientId: string; client: DocTaskClient | undefined; docGroups: DocGroup[]; totalCount: number };
 
     const byClient = new Map<string, Map<string, DocTaskRow[]>>();
     for (const r of filteredRows) {
@@ -912,7 +914,7 @@ function DocTaskReceiveModal({
   onSaved,
 }: {
   task: DocTask;
-  client: Client | null;
+  client: DocTaskClient | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -997,7 +999,7 @@ function DocTaskMergeModal({
 }: {
   group: MergeCandidateGroup;
   tasks: DocTask[];
-  client: Client | null;
+  client: DocTaskClient | null;
   onClose: () => void;
   onSaved: () => void;
 }) {

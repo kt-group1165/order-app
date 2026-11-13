@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, useTransition, memo } from "react";
 import dynamic from "next/dynamic";
 import { ChevronRight, ChevronLeft, X, Loader2, Printer, Download } from "lucide-react";
-import { supabase, Order, OrderItem, Equipment, Client, Supplier, EquipmentPriceHistory, ClientHospitalization } from "@/lib/supabase";
+import { supabase, Order, OrderItem, Equipment, Supplier, EquipmentPriceHistory, ClientHospitalization } from "@/lib/supabase";
 import { monthEndYmd, toJapaneseEra, toJapaneseEraYM } from "@/lib/date-jst";
 import { type CompanyInfo, COMPANY_INFO_DEFAULTS } from "./company-info";
 import { getOfficeCompanyInfo } from "@/lib/officeCompanyInfo";
@@ -20,7 +20,7 @@ import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
 const EMPTY_PAUSES: Map<string, DateRange[]> = new Map();
 import { getAllOrders, getAllOrderItemsByTenant } from "@/lib/orders";
 import { getEquipment, getSuppliers, getPriceHistory, getPriceForMonth } from "@/lib/equipment";
-import { getClients } from "@/lib/clients";
+import { getClientsCols } from "@/lib/clients";
 import { getTenantById } from "@/lib/tenants";
 import { getOffices, type Office } from "@/lib/offices";
 import {
@@ -38,6 +38,7 @@ import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fu
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
 import { fukuyoguServiceStartDate } from "@/lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth } from "@/lib/insurance/cert-month";
+import { BILLING_CLIENT_COLS, type BillingClient } from "@/lib/billing-client-cols";
 import { BILLING_CERT_SELECT, type BillingCertRow } from "@/lib/insurance/billing-cert-cols";
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
@@ -114,7 +115,7 @@ function MonthlyInfoTab({
 }: {
   tenantId: string;
   currentOfficeId: string | null;
-  clients: Client[];
+  clients: BillingClient[];
   insuranceRecords: BillingCertRow[];
   orderItems: OrderItem[];
   orders: Order[];
@@ -348,7 +349,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   //   伝送 (CSV 出力・返戻過誤) は これらが読み終わるまで押せない (densouInputsReady)
   const [insuranceTabOpened, setInsuranceTabOpened] = useState(false);
   const changeSubTab = (id: BillingSubTab) => { if (id === "insurance") setInsuranceTabOpened(true); setSubTab(id); };
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clients, setClients] = useState<BillingClient[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -375,7 +376,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
    *   per_office … ★ 自事業所の認定行だけ。clients の列 (他事業所と共有) は使わない。行が無ければ要介護度が空になり、
    *                build.ts の「要介護度をコードにできない」で伝送から外れる (= 認定なし・月遅れ扱い)
    */
-  const densouCertOf = (client: Client, rec: BillingCertRow | null) => perOfficeMode
+  const densouCertOf = (client: BillingClient, rec: BillingCertRow | null) => perOfficeMode
     ? { ...certFieldsForDensou({ care_level: null, certification_start_date: null, certification_end_date: null }, rec),
         insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
     : { ...certFieldsForDensou(client, rec),
@@ -384,7 +385,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
-  const [invoiceClient, setInvoiceClient] = useState<Client | null>(null);
+  const [invoiceClient, setInvoiceClient] = useState<BillingClient | null>(null);
 
   // 会社情報（請求書／領収書モーダル用）
   // 請求書・領収書の会社欄: 事業所ごとの設定 > 事業所・法人マスタ > グループ共通 (lib/officeCompanyInfo.ts)
@@ -427,7 +428,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       (from, to) => supabase.from("equipment_price_history").select("*").eq("tenant_id", tenantId).order("id").range(from, to),
     ).catch((err) => { console.warn("getPriceHistory failed:", err); return null; });
     Promise.all([
-      getClients(tenantId, { officeId: currentOfficeId ?? undefined }),
+      // 利用者は請求で使う列だけ (lib/billing-client-cols.ts。旧 select("*") 47 列)
+      getClientsCols(tenantId, { officeId: currentOfficeId ?? undefined }, BILLING_CLIENT_COLS),
       getEquipment(tenantId),
       getAllOrderItemsByTenant(tenantId),
       getAllOrders(tenantId, currentOfficeId),
@@ -527,7 +529,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     return () => { cancelled = true; };
   }, [tenantId, insuranceTabOpened]);
   /** その月の給付率 (computeFukuyoguAmounts の benefitRateRaw に渡す文字列)。警告は onWarn、負担割合証なしは noCert に名前を足す */
-  const benefitRawForMonth = (client: Client, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
+  const benefitRawForMonth = (client: BillingClient, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
     if (!benefitCerts?.available) return client.benefit_rate;
     const r = resolveBenefitForMonth(
       insuranceRecords.filter((x) => x.client_id === client.id),
@@ -663,7 +665,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   // 利用者ごとにグループ化（事業所フィルタ付き）
   const clientGroups = useMemo(() => {
-    const map = new Map<string, { client: Client; items: OrderItem[] }>();
+    const map = new Map<string, { client: BillingClient; items: OrderItem[] }>();
     for (const item of activeRentals) {
       const order = orders.find((o) => o.id === item.order_id);
       // 事業所が選択されている場合、その事業所の注文のみ
@@ -1386,7 +1388,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   // 過去月の再請求グループ（返戻・過誤フラグがある月ごとに集計）
   const rebillByMonth = useMemo(() => {
-    const result = new Map<string, Array<{ client: Client; items: OrderItem[]; flag: BillingRebillFlag }>>();
+    const result = new Map<string, Array<{ client: BillingClient; items: OrderItem[]; flag: BillingRebillFlag }>>();
     for (const flag of rebillFlags.values()) {
       if (flag.month === billingMonth) continue;
       const client = clients.find((c) => c.id === flag.client_id);
@@ -1607,12 +1609,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const guardedNextMonth = () => { if (confirmLeave()) nextMonth(); };
   const guardedSetSubTab = (id: BillingSubTab) => { if (confirmLeave()) changeSubTab(id); };
 
-  const [detailClient, setDetailClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
-  const [rentalGridClient, setRentalGridClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
+  const [detailClient, setDetailClient] = useState<{ client: BillingClient; items: OrderItem[] } | null>(null);
+  const [rentalGridClient, setRentalGridClient] = useState<{ client: BillingClient; items: OrderItem[] } | null>(null);
   const [kanaFilter, setKanaFilter] = useState<string | null>(null);
   const [kokuhoOnly, setKokuhoOnly] = useState(true); // true=国保連提出対象(月遅れ除く)のみ / false=全件
   const [showRentalGridView, setShowRentalGridView] = useState(false);
-  const [gridSelectedClient, setGridSelectedClient] = useState<{ client: Client; items: OrderItem[] } | null>(null);
+  const [gridSelectedClient, setGridSelectedClient] = useState<{ client: BillingClient; items: OrderItem[] } | null>(null);
   const [gridKanaFilter, setGridKanaFilter] = useState<string | null>(null);
   const [isGridPending, startGridTransition] = useTransition();
   const KANA_ROWS = ["あ","か","さ","た","な","は","ま","や","ら","わ","他"];
@@ -2301,7 +2303,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 // ─── Sales Report Tab（売上帳票：介護保険レンタル） ─────────────────────
 function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, currentOfficeId }: {
   tenantId: string;
-  clients: Client[];
+  clients: BillingClient[];
   orderItems: OrderItem[];
   orders: Order[];
   equipment: Equipment[];
@@ -2398,9 +2400,9 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   }, [tenantId, productCodesKey]);
 
   // 居宅名 / ケアマネ名：care_office_id 優先、なければテキスト
-  const getCareOfficeName = (c: Client): string =>
+  const getCareOfficeName = (c: BillingClient): string =>
     (c.care_office_id ? careOfficesMap.get(c.care_office_id) : null) ?? c.care_manager_org ?? "";
-  const getCareManagerName = (c: Client): string =>
+  const getCareManagerName = (c: BillingClient): string =>
     (c.care_manager_id ? careManagersMap.get(c.care_manager_id) : null) ?? c.care_manager ?? "";
 
   /**
@@ -2464,7 +2466,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       prorate: "full" | "half" | "daily";
       /** 行の金額 (円・1 個あたり) = 獲得 / 引上 の月額 (その月の請求額ではない) */
       amount: number;
-      client: Client;
+      client: BillingClient;
       item: OrderItem;
       order: Order;
       equipmentName: string;
@@ -2935,7 +2937,7 @@ type RentalGridCalc = {
 function RentalGridModal({
   client, items, equipment, hospitalizations, pausesOf, calcOf, month, onClose,
 }: {
-  client: Client;
+  client: BillingClient;
   items: OrderItem[];
   equipment: Equipment[];
   hospitalizations: ClientHospitalization[];
@@ -3117,7 +3119,7 @@ function RentalGridModal({
 const RentalGridPanel = memo(function RentalGridPanel({
   client, items, equipment, hospitalizations, pausesOf, calcOf, month,
 }: {
-  client: Client;
+  client: BillingClient;
   items: OrderItem[];
   equipment: Equipment[];
   hospitalizations: ClientHospitalization[];
@@ -3301,7 +3303,7 @@ function InvoiceReceiptModal({
   pausesByItem,
   onClose,
 }: {
-  client: Client;
+  client: BillingClient;
   orders: Order[];
   orderItems: OrderItem[];
   equipment: Equipment[];
