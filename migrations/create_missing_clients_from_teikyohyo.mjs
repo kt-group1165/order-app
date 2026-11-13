@@ -57,7 +57,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice, teikyoKindOfOffice } from "./_fukuyogu_office.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -371,7 +371,7 @@ async function main() {
     if (viaUm || viaNo || viaName) continue;
 
     const months = [...new Set(rs.map((r) => r.ym))].sort();
-    const kinds = [...new Set(rs.map((r) => (r.office === "自費レンタル" ? "自費" : r.office.startsWith("予") ? "予防" : "介護")))].sort();
+    const kinds = [...new Set(rs.map((r) => teikyoKindOfOffice(r.office)))].sort();
     const R = { 利用者番号: userNo, 氏名: tName, 行: rs.length, 月: `${months[0]}〜${months[months.length - 1]}`, 制度: kinds.join("+"), 用具: [...new Set(rs.map((r) => r.svc))], 分類: null, 材料: null, 状態: "計画", 判定: [], 注意: [] };
     results.push(R);
     const stop = (why) => { R.状態 = "★ 止めた"; R.判定.push(why); };

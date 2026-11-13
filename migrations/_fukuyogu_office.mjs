@@ -84,3 +84,19 @@ export function latestUserMasterDate(area) {
 export function describeFukuyoguOffice(o) {
   return `事業所: ${o.area} ${o.bn} ${o.name}${o.isDefault ? " (既定。--area / --office-bn で切替)" : ""}`;
 }
+
+/**
+ * 提供票・月次情報の「事業所名」から 介護 / 予防 / 自費 を決める (2026-11-13)。
+ *   ケアサポ: 「ケア・サポート千葉」/「予ケア・サポート千葉」/「自費レンタル」
+ *   誉田    : 「Hanaムツミ福祉用具」/「(予)Hanaムツミ福祉用」/「Hana自費レンタル」
+ *   → 自費 = 名前が「自費レンタル」で終わる / 予防 = 「予」または「(予)」で始まる (全角括弧も) / それ以外 = 介護。
+ *   ケアサポの 3 つの名前では 引数化の前の判定 (=== "自費レンタル" / startsWith("予")) と同じ結果になる。
+ * @param {string} officeName
+ * @returns {"自費" | "予防" | "介護"}
+ */
+export function teikyoKindOfOffice(officeName) {
+  const n = String(officeName ?? "").normalize("NFKC").trim();
+  if (n.endsWith("自費レンタル")) return "自費";
+  if (/^(予|\(予\))/.test(n)) return "予防";
+  return "介護";
+}

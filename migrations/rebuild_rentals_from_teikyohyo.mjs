@@ -74,7 +74,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
-import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice, teikyoKindOfOffice } from "./_fukuyogu_office.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -246,7 +246,7 @@ function readTeikyo(path) {
       file: relPath(path), row: i + 2, ym, nd, days: days.slice(0, nd), office, userNo: nfkc(r[c.利用者番号]), name: nfkc(r[c.利用者名]),
       svc, kindRaw: m ? m[1] : "?", item: m ? m[2] : svc, hiwari: nfkc(r[c.日割区分]), jihiFlag: nfkc(r[c.自費レンタル]) === "対象",
       pa: nfkc(r[c["予定／実績"]]), units: Number(r[c.概算単位数] || 0), code: nfkc(r[c.サービスコード]),
-      src: office === "自費レンタル" ? "自費" : office.startsWith("予") ? "予防" : "介護",
+      src: teikyoKindOfOffice(office), // 自費レンタル / 予・(予) で始まる / それ以外 (_fukuyogu_office.mjs。誉田の名前にも対応)
     };
   });
 }
@@ -336,13 +336,20 @@ async function main() {
   const R = { map: new Report(), users: new Report(), link: new Report(), plan: new Report(), db: new Report(), warn: new Report() };
 
   // 利用者マスタ (介護保険) → 利用者番号 → (保険者, 被保番)
+  //   ★ 2026-11-13: 新しく受け入れる事業所 (誉田) で 利用者マスタがまだ届いていないときは、DRY RUN に限り
+  //   (保険者, 被保番) の引き当て無しで続ける (提供票の読み方を先に確かめるため)。--execute は止める
+  const keysOf = new Map();
+  if (!existsSync(UM_DIR)) {
+    if (EXECUTE) throw new Error(`★ 利用者マスタが無い (${UM_DIR})。--execute は 利用者マスタを置いてから`);
+    console.log(`⚠ 利用者マスタが無い (${relPath(UM_DIR)}) — DRY RUN なので (保険者, 被保番) の引き当て無し (利用者番号・氏名だけ) で続ける。結果は参考`);
+  } else {
   const ukF = readdirSync(UM_DIR).find((f) => f.startsWith("介護保険_") && /\.csv$/i.test(f));
   if (!ukF) throw new Error(`★ ${UM_DIR} に 介護保険_*.CSV が無い`);
   const UK = readSjis(join(UM_DIR, ukF));
   sourceFiles.push({ path: relPath(UK.path), sha256: sha256(UK.path), rows: UK.rows.length, kind: "利用者管理 介護保険" });
-  const keysOf = new Map();
   { const a = colOf(UK, "利用者番号"), b = colOf(UK, "保険者番号"), c = colOf(UK, "被保険者番号");
     for (const r of UK.rows) { const k = `${nInsurer(r[b])}|${nInsured(r[c])}`; if (k.startsWith("|") || k.endsWith("|")) continue; const no = nfkc(r[a]); if (!keysOf.has(no)) keysOf.set(no, new Set()); keysOf.get(no).add(k); } }
+  }
 
   // DB
   const sb = await makeSb();

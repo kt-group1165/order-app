@@ -55,7 +55,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
-import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice, teikyoKindOfOffice } from "./_fukuyogu_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -113,7 +113,8 @@ function readSjis(path) {
   return { path, header, rows };
 }
 const colOf = (f, name) => { const i = f.header.findIndex((h) => nfkc(h) === nfkc(name)); if (i < 0) throw new Error(`★ ${rel(f.path)} に列「${name}」が無い`); return i; };
-const kindOf = (officeName) => (nfkc(officeName).startsWith("予") ? "予防" : "介護");
+// 予・(予) で始まれば予防 (_fukuyogu_office.mjs teikyoKindOfOffice。誉田の「(予)…」にも対応)。月次情報に自費は来ない前提で 自費 は介護扱い (従来どおり)
+const kindOf = (officeName) => (teikyoKindOfOffice(officeName) === "予防" ? "予防" : "介護");
 
 // ── 月次情報 ──────────────────────────────────────────────────────────────
 function readGetsuji() {
@@ -153,7 +154,7 @@ function readActual(months) {
       if (nfkc(r[c["予定／実績"]]) !== "実績") continue;
       if (nfkc(r[c.提供年月]).replace("/", "-") !== ym) throw new Error(`★ ${rel(p)}: 提供年月 ${r[c.提供年月]}`);
       const office = nfkc(r[c.事業所名]);
-      if (office === "自費レンタル" || nfkc(r[c.自費レンタル]) === "対象") continue;
+      if (teikyoKindOfOffice(office) === "自費" || nfkc(r[c.自費レンタル]) === "対象") continue;
       const k = `${ym}|${nfkc(r[c.利用者番号])}|${kindOf(office)}`;
       act.set(k, (act.get(k) ?? 0) + Number(nfkc(r[c.概算単位数]) || 0));
     }
