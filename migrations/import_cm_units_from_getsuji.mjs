@@ -55,6 +55,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -75,9 +76,13 @@ const MODE = (opt("--mode") ?? "B").toUpperCase();
 if (!["A", "B"].includes(MODE)) { console.error("--mode は A か B"); process.exit(1); }
 const OVERWRITE_MANUAL = argv.includes("--overwrite-manual");
 const REPO_ROOT = resolve(HERE, "../../..");
-const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const FUKUYOGU = FO.dir;
 const DIR = resolve(opt("--dir") ?? join(FUKUYOGU, "月次情報"));
-const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? join(FUKUYOGU, "用具貸与期間_20261109"));
+// 既定 = 最新の 用具貸与期間_YYYYMMDD (引数化の前は 20261109 に固定。ケアサポは今それしか無いので同じ)
+const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? latestTeikyoDir(FUKUYOGU) ?? join(FUKUYOGU, "用具貸与期間_(未着)"));
 // 既定 = 利用者マスタ_YYYYMMDD / 利用者マスタ_全件_YYYYMMDD の最新。--user-master-dir / --user-master-dir-off で上書き
 const UM = resolveUserMasterDirs(FUKUYOGU, argv);
 const UM_DIRS = [UM.on, UM.off].filter(Boolean);
@@ -87,8 +92,9 @@ const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP_NAME = "import-cm-units-getsuji";
 const MARK = "[import-cm-units-getsuji]";
 const OWN_MARKS = [MARK, "[seed-fukuyogu-cm-units-202609]"];
-const CAPASAPO_OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
-const CAPASAPO_BN = "1272400050";
+// 名前は従来のまま (中身は --area / --office-bn で選んだ事業所。既定 ケアサポ)
+const CAPASAPO_OFFICE = FO.officeId;
+const CAPASAPO_BN = FO.bn;
 const TABLE = "fukuyogu_cm_units";
 let EXEC_LOCK = null;
 
@@ -121,7 +127,7 @@ function readGetsuji() {
     if (F.header.length !== 38) throw new Error(`★ ${f}: 列数 ${F.header.length} (38 のはず)`);
     const c = Object.fromEntries(["事業所番号", "事業所名", "利用者番号", "利用者名", "処理年月", "保険変更", "保険者", "被保険者番号", "作成区分", "支援事業所番号", "居宅介護支援事業所名", "区分支給限度基準内単位数"].map((n) => [n, colOf(F, n)]));
     for (const r of F.rows) {
-      if (nfkc(r[c.事業所番号]) !== CAPASAPO_BN) throw new Error(`★ ${f}: 事業所番号 ${r[c.事業所番号]} (ケアサポ ${CAPASAPO_BN} ではない)`);
+      if (nfkc(r[c.事業所番号]) !== CAPASAPO_BN) throw new Error(`★ ${f}: 事業所番号 ${r[c.事業所番号]} (${FO.area} ${CAPASAPO_BN} ではない)`);
       if (nfkc(r[c.処理年月]).replace("/", "-") !== ym) throw new Error(`★ ${f}: 処理年月 ${r[c.処理年月]} がファイル名と違う`);
       const u = nfkc(r[c.区分支給限度基準内単位数]);
       if (!/^\d+$/.test(u)) throw new Error(`★ ${f}: ${r[c.利用者名]} 区分支給限度基準内単位数 "${u}" が整数でない`);

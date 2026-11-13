@@ -14,12 +14,11 @@
  * ★ 保険者名 → 番号は 同じ回の 介護保険_全件_保険と認定.CSV で変換 (scripts/_benefit-cert-csv.mts)。
  * 取込エンジン: scripts/_benefit-cert-import.mts (kaigo-app の全社取込と共用)。
  */
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.BENEFIT_CERT_UNDER_TSX) {
   const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
   const r = spawnSync(process.execPath, [tsxCli, fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
@@ -29,21 +28,26 @@ if (!process.env.BENEFIT_CERT_UNDER_TSX) {
 }
 const { runBenefitCertImport } = await import("../scripts/_benefit-cert-import.mjs");
 const { resolveUserMasterDirs } = await import("./_user_master_dir.mjs");
+const { resolveFukuyoguOffice, describeFukuyoguOffice } = await import("./_fukuyogu_office.mjs");
 
 const argv = process.argv.slice(2);
 const opt = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null; };
 // 既定 = 利用者マスタ_YYYYMMDD (登録有) のうち日付が最新のフォルダ。--user-master-dir で上書き (--csv / --ins-csv はファイル単位の上書き)
-const UM = resolveUserMasterDirs(join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具"), argv);
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const UM = resolveUserMasterDirs(FO.dir, argv);
 if (!UM.on) throw new Error("★ 利用者マスタ_YYYYMMDD が無い");
 const DIR = UM.on;
 const DATE = UM.onDate ?? "日付不明";
-const CARESAPO_OFFICE_ID = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
+const CARESAPO_OFFICE_ID = FO.officeId; // 名前は従来のまま (中身は選んだ事業所。既定 ケアサポ)
 
 await runBenefitCertImport({
-  label: `ケアサポ (ほのぼの福祉用具 ${DATE.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")})`,
+  label: `${FO.area} (ほのぼの福祉用具 ${DATE.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")})`,
   scriptRel: "apps/order-app/migrations/import_benefit_certificates_caresapo.mjs",
   sourceSystem: "honobono-fukuyogu",
-  marker: `[benefit-cert ケアサポ ${DATE}]`,   // 出力日ごと (20261109 の回は従来と同じ文字列)
+  // 事業所 + 出力日ごと (ケアサポ 20261109 の回は従来と同じ文字列)。戻す・再実行はこのマーカーで行を探すので 事業所を必ず入れる
+  marker: `[benefit-cert ${FO.area} ${DATE}]`,
   futanCsv: resolve(opt("--csv") ?? join(DIR, "負担割合証等_全件.CSV")),
   kaigoInsCsvs: [resolve(opt("--ins-csv") ?? join(DIR, "介護保険_全件_保険と認定.CSV"))],
   decideOffices: async (_sb, clientIds) =>

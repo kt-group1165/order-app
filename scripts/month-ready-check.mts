@@ -24,13 +24,17 @@ import { tmpdir } from "node:os";
 import { TENANT, loadSnapshot, loadLibs, buildBillingModel, readEnv } from "./_honobono-sync-core.mjs";
 import { serviceClient, loadCertRows, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
 import { resolveBenefitForMonth } from "../lib/insurance/cert-month";
+import { resolveFukuyoguOffice, latestUserMasterDate } from "../migrations/_fukuyogu_office.mjs";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : null; };
 const MONTH = arg("--month") ?? (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
 if (!/^\d{4}-\d{2}$/.test(MONTH)) { console.error("--month は YYYY-MM"); process.exit(1); }
 const REFRESH = process.argv.includes("--refresh");
-const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
-const FY = "../kaigo-app/伝送データ/ケアサポ/福祉用具";
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (migrations/_fukuyogu_office.mjs)
+const FO = resolveFukuyoguOffice(process.argv.slice(2));
+const OFFICE = FO.officeId;
+const FY = `../kaigo-app/伝送データ/${FO.area}/福祉用具`;
+const UMD = latestUserMasterDate(FO.area);
 const [Y, M] = MONTH.split("-").map(Number);
 const ND = new Date(Date.UTC(Y, M, 0)).getUTCDate();
 const MS = `${MONTH}-01`, ME = `${MONTH}-${String(ND).padStart(2, "0")}`;
@@ -50,7 +54,7 @@ const warn = (label: string, detail: string, why: string) => { lines.push({ mark
 
 const parse = (l: string) => { const o: string[] = []; let c = "", q = false; for (let i = 0; i < l.length; i++) { const ch = l[i]; if (q) { if (ch === '"') { if (l[i + 1] === '"') { c += '"'; i++; } else q = false; } else c += ch; } else if (ch === '"') q = true; else if (ch === ",") { o.push(c); c = ""; } else c += ch; } o.push(c); return o; };
 
-console.log(`══ check:month-ready  提供月 ${MONTH} (ケアサポ)  実行日 ${today} ══\n`);
+console.log(`══ check:month-ready  提供月 ${MONTH} (${FO.area})  実行日 ${today} ══\n`);
 
 // ── ① 提供票 ────────────────────────────────────────────────────────────
 {
@@ -172,7 +176,8 @@ console.log(`\n請求対象 (当月に介護保険の貸与があり明細が乗
     const rowsAll = await loadCertRows(sb, targets);
     const rowsBy = new Map([...rowsAll].map(([cid, rs]) => [cid, rs.filter((r) => r.id != null && scopedIds.has(r.id))]));
     const b = await loadBenefitCertsDbOrCsv(sb, targets, [
-      { label: "ケアサポ 20261109", futan: join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/負担割合証等_全件.CSV"), ins: [join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/介護保険_全件_保険と認定.CSV")] },
+      // 事業所の利用者マスタ (最新の 利用者マスタ_YYYYMMDD。引数化の前は ケアサポ 20261109 に固定 = 今は同じもの)
+        ...(UMD ? [{ label: `${FO.area} ${UMD}`, futan: join(K, `伝送データ/${FO.area}/福祉用具/利用者マスタ_${UMD}/負担割合証等_全件.CSV`), ins: [join(K, `伝送データ/${FO.area}/福祉用具/利用者マスタ_${UMD}/介護保険_全件_保険と認定.CSV`)] }] : []),
       { label: "全社 20260830", futan: join(K, "利用者データ/全社_R8-08/負担割合証等1.CSV"), ins: [join(K, "利用者データ/全社_R8-08/介護保険1.CSV")] },
     ]);
     let withCert = 0, rowOnly = 0;

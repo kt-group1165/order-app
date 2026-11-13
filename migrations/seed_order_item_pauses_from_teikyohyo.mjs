@@ -22,6 +22,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -29,7 +30,11 @@ const opt = (name) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 
 const EXECUTE = argv.includes("--execute");
 const REVERT = opt("--revert");
 const REPO_ROOT = resolve(HERE, "../../..");
-const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/用具貸与期間_20261109"));
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+//   この script は事業所で絞らない (提供票の利用者+用具で order_items を引く)。事業所は 既定の提供票の置き場を決めるだけ
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? latestTeikyoDir(FO.dir) ?? join(FO.dir, "用具貸与期間_(未着)"));
 const SCRIPT_REL = "apps/order-app/migrations/seed_order_item_pauses_from_teikyohyo.mjs";
 const TENANT = "kt-group";
 const SOURCE_SYSTEM = "honobono-fukuyogu";

@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
+import { resolveFukuyoguOffice, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -46,8 +47,12 @@ const REVERT = opt("--revert");
 const SCRIPT_REL = "apps/order-app/migrations/build_caresapo_rows_from_master.mjs";
 const SOURCE_SYSTEM = "order-app";
 const STEP_NAME = "insurance-office-stage1:caresapo-from-master";
-const CS = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
-const BASE = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+//   (名前は従来のまま CS / caresapo。中身は選んだ事業所)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const CS = FO.officeId;
+const BASE = FO.dir;
 // 利用者マスタ: 既定 = 利用者マスタ_YYYYMMDD (登録有) / 利用者マスタ_全件_YYYYMMDD (登録無) の最新。--user-master-dir / --user-master-dir-off で上書き
 const UM = resolveUserMasterDirs(BASE, argv);
 const MASTER_FILES = [UM.file(UM.on, "介護保険_"), UM.file(UM.off, "介護保険_")].map((p, i) => {

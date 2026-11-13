@@ -57,6 +57,8 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -76,12 +78,17 @@ const { readBenefitCsv } = await import("../scripts/_benefit-cert-csv.mjs");
 
 const EXECUTE = argv.includes("--execute");
 const SIMULATE = argv.includes("--simulate");
-const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
-const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
-const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? join(FUKUYOGU, "用具貸与期間_20261109"));
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const OFFICE = FO.officeId;
+const FUKUYOGU = FO.dir;
+// 既定 = 最新の 用具貸与期間_ / 利用者マスタ_(全件_) (引数化の前は 20261109 に固定。ケアサポは今それしか無いので同じ)
+const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? latestTeikyoDir(FUKUYOGU) ?? join(FUKUYOGU, "用具貸与期間_(未着)"));
+const UMD = resolveUserMasterDirs(FUKUYOGU, argv, { log: false });
 const UM_DIRS = [
-  { reg: "有", dir: resolve(opt("--user-master-dir") ?? join(FUKUYOGU, "利用者マスタ_20261109")) },
-  { reg: "無", dir: resolve(opt("--user-master-dir-off") ?? join(FUKUYOGU, "利用者マスタ_全件_20261109")) },
+  { reg: "有", dir: resolve(UMD.on ?? join(FUKUYOGU, "利用者マスタ_(未着)")) },
+  { reg: "無", dir: resolve(UMD.off ?? join(FUKUYOGU, "利用者マスタ_全件_(未着)")) },
 ];
 const REPO_ROOT = resolve(HERE, "../../..");
 const SCRIPT_REL = "apps/order-app/migrations/create_missing_clients_from_teikyohyo.mjs";

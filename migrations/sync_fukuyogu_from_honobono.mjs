@@ -75,6 +75,8 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
+import { resolveFukuyoguOffice, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // .mts / lib の .ts を読むため、tsx の下で自分自身を起動し直す (node 22.14 は TypeScript を直接読めない)
@@ -110,11 +112,18 @@ if (STEP !== "all" && !STEPS.includes(STEP)) { console.error(`--step は ${STEPS
 const SHOW = (s) => STEP === "all" || STEP === s;
 const GATES = ["replace-history", "with-assignments", "terminate-absent-rentals", "attach-billed-shared"];
 const ENABLED = new Set(GATES.filter((g) => argv.includes(`--${g}`)));
-const DENSOU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+//   事業所の番号 (PROVIDER_BN) は _honobono-sync-core.mts が同じ引数から決める
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const DENSOU = FO.dir;
 const REPO_ROOT = resolve(HERE, "../../..");
+// --csv / --master-csv の既定はケアサポの固定ファイル (従来どおり)。ほかの事業所は必ず指定する (古い月を黙って読まないため)
+if (!FO.isDefault && (!opt("--csv") || !opt("--master-csv"))) { console.error(`★ ${FO.area}: --csv <KDS0031> と --master-csv <FYGMST01_用具マスタ> を指定する (既定はケアサポのファイル)`); process.exit(1); }
 const CSV_PATH = resolve(opt("--csv") ?? join(DENSOU, "202609/ほのぼのから/KDS0031_明細書明細付_処理R8-09.CSV"));
 const MASTER_CSV = resolve(opt("--master-csv") ?? join(DENSOU, "マスタ/FYGMST01_用具マスタ_20261109.CSV"));
-const UM_DIR = resolve(opt("--user-master-dir") ?? join(DENSOU, "利用者マスタ_20261109"));
+// 既定 = 最新の 利用者マスタ_YYYYMMDD (引数化の前は 20261109 に固定。ケアサポは今それしか無いので同じ)
+const UM_DIR = resolve(opt("--user-master-dir") ?? resolveUserMasterDirs(DENSOU, [], { log: false }).on ?? join(DENSOU, "利用者マスタ_(未着)"));
 const SCRIPT_REL = "apps/order-app/migrations/sync_fukuyogu_from_honobono.mjs";
 let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
 const SOURCE_SYSTEM = "honobono-fukuyogu";

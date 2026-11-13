@@ -74,6 +74,8 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { execLockStart, execLockAcquire } from "./_exec_lock.mjs";
+import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
+import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -105,11 +107,15 @@ if (AS_OF && !/^\d{4}-\d{2}-\d{2}$/.test(AS_OF)) { console.error("--as-of は YY
 // ★ --as-of で飛ばした 開始予定の台に当たる DB の明細 (先に手で登録された未来開始の明細) を「DB だけ」として消してしまうので併用禁止
 if (AS_OF && REMOVE_DB_ONLY) { console.error("★ --as-of と --remove-db-only は併用できない (as-of より後の開始予定に当たる DB の明細を消してしまう)"); process.exit(1); }
 if (!["single", "split"].includes(PAUSE_MODE)) { console.error("--pause-mode は single|split"); process.exit(1); }
-const OFFICE = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a"; // 介護ショップ ケア・サポート千葉
-const FUKUYOGU = join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具");
-const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? join(FUKUYOGU, "用具貸与期間_20261109"));
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const OFFICE = FO.officeId;
+const FUKUYOGU = FO.dir;
+// 既定 = 最新の 用具貸与期間_YYYYMMDD / 利用者マスタ_YYYYMMDD (引数化の前は 20261109 に固定。ケアサポは今それしか無いので同じ)
+const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? latestTeikyoDir(FUKUYOGU) ?? join(FUKUYOGU, "用具貸与期間_(未着)"));
 const MASTER_DIR = resolve(opt("--master-dir") ?? join(FUKUYOGU, "マスタ"));
-const UM_DIR = resolve(opt("--user-master-dir") ?? join(FUKUYOGU, "利用者マスタ_20261109"));
+const UM_DIR = resolve(opt("--user-master-dir") ?? resolveUserMasterDirs(FUKUYOGU, [], { log: false }).on ?? join(FUKUYOGU, "利用者マスタ_(未着)"));
 const OUT_DIR = resolve(opt("--out-dir") ?? join(tmpdir(), "teikyo-rebuild"));
 const REPO_ROOT = resolve(HERE, "../../..");
 const SCRIPT_REL = "apps/order-app/migrations/rebuild_rentals_from_teikyohyo.mjs";

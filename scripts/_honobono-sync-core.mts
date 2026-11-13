@@ -12,13 +12,15 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveFukuyoguOffice } from "../migrations/_fukuyogu_office.mjs";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://localhost";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "dummy";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const TENANT = "kt-group";
-export const PROVIDER_BN = "1272400050";
+/** 突合・反映の対象事業所の番号。既定 1272400050 (ケアサポ)。--area / --office-bn で切替 (migrations/_fukuyogu_office.mjs) */
+export const PROVIDER_BN: string = resolveFukuyoguOffice(process.argv.slice(2)).bn;
 
 // ── 型 ────────────────────────────────────────────────────────────────────
 export type ClientRow = {

@@ -60,6 +60,10 @@ import { certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
 import { fukuyoguServiceStartDate, fukuyoguServiceStopDate } from "../lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
 import { serviceClient, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
+import { resolveFukuyoguOffice, latestUserMasterDate } from "../migrations/_fukuyogu_office.mjs";
+/** 対象事業所 (既定 ケアサポ。--area / --office-bn)。PROVIDER_BN (core) と同じ引数から決まる */
+const FO = resolveFukuyoguOffice(process.argv.slice(2));
+const UMD = latestUserMasterDate(FO.area);
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(name);
@@ -361,7 +365,8 @@ async function main() {
     const K = "../kaigo-app";
     if (sb) {
       const b = await loadBenefitCertsDbOrCsv(sb, [...dbLines.keys()], [
-        { label: "ケアサポ 20261109", futan: join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/負担割合証等_全件.CSV"), ins: [join(K, "伝送データ/ケアサポ/福祉用具/利用者マスタ_20261109/介護保険_全件_保険と認定.CSV")] },
+        // 事業所の利用者マスタ (最新の 利用者マスタ_YYYYMMDD。引数化の前は ケアサポ 20261109 に固定 = 今は同じもの)
+        ...(UMD ? [{ label: `${FO.area} ${UMD}`, futan: join(K, `伝送データ/${FO.area}/福祉用具/利用者マスタ_${UMD}/負担割合証等_全件.CSV`), ins: [join(K, `伝送データ/${FO.area}/福祉用具/利用者マスタ_${UMD}/介護保険_全件_保険と認定.CSV`)] }] : []),
         { label: "全社 20260830", futan: join(K, "利用者データ/全社_R8-08/負担割合証等1.CSV"), ins: [join(K, "利用者データ/全社_R8-08/介護保険1.CSV")] },
       ]);
       if (b.source === "db" || process.argv.includes("--benefit-from-csv")) benefitBy = b.byClient;
