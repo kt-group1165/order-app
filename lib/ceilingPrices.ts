@@ -107,6 +107,8 @@ export type CeilingRentalSource = {
     rental_end_date: string | null;
     quantity: number | null;
     paymentType: string | null;
+    /** 注文の事業所 (価格を事業所ごとに引く。lib/equipment.ts getPriceForMonth) */
+    officeId: string | null;
   }[];
   equipment: { product_code: string; tais_code: string | null; name: string; rental_price: number | null }[];
   history: EquipmentPriceHistory[];
@@ -119,6 +121,7 @@ export async function loadCeilingRentalSource(tenantId: string): Promise<Ceiling
     getEquipment(tenantId),
   ]);
   const ptByOrder = new Map(orders.map((o) => [o.id, o.payment_type ?? null]));
+  const officeByOrder = new Map(orders.map((o) => [o.id, o.office_id ?? null]));
   const careItems = items
     .map((i) => ({
       id: i.id,
@@ -129,6 +132,7 @@ export async function loadCeilingRentalSource(tenantId: string): Promise<Ceiling
       rental_end_date: i.rental_end_date ?? null,
       quantity: i.quantity ?? null,
       paymentType: i.payment_type ?? ptByOrder.get(i.order_id) ?? null,
+      officeId: officeByOrder.get(i.order_id) ?? null,
     }))
     .filter((i) => i.paymentType === "介護");
   // .in() は件数が多いと遅くなるので 150 件ずつ (memory: feedback_postgrest_in_query_plan_cliff)

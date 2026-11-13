@@ -586,7 +586,7 @@ export default function UserBillingTab({
         // 基本単位 = 当月の価格 / 10。価格は 請求 (BillingTab の getUnits) と同じ 価格履歴 (getPriceForMonth) → 用具マスタ の順。
         // 当月の算定単位は 請求・伝送と同じ rentalMonthUnits
         // (既定 = 半月按分の自動 / 明細×月で「日割り」を選んだ月 = 日割り)。入院・休止の日は貸与日に数えない。
-        const price = getPriceForMonth(priceHistory, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+        const price = getPriceForMonth(priceHistory, item.product_code, billingMonth, order.office_id ?? currentOfficeId ?? null) ?? eq?.rental_price ?? 0; // 事業所の行 → 共通 → マスタ
         const baseUnits = price ? Math.round(price / 10) : 0;
         const units = rentalMonthUnits(baseUnits, item.rental_start_date, item.rental_end_date, billingMonth,
           excludedOf(calc, order.client_id, item.id), modeOf(calc, item.id, billingMonth));

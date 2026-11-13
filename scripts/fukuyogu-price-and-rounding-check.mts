@@ -59,6 +59,29 @@ eq("履歴が空 → null", getPriceForMonth([], "P1", "2026-06"), null);
 eq("履歴の並び順に依存しない (逆順で渡しても同じ)",
   getPriceForMonth([...hist].reverse(), "P1", "2026-03"), 3000);
 
+console.log("\n══ ②-2 getPriceForMonth の事業所ごとの価格 (2026-11-13: 事業所の行 → 共通の行 → null) ══");
+{
+  const A = "office-A", B = "office-B";
+  const h2: EquipmentPriceHistory[] = [
+    { product_code: "P1", rental_price: 3000, valid_from: "2026-01-01", office_id: null } as EquipmentPriceHistory,
+    { product_code: "P1", rental_price: 2800, valid_from: "2026-04-01", office_id: A } as EquipmentPriceHistory,
+    { product_code: "P1", rental_price: 2600, valid_from: "2026-09-01", office_id: A } as EquipmentPriceHistory,
+    { product_code: "P2", rental_price: 1000, valid_from: "2026-04-01", office_id: A } as EquipmentPriceHistory,
+  ];
+  eq("事業所 A・4 月 → A の行 2800", getPriceForMonth(h2, "P1", "2026-04", A), 2800);
+  eq("事業所 A・9 月 → A の改定後 2600", getPriceForMonth(h2, "P1", "2026-09", A), 2600);
+  eq("★ 事業所 A・3 月 (A の行がまだ無い) → 共通 3000", getPriceForMonth(h2, "P1", "2026-03", A), 3000);
+  eq("★ 事業所 B (行なし) → 共通 3000", getPriceForMonth(h2, "P1", "2026-09", B), 3000);
+  eq("★ 事業所を渡さない → 共通だけ (A の行は使わない) 3000", getPriceForMonth(h2, "P1", "2026-09"), 3000);
+  eq("★ 事業所を渡さない・共通の行が無い品目 → null (A の行は使わない)", getPriceForMonth(h2, "P2", "2026-09"), null);
+  eq("事業所 A・共通の行が無い品目 → A の行 1000", getPriceForMonth(h2, "P2", "2026-09", A), 1000);
+  eq("office_id 列が無い古い行 (undefined) は 共通として扱う", getPriceForMonth([{ product_code: "P1", rental_price: 3000, valid_from: "2026-01-01" } as EquipmentPriceHistory], "P1", "2026-09", A), 3000);
+  // 負のコントロール: 事業所を見ない実装 (全行から最新) だと A の 9 月が 2600 でなく B でも 2600 になる → 上の「事業所 B → 3000」で落ちる
+  const naive = (rows: EquipmentPriceHistory[], code: string, ym: string) =>
+    rows.filter((r) => r.product_code === code && r.valid_from <= `${ym}-01`).sort((x, y) => y.valid_from.localeCompare(x.valid_from))[0]?.rental_price ?? null;
+  eq("負のコントロール: 事業所を見ない実装は B で 2600 を返してしまう (= 本物と違う)", naive(h2, "P1", "2026-09") !== getPriceForMonth(h2, "P1", "2026-09", B), true);
+}
+
 // ★ 負のコントロール: 「常に最新価格を返す」(= 是正前の bug と同じ挙動) に
 //   壊したら NG になることを確認する。
 {

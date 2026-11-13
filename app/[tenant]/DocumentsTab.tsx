@@ -70,6 +70,8 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientItems, setClientItems] = useState<OrderItem[]>([]);
   const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
+  // order_id → 注文の事業所 (価格を事業所ごとに引く)
+  const [orderOfficeMap, setOrderOfficeMap] = useState<Record<string, string | null>>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [clientLoading, setClientLoading] = useState(false);
@@ -200,9 +202,9 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
 
   const loadClientData = async (client: Client) => {
     setClientLoading(true);
-    setClientItems([]); setDocuments([]); setPriceHistory([]); setOrderPaymentMap({}); setReceivedCarePlans([]);
+    setClientItems([]); setDocuments([]); setPriceHistory([]); setOrderPaymentMap({}); setOrderOfficeMap({}); setReceivedCarePlans([]);
     const [{ data: ordersData }, docs] = await Promise.all([
-      supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
+      supabase.from("orders").select("id, payment_type, office_id").eq("tenant_id", tenantId).eq("client_id", client.id),
       getClientDocuments(tenantId, client.id),
       loadReceivedCarePlans(client.id),
     ]);
@@ -212,6 +214,7 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
       const payMap: Record<string, "介護" | "自費"> = {};
       ordersData.forEach((o: { id: string; payment_type: string }) => { payMap[o.id] = o.payment_type === "自費" ? "自費" : "介護"; });
       setOrderPaymentMap(payMap);
+      setOrderOfficeMap(Object.fromEntries(ordersData.map((o: { id: string; office_id?: string | null }) => [o.id, o.office_id ?? null])));
       const { data: items } = await supabase.from("order_items").select("*").in("order_id", orderIds);
       const loaded = items ?? [];
       setClientItems(loaded);
@@ -798,7 +801,7 @@ export default function DocumentsTab({ tenantId, currentOfficeId, officeViewAll,
       )}
       {(showReport || regenDoc) && selectedClient && (
         <RentalReportModal
-          client={selectedClient} items={clientItems} orderPaymentMap={orderPaymentMap}
+          client={selectedClient} items={clientItems} orderPaymentMap={orderPaymentMap} orderOfficeMap={orderOfficeMap}
           equipment={equipment} companyInfo={companyInfo} priceHistory={priceHistory}
           tenantId={tenantId}
           initialParams={regenDoc ? (regenDoc.params as { targetMonth: string; visitDate: string; memo: string; selectedUsage: string[] }) : undefined}

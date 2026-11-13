@@ -524,7 +524,8 @@ export default function CarePlanModal({
   }, [tenantId, itemCodesKey]);
   const priceMonth = (creationDate || todayStr).slice(0, 7);
   const priceOf = (code: string): number | null =>
-    getPriceForMonth(priceHistory, code, priceMonth) ?? getEq(code)?.rental_price ?? null;
+    // 事業所 = 利用者の事業所 (計画書は利用者単位。注文ごとの事業所はここでは持っていない)
+    getPriceForMonth(priceHistory, code, priceMonth, client.office_id ?? null) ?? getEq(code)?.rental_price ?? null;
   const selectedCategories = [...new Set(
     selectedItems.map((i) => getEq(i.product_code)?.category).filter(Boolean) as string[]
   )];

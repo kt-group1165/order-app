@@ -64,7 +64,7 @@ export default function BulkRentalReportModal({
   const [targetMonth, setTargetMonth] = useState(prevMonth);
   const [scope, setScope] = useState<"all" | "movement">("all");
   const [items, setItems] = useState<OrderItem[] | null>(null);
-  const [payMap, setPayMap] = useState<Record<string, { client_id: string; pay: "介護" | "自費" }>>({});
+  const [payMap, setPayMap] = useState<Record<string, { client_id: string; pay: "介護" | "自費"; office_id: string | null }>>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   // 月の算定の材料 (日割り設定・休止・入院)。全員分を 1 回だけ読む
   const calc = useRentalCalcContext(tenantId);
@@ -88,11 +88,11 @@ export default function BulkRentalReportModal({
       try {
         const [all, orders] = await Promise.all([
           getAllOrderItemsByTenant(tenantId),
-          fetchPaged<{ id: string; client_id: string; payment_type: string | null }>((from, to) =>
-            supabase.from("orders").select("id, client_id, payment_type").eq("tenant_id", tenantId).order("id").range(from, to)),
+          fetchPaged<{ id: string; client_id: string; payment_type: string | null; office_id: string | null }>((from, to) =>
+            supabase.from("orders").select("id, client_id, payment_type, office_id").eq("tenant_id", tenantId).order("id").range(from, to)),
         ]);
-        const pm: Record<string, { client_id: string; pay: "介護" | "自費" }> = {};
-        for (const o of orders) pm[o.id] = { client_id: o.client_id, pay: o.payment_type === "自費" ? "自費" : "介護" };
+        const pm: Record<string, { client_id: string; pay: "介護" | "自費"; office_id: string | null }> = {};
+        for (const o of orders) pm[o.id] = { client_id: o.client_id, pay: o.payment_type === "自費" ? "自費" : "介護", office_id: o.office_id ?? null };
         // 単価の改定履歴: 請求と同じ getPriceHistory (150 件ずつ・1,000 行ずつ・valid_from 昇順)
         const hist: EquipmentPriceHistory[] = await getPriceHistory(tenantId, all.map((i) => i.product_code));
         if (!cancelled) { setItems(all); setPayMap(pm); setPriceHistory(hist); }
@@ -145,6 +145,8 @@ export default function BulkRentalReportModal({
     for (const [id, v] of Object.entries(payMap)) out[id] = v.pay;
     return out;
   }, [payMap]);
+  // order_id → 注文の事業所 (価格を事業所ごとに引く)
+  const orderOfficeMap = useMemo(() => Object.fromEntries(Object.entries(payMap).map(([id, v]) => [id, v.office_id])), [payMap]);
 
   const allRows = useMemo<Row[]>(() => {
     if (!items) return [];
@@ -269,6 +271,7 @@ export default function BulkRentalReportModal({
       client={r.client}
       items={r.items}
       orderPaymentMap={orderPayMap}
+      orderOfficeMap={orderOfficeMap}
       equipment={equipment}
       companyInfo={companyInfo}
       priceHistory={priceHistory}

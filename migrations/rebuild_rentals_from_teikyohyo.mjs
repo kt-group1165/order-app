@@ -291,7 +291,7 @@ async function loadDb(sb) {
     orders: await selectAll(sb, "orders", "id,client_id,office_id,payment_type,status,ordered_at", t),
     items: await selectAll(sb, "order_items", "*", t),
     equipment: await selectAll(sb, "equipment_master", "id,product_code,tais_code,name,category,kind,rental_price", t),
-    priceHist: await selectAll(sb, "equipment_price_history", "id,product_code,rental_price,valid_from", t),
+    priceHist: await selectAll(sb, "equipment_price_history", "*", t), // ★ office_id (事業所ごとの価格) は列が無い DB でも読めるよう *
     hosp: await selectAll(sb, "client_hospitalizations", "id,client_id,admission_date,discharge_date", t),
     overrides: await selectAll(sb, "billing_unit_overrides", "id,client_id,month,order_item_id,units_override", t),
     refs: {},
@@ -836,7 +836,7 @@ async function main() {
       let u;
       if (ovr.has(it.id)) u = ovr.get(it.id);
       else {
-        const price = getPriceForMonth(db.priceHist, it.product_code, ym) ?? eq?.rental_price ?? 0;
+        const price = getPriceForMonth(db.priceHist, it.product_code, ym, OFFICE) ?? eq?.rental_price ?? 0; // 対象事業所の行 → 共通 → マスタ
         const base = price ? Math.round(price / 10) : 0;
         let f = false, sh = false;
         for (let d = 1; d <= nd; d++) {

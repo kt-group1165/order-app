@@ -544,7 +544,7 @@ function computeCeilingImpact(
     // このファイルの TAIS だけ見る (それ以外の超過は check:ceiling-rental が見る)
     if (!e?.tais_code || !fileTais.has(e.tais_code.trim())) continue;
     // 請求画面 (BillingTab getUnits) と同じ価格の取り方
-    const price = getPriceForMonth(source.history, it.product_code, entry.ym) ?? e.rental_price ?? 0;
+    const price = getPriceForMonth(source.history, it.product_code, entry.ym, it.officeId) ?? e.rental_price ?? 0;
     lines.push({ id: it.id, taisCode: e.tais_code, price, quantity: it.quantity, productCode: it.product_code });
   }
   const codeById = new Map(lines.map((l) => [l.id, l.productCode]));

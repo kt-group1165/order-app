@@ -851,20 +851,29 @@ export async function addPriceHistory(
 }
 
 /**
- * 指定月（yearMonth = "YYYY-MM"）時点での有効価格を返す。
+ * 指定月（yearMonth = "YYYY-MM"）時点での有効価格を返す。★ 価格の決め方はここ 1 か所 (2026-11-13: 事業所ごとの価格)。
+ *   ① officeId を渡したら その事業所の行 (office_id = officeId) のうち 月初時点で有効なもの
+ *   ② 無ければ 共通の行 (office_id が NULL / 列が無い古い DB の行)
+ *   ③ それも無ければ null → 呼び出し側が equipment_master.rental_price を使う
+ * officeId を渡さない呼び出しは 共通の行だけを見る (事業所の行は使わない = 今までと同じ)。
  * 価格改定は必ず月初（YYYY-MM-01）単位で行われる前提。
- * 履歴がない場合は null。
  */
 export function getPriceForMonth(
   history: EquipmentPriceHistory[],
   productCode: string,
-  yearMonth: string
+  yearMonth: string,
+  officeId?: string | null
 ): number | null {
   const monthStart = `${yearMonth}-01`;
-  const records = history
-    .filter((h) => h.product_code === productCode && h.valid_from <= monthStart)
-    .sort((a, b) => b.valid_from.localeCompare(a.valid_from));
-  return records[0]?.rental_price ?? null;
+  const latest = (rows: EquipmentPriceHistory[]) =>
+    rows
+      .filter((h) => h.product_code === productCode && h.valid_from <= monthStart)
+      .sort((a, b) => b.valid_from.localeCompare(a.valid_from))[0]?.rental_price ?? null;
+  if (officeId) {
+    const own = latest(history.filter((h) => h.office_id === officeId));
+    if (own != null) return own;
+  }
+  return latest(history.filter((h) => !h.office_id));
 }
 
 /** sort_order を一括更新（並び替え保存用） */

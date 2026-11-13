@@ -23,6 +23,7 @@ export default function RentalReportSheet({
   client,
   items,
   orderPaymentMap = {},
+  orderOfficeMap = {},
   equipment,
   companyInfo,
   priceHistory,
@@ -43,6 +44,8 @@ export default function RentalReportSheet({
   client: Client;
   items: OrderItem[];
   orderPaymentMap?: Record<string, "介護" | "自費">;
+  /** order_id → 注文の事業所 (価格を事業所ごとに引く。無ければ 共通の価格) */
+  orderOfficeMap?: Record<string, string | null>;
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   priceHistory: EquipmentPriceHistory[];
@@ -69,7 +72,8 @@ export default function RentalReportSheet({
 
   const eqByCode = new Map(equipment.map((e) => [e.product_code, e]));
   const getEq = (code: string) => eqByCode.get(code);
-  const histPrice = (code: string, ym: string) => getPriceForMonth(priceHistory, code, ym) ?? undefined;
+  const officeOf = (i: OrderItem) => orderOfficeMap[i.order_id] ?? null;
+  const histPrice = (code: string, ym: string, officeId: string | null) => getPriceForMonth(priceHistory, code, ym, officeId) ?? undefined;
 
   const reportItems = items.filter(isReportItem).sort((a, b) => {
     const ca = getEq(a.product_code)?.category ?? "zzz";
@@ -83,7 +87,7 @@ export default function RentalReportSheet({
 
   // 月の算定単位: 請求・伝送と同じ rentalMonthUnits (日割り設定・入院・休止を反映。calc が無ければ反映せず自動)
   const unitsAt = (i: OrderItem, ym: string) =>
-    itemMonthUnits(i, ym, histPrice(i.product_code, ym) ?? i.rental_price, excludedOf(calc, client.id, i.id), modeOf(calc, i.id, ym));
+    itemMonthUnits(i, ym, histPrice(i.product_code, ym, officeOf(i)) ?? i.rental_price, excludedOf(calc, client.id, i.id), modeOf(calc, i.id, ym));
   const m1Total = careItems.reduce((s, i) => s + (unitsAt(i, targetMonth) ?? 0), 0);
   const m2Total = careItems.reduce((s, i) => s + (unitsAt(i, m2YM) ?? 0), 0);
 
@@ -188,7 +192,7 @@ export default function RentalReportSheet({
         <tbody>
           {careItems.map((item) => {
             const eq = getEq(item.product_code);
-            const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
+            const price = getPriceForMonth(priceHistory, item.product_code, targetMonth, officeOf(item)) ?? item.rental_price ?? 0;
             const u1 = unitsAt(item, targetMonth);
             const u2 = unitsAt(item, m2YM);
             return (
@@ -235,7 +239,7 @@ export default function RentalReportSheet({
         <tbody>
           {selfPayItems.map((item) => {
             const eq = getEq(item.product_code);
-            const selfPrice = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
+            const selfPrice = getPriceForMonth(priceHistory, item.product_code, targetMonth, officeOf(item)) ?? item.rental_price ?? 0;
             return (
               <tr key={item.id}>
                 <td style={RPT_TD}>{eq?.category ?? ""}</td>

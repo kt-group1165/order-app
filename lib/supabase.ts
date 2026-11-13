@@ -181,6 +181,8 @@ export type EquipmentPriceHistory = {
   rental_price: number;
   valid_from: string; // DATE "YYYY-MM-DD"
   created_at: string;
+  // 価格を持つ事業所。NULL / 無い = 全事業所共通 (2026-11-13 equipment_price_history_office_id.sql。列が無い DB では undefined)
+  office_id?: string | null;
 };
 
 // セット構成 (BOM): C = A + B。親=set_product_code, 子=component_product_code

@@ -213,7 +213,8 @@ function MonthlyInfoTab({
         const eq = mEquipmentByCode.get(item.product_code);
         // ⚠ 価格改定があれば当月時点の価格を使う (equipment.rental_price は現在価格なので
         //   過去月を見ているときは食い違いうる)。InvoiceReceiptModal と同じ経路。
-        const price = getPriceForMonth(priceHistory, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+        // 価格は その明細の注文の事業所の行 → 共通の行 → 用具マスタ (lib/equipment.ts getPriceForMonth)
+        const price = getPriceForMonth(priceHistory, item.product_code, billingMonth, mOrdersById.get(item.order_id)?.office_id ?? currentOfficeId) ?? eq?.rental_price ?? 0;
         const base = price ? Math.round(price / 10) : 0;
         // 半月按分 (既定) / 日割り: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts rentalMonthUnits)
         units = rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, billingMonth,
@@ -950,12 +951,15 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     return { units: kind === "none" ? 0 : getUnits(item, clientId) * item.quantity, billedDays, kind, label };
   };
 
+  /** 価格を引く事業所 = その明細の注文の事業所 (無ければ 今見ている事業所)。lib/equipment.ts getPriceForMonth に渡す */
+  const officeOfItem = (item: OrderItem): string | null => ordersById.get(item.order_id)?.office_id ?? currentOfficeId ?? null;
+
   const getUnits = (item: OrderItem, clientId: string) => {
     if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
     const eq = equipmentByCode.get(item.product_code);
     // ⚠ 価格改定があれば当月時点の価格を使う (2026-09-04 是正: 以前は equipment.rental_price
     //   = 現在価格を直参照しており、価格改定後に過去月ぶんを組むと現在価格で計算されていた)。
-    const price = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+    const price = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth, officeOfItem(item)) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return base;
     // 半月按分 (既定) / 日割り: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts rentalMonthUnits)
@@ -969,7 +973,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const computeUnitsForMonth = (item: OrderItem, clientId: string, ym: string): number => {
     const eq = equipmentByCode.get(item.product_code);
     // ⚠ 過去月 (返戻・過誤の再伝送) を組むので、当時の価格改定を必ず反映する。
-    const price = getPriceForMonth(priceHistoryAll, item.product_code, ym) ?? eq?.rental_price ?? 0;
+    const price = getPriceForMonth(priceHistoryAll, item.product_code, ym, officeOfItem(item)) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return base;
     return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, ym,
@@ -1165,7 +1169,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           name: eq?.name ?? item.product_code,
           taisCode: eq?.tais_code,
           // 上限と比べるのは 月額 (半月按分前)。getUnits と同じく当月時点の改定価格 → マスタ価格
-          price: getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? null,
+          price: getPriceForMonth(priceHistoryAll, item.product_code, billingMonth, officeOfItem(item)) ?? eq?.rental_price ?? null,
           quantity: item.quantity,
         });
       }
@@ -2444,8 +2448,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     const result: RowType[] = [];
 
     // 月額: 請求 (getUnits) と同じ 価格履歴 (getPriceForMonth = 月初時点) → 用具マスタ
-    const getMonthlyPrice = (productCode: string): number =>
-      getPriceForMonth(priceHistory, productCode, month) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
+    const getMonthlyPrice = (productCode: string, officeId: string | null): number =>
+      getPriceForMonth(priceHistory, productCode, month, officeId) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
 
     for (const item of orderItems) {
       const order = orders.find((o) => o.id === item.order_id);
@@ -2483,12 +2487,12 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           eventType: "start",
           salesDate: item.rental_start_date,
           rType,
-          ...salesRowAmount(item, "start", month, getMonthlyPrice(item.product_code)),
+          ...salesRowAmount(item, "start", month, getMonthlyPrice(item.product_code, order.office_id ?? currentOfficeId ?? null)),
           client,
           item,
           order,
           equipmentName,
-          rentalPrice: getMonthlyPrice(item.product_code),
+          rentalPrice: getMonthlyPrice(item.product_code, order.office_id ?? currentOfficeId ?? null),
           purchasePrice: resolvePurchasePrice(item, monthEnd) ?? 0,
         });
       }
@@ -2515,12 +2519,12 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           eventType: "end",
           salesDate: item.rental_end_date,
           rType,
-          ...salesRowAmount(item, "end", month, getMonthlyPrice(item.product_code)),
+          ...salesRowAmount(item, "end", month, getMonthlyPrice(item.product_code, order.office_id ?? currentOfficeId ?? null)),
           client,
           item,
           order,
           equipmentName,
-          rentalPrice: getMonthlyPrice(item.product_code),
+          rentalPrice: getMonthlyPrice(item.product_code, order.office_id ?? currentOfficeId ?? null),
           purchasePrice: resolvePurchasePrice(item, monthEnd) ?? 0,
         });
       }
@@ -2538,8 +2542,8 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
     const monthStart = `${month}-01`;
     const monthEnd = monthEndYmd(y, m);
     // 月額: 請求と同じ 価格履歴 (月初時点) → 用具マスタ
-    const monthlyRentalOf = (productCode: string): number =>
-      getPriceForMonth(priceHistory, productCode, month) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
+    const monthlyRentalOf = (productCode: string, officeId: string | null): number =>
+      getPriceForMonth(priceHistory, productCode, month, officeId) ?? equipment.find((e) => e.product_code === productCode)?.rental_price ?? 0;
     let revenue = 0;
     let expense = 0;
     let activeCount = 0;
@@ -2566,7 +2570,7 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
       const startedByMonthEnd = item.rental_start_date <= monthEnd;
       const endedBeforeMonth = item.status === "terminated" && item.rental_end_date != null && item.rental_end_date < monthStart;
       if (startedByMonthEnd && !endedBeforeMonth) {
-        const rev = salesMonthAmount(item, order.client_id ?? "", month, monthlyRentalOf(item.product_code)).amount;
+        const rev = salesMonthAmount(item, order.client_id ?? "", month, monthlyRentalOf(item.product_code, order.office_id ?? currentOfficeId ?? null)).amount;
         revenue += rev;
         activeCount++;
         const pa = prodAcc(item.product_code);
@@ -3494,8 +3498,10 @@ function InvoiceReceiptModal({
   }, [orders, orderItems, equipment, client.id, monthStartStr, monthEndStr]);
 
   const getEq = (code: string) => equipment.find((e) => e.product_code === code);
-  const histPrice = (code: string, ym: string) =>
-    getPriceForMonth(priceHistory, code, ym) ?? undefined;
+  // 価格を引く事業所 = その明細の注文の事業所 (lib/equipment.ts getPriceForMonth)
+  const officeOfItem = (item: OrderItem): string | null => orders.find((o) => o.id === item.order_id)?.office_id ?? null;
+  const histPrice = (code: string, ym: string, officeId: string | null) =>
+    getPriceForMonth(priceHistory, code, ym, officeId) ?? undefined;
 
   // 対象月の請求対象日（入院除外を考慮した開始〜終了）
   const periodInfo = useMemo(() => {
@@ -3526,9 +3532,9 @@ function InvoiceReceiptModal({
   const detailRows = useMemo(() => {
     return careItems.map((item) => {
       const eq = getEq(item.product_code);
-      const price = getPriceForMonth(priceHistory, item.product_code, targetMonth) ?? item.rental_price ?? 0;
+      const price = getPriceForMonth(priceHistory, item.product_code, targetMonth, officeOfItem(item)) ?? item.rental_price ?? 0;
       // 単位は 請求・伝送と同じ rentalMonthUnits (日割り設定・入院・休止を反映)
-      const units = itemMonthUnits(item, targetMonth, histPrice(item.product_code, targetMonth) ?? item.rental_price,
+      const units = itemMonthUnits(item, targetMonth, histPrice(item.product_code, targetMonth, officeOfItem(item)) ?? item.rental_price,
         [...hospitalizationRanges(hospitalizations), ...(pausesByItem.get(item.id) ?? [])], prorationModeOf(prorations, item.id, targetMonth)) ?? 0;
       const quantity = item.quantity || 1;
       const totalUnits = units * quantity;

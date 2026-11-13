@@ -52,7 +52,7 @@ export type ItemRow = {
   rental_price: number | null;
 };
 export type EqRow = { id: string; product_code: string; tais_code: string | null; name: string | null; category: string | null; kind: string | null; rental_price: number | null };
-export type PriceHist = { id: string; product_code: string; rental_price: number; valid_from: string };
+export type PriceHist = { id: string; product_code: string; rental_price: number; valid_from: string; office_id?: string | null };
 export type HospRow = { id: string; client_id: string; admission_date: string; discharge_date: string | null };
 export type OverrideRow = { id: string; client_id: string; month: string; order_item_id: string; units_override: number };
 export type LateRow = { id: string; client_id: string; month: string };
@@ -205,7 +205,8 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
     orders: await all<OrderRow>("orders", "id,client_id,office_id,payment_type,status"),
     items: await all<ItemRow>("order_items", "id,order_id,product_code,status,payment_type,rental_start_date,rental_end_date,quantity,cancelled_at,rental_price"),
     equipment: await all<EqRow>("equipment_master", "id,product_code,tais_code,name,category,kind,rental_price"),
-    priceHist: await all<PriceHist>("equipment_price_history", "id,product_code,rental_price,valid_from"),
+    // ★ 2026-11-13: office_id (事業所ごとの価格) は 列が無い DB でも読めるよう * で読む
+    priceHist: await all<PriceHist>("equipment_price_history", "*"),
     hosp: await all<HospRow>("client_hospitalizations", "id,client_id,admission_date,discharge_date"),
     overrides: await all<OverrideRow>("billing_unit_overrides", "id,client_id,month,order_item_id,units_override", ["month", month]),
     late: await all<LateRow>("billing_late_flags", "id,client_id,month", ["month", month]),
@@ -320,7 +321,8 @@ export function buildBillingModel(snap: Snapshot, MONTH: string, officeId: strin
   const unitsOf = (item: ItemRow, clientId: string): { unitPer: number; overridden: boolean; half: boolean } => {
     if (overrideByItem.has(item.id)) return { unitPer: overrideByItem.get(item.id)!, overridden: true, half: false };
     const eq = eqByCode.get(item.product_code);
-    const price = getPriceForMonth(snap.priceHist as never, item.product_code, MONTH) ?? eq?.rental_price ?? 0;
+    // 価格は その明細の注文の事業所の行 → 共通 → マスタ (lib/equipment.ts getPriceForMonth)
+    const price = getPriceForMonth(snap.priceHist as never, item.product_code, MONTH, ordersById.get(item.order_id)?.office_id ?? null) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return { unitPer: base, overridden: false, half: false };
     // 半月按分: 入院・休止の日を除いた貸与日で判定 (BillingTab と同じ halfMonthFlags)

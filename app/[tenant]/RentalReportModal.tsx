@@ -19,6 +19,7 @@ export default function RentalReportModal({
   client,
   items,
   orderPaymentMap = {},
+  orderOfficeMap = {},
   equipment,
   companyInfo,
   priceHistory,
@@ -30,6 +31,7 @@ export default function RentalReportModal({
   client: Client;
   items: OrderItem[];
   orderPaymentMap?: Record<string, "介護" | "自費">;
+  orderOfficeMap?: Record<string, string | null>;
   equipment: Equipment[];
   companyInfo: CompanyInfo;
   priceHistory: EquipmentPriceHistory[];
@@ -252,6 +254,7 @@ export default function RentalReportModal({
           client={client}
           items={items}
           orderPaymentMap={orderPaymentMap}
+          orderOfficeMap={orderOfficeMap}
           equipment={equipment}
           companyInfo={companyInfo}
           priceHistory={priceHistory}

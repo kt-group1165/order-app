@@ -2946,6 +2946,8 @@ function ClientDetail({
   const [orderPaymentMap, setOrderPaymentMap] = useState<Record<string, "介護" | "自費">>({});
   // 表示用: 発注の支払区分そのまま (特価自費 を区別するため。orderPaymentMap は帳票用に 2 値へ畳んでいる)
   const [orderPaymentRaw, setOrderPaymentRaw] = useState<Record<string, string>>({});
+  // order_id → 注文の事業所 (価格を事業所ごとに引く。lib/equipment.ts getPriceForMonth)
+  const [orderOffice, setOrderOffice] = useState<Record<string, string | null>>({});
   const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3285,7 +3287,7 @@ function ClientDetail({
     try {
       // 第1バッチ：全て並列
       const [{ data: ordersData }, insurResult, rentalResult, peResult, grantResult, docs] = await Promise.all([
-        supabase.from("orders").select("id, payment_type").eq("tenant_id", tenantId).eq("client_id", client.id),
+        supabase.from("orders").select("id, payment_type, office_id").eq("tenant_id", tenantId).eq("client_id", client.id),
         supabase.from("client_insurance_records").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("effective_date", { ascending: false }),
         supabase.from("client_rental_history").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("start_date", { ascending: false }),
         supabase.from("client_public_expenses").select("*").eq("tenant_id", tenantId).eq("client_id", client.id).order("valid_start", { ascending: false }),
@@ -3315,6 +3317,7 @@ function ClientDetail({
         });
         setOrderPaymentMap(payMap);
         setOrderPaymentRaw(Object.fromEntries(ordersData.map((o: { id: string; payment_type: string }) => [o.id, o.payment_type])));
+        setOrderOffice(Object.fromEntries(ordersData.map((o: { id: string; office_id?: string | null }) => [o.id, o.office_id ?? null])));
         // 第2バッチ：order_items 取得後に price_history も並列
         const { data: items } = await supabase.from("order_items").select("*").in("order_id", orderIds);
         const loaded = items ?? [];
@@ -3804,6 +3807,7 @@ function ClientDetail({
           client={client}
           items={clientItems}
           orderPaymentMap={orderPaymentMap}
+          orderOfficeMap={orderOffice}
           equipment={equipment}
           companyInfo={companyInfo}
           priceHistory={priceHistory}
@@ -4480,7 +4484,7 @@ function ClientDetail({
                 items={sortedMonthlyItems}
                 yearMonth={yearMonth}
                 kindOf={rentalKind}
-                priceOf={(i) => getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0}
+                priceOf={(i) => getPriceForMonth(priceHistory, i.product_code, yearMonth, orderOffice[i.order_id] ?? currentOfficeId ?? null) ?? i.rental_price ?? 0}
                 nameOf={(i) => equipment.find((e) => e.product_code === i.product_code)?.name ?? i.product_code}
                 categoryOf={categoryOf}
               />
@@ -4488,7 +4492,7 @@ function ClientDetail({
               const activeMonthly = sortedMonthlyItems.filter((i) => i.status !== "terminated");
               const terminatedMonthly = sortedMonthlyItems.filter((i) => i.status === "terminated");
               const getHistoricalPrice = (item: OrderItem) =>
-                getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? item.rental_price ?? 0;
+                getPriceForMonth(priceHistory, item.product_code, yearMonth, orderOffice[item.order_id] ?? currentOfficeId ?? null) ?? item.rental_price ?? 0;
               const activeTotal = activeMonthly.reduce((s, i) => s + getHistoricalPrice(i), 0);
               return (
                 <>
@@ -4500,7 +4504,7 @@ function ClientDetail({
                         <tbody className="divide-y divide-dashed divide-gray-200">
                           {activeMonthly.map((item) => (
                             <ItemCard key={item.id} item={item}
-                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? undefined}
+                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth, orderOffice[item.order_id] ?? currentOfficeId ?? null) ?? undefined}
                             />
                           ))}
                         </tbody>
@@ -4522,7 +4526,7 @@ function ClientDetail({
                         <tbody className="divide-y divide-dashed divide-gray-200">
                           {terminatedMonthly.map((item) => (
                             <ItemCard key={item.id} item={item} dim
-                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth) ?? undefined}
+                              priceOverride={getPriceForMonth(priceHistory, item.product_code, yearMonth, orderOffice[item.order_id] ?? currentOfficeId ?? null) ?? undefined}
                             />
                           ))}
                         </tbody>
@@ -5932,6 +5936,7 @@ function ClientDetail({
           yearMonth={recordYearMonth}
           clientItems={clientItems}
           orderPaymentRaw={orderPaymentRaw}
+          orderOffice={orderOffice}
           equipment={equipment}
           priceHistory={priceHistory}
           onClose={() => setShowRecordModal(false)}
@@ -6040,6 +6045,9 @@ function buildRecordsForMonth(
   priceHistory: EquipmentPriceHistory[],
   /** order_id → orders.payment_type (明細に支払区分が無いとき用) */
   orderPaymentRaw: Record<string, string> = {},
+  /** order_id → 注文の事業所 (価格を事業所ごとに引く) */
+  orderOffice: Record<string, string | null> = {},
+  fallbackOfficeId: string | null = null,
 ): MonthlyRecordRow[] {
   const [y, m] = yearMonth.split("-").map(Number);
   const monthStart = `${yearMonth}-01`;
@@ -6057,7 +6065,7 @@ function buildRecordsForMonth(
     })
     .map((i) => {
       const eq = equipment.find((e) => e.product_code === i.product_code);
-      const price = getPriceForMonth(priceHistory, i.product_code, yearMonth) ?? i.rental_price ?? 0;
+      const price = getPriceForMonth(priceHistory, i.product_code, yearMonth, orderOffice[i.order_id] ?? fallbackOfficeId) ?? i.rental_price ?? 0;
       const rangeStart = i.rental_start_date && i.rental_start_date > monthStart ? i.rental_start_date : monthStart;
       const rangeEnd = i.rental_end_date && i.rental_end_date < monthEnd ? i.rental_end_date : monthEnd;
       return {
@@ -6095,7 +6103,7 @@ function buildRecordHtml(yearMonth: string, clientName: string, records: Monthly
 }
 
 function SendMonthlyRecordModal({
-  tenantId, client, sourceOfficeId, yearMonth, clientItems, orderPaymentRaw = {}, equipment, priceHistory,
+  tenantId, client, sourceOfficeId, yearMonth, clientItems, orderPaymentRaw = {}, orderOffice = {}, equipment, priceHistory,
   onClose, onSuccess, onError,
 }: {
   tenantId: string;
@@ -6105,6 +6113,8 @@ function SendMonthlyRecordModal({
   clientItems: OrderItem[];
   /** order_id → orders.payment_type (明細の支払区分が空のとき用) */
   orderPaymentRaw?: Record<string, string>;
+  /** order_id → 注文の事業所 (価格を事業所ごとに引く) */
+  orderOffice?: Record<string, string | null>;
   equipment: Equipment[];
   priceHistory: EquipmentPriceHistory[];
   onClose: () => void;
@@ -6120,8 +6130,8 @@ function SendMonthlyRecordModal({
   const [showAll, setShowAll] = useState(false);
 
   const records = useMemo(
-    () => buildRecordsForMonth(yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw),
-    [yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw],
+    () => buildRecordsForMonth(yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw, orderOffice, sourceOfficeId),
+    [yearMonth, clientItems, equipment, priceHistory, orderPaymentRaw, orderOffice, sourceOfficeId],
   );
   const total = useMemo(() => records.reduce((s, r) => s + recordAmount(r), 0), [records]);
 
