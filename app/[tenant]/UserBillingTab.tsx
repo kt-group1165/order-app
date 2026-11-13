@@ -1113,10 +1113,11 @@ ${errors[0]}`);
                       >
                         {careOffice?.name ?? client.care_manager_org ?? "-"}
                       </td>
+                      {/* 2026-11-13: 確定した請求書番号 (2026-0002) と 仮の番号 (利用者番号-連番) を見分けられるように。採番は変えない */}
                       <td className="px-2 py-1 border border-gray-200 font-mono">
                         {invoice?.invoice_no != null && invoice?.invoice_year != null
-                          ? formatInvoiceNo(invoice.invoice_year, invoice.invoice_no)
-                          : `${client.user_number ?? "-"}-${seq}`}
+                          ? <span title="請求書番号 (確定)">{formatInvoiceNo(invoice.invoice_year, invoice.invoice_no)}</span>
+                          : <span className="text-gray-400" title="未確定 (仮番号: 利用者番号-連番)。請求書を発行すると番号が付きます">{`${client.user_number ?? "-"}-${seq}`}</span>}
                       </td>
                       <td
                         className="px-2 py-1 border border-gray-200"

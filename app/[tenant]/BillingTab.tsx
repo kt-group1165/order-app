@@ -32,7 +32,7 @@ import {
 } from "@/lib/billing";
 import { getCareOffices, type CareOffice } from "@/lib/careOffices";
 import Encoding from "encoding-japanese";
-import { buildFukuyoguDensou, careLevelCodeForDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
+import { buildFukuyoguDensou, careLevelCodeForDensou, fukuyoguServiceCode, fukuyoguRentalDaysInMonth, fukuyoguPlanKubunCode, FUKUYOGU_PLAN_KUBUN_LABEL, isYoboCareLevel, type FukuyoguSeikyuRow, type FukuyoguDetailLine } from "@/lib/kokuho-densou/build";
 import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits, kohiCoverageInMonth, isKohiMonthMode, KOHI_MONTH_MODES, KOHI_MONTH_MODE_LABEL, KOHI_MONTH_MODE_DEFAULT, type FukuyoguKohi, type FukuyoguLineInput, type KohiMonthMode } from "@/lib/kokuho-densou/fukuyogu-amounts";
 import { getCmUnits, saveCmUnits } from "@/lib/fukuyoguCmUnits";
 import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fukuyoguKohiMonth";
@@ -338,7 +338,8 @@ function MonthlyInfoTab({
                   <td className="px-2 py-1 border border-gray-200 font-mono">{ins?.insured_number ?? client.insured_number ?? "-"}</td>
                   <td className="px-2 py-1 border border-gray-200">{client.name}</td>
                   <td className="px-2 py-1 border border-gray-200 font-mono">{client.user_number ?? "-"}</td>
-                  <td className="px-2 py-1 border border-gray-200">居宅介護支援事業者作成</td>
+                  {/* 2026-11-13: 固定だった → 伝送の 項19 と同じ関数で出す (居宅番号なし=自己作成 / 要支援 × 区分3 の居宅=介護予防支援) */}
+                  <td className="px-2 py-1 border border-gray-200">{FUKUYOGU_PLAN_KUBUN_LABEL[fukuyoguPlanKubunCode(careOffice?.office_number, isYoboCareLevel(ins?.care_level ?? client.care_level), (careOffice as { plan_kubun?: string | null } | null)?.plan_kubun)]}</td>
                   <td className="px-2 py-1 border border-gray-200 font-mono">{careOffice?.office_number ?? "-"}</td>
                   <td className="px-2 py-1 border border-gray-200 truncate max-w-[200px]" title={careOffice?.name ?? ""}>{careOffice?.name ?? client.care_manager_org ?? "-"}</td>
                   <td className="px-2 py-1 border border-gray-200 text-right font-mono">{units.toLocaleString()}</td>
@@ -1762,6 +1763,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           orders={orders}
           equipment={equipment}
           currentOfficeId={currentOfficeId}
+          careOffices={careOffices}
         />
       </div>
     );
@@ -2260,13 +2262,15 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 }
 
 // ─── Sales Report Tab（売上帳票：介護保険レンタル） ─────────────────────
-function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, currentOfficeId }: {
+function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, currentOfficeId, careOffices }: {
   tenantId: string;
   clients: BillingClient[];
   orderItems: OrderItem[];
   orders: Order[];
   equipment: Equipment[];
   currentOfficeId: string | null;
+  /** 親 (請求画面) が読み終えた居宅の一覧。ここで care_offices を読み直さない (2026-11-13) */
+  careOffices: CareOffice[];
 }) {
   // 月選択（デフォルト：今月）
   const [month, setMonth] = useState(() => {
@@ -2288,9 +2292,12 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   const [purchasePrices, setPurchasePrices] = useState<Array<{ product_code: string; supplier_id: string; purchase_price: number; valid_from: string }>>([]);
   const [samplePriceRowCount, setSamplePriceRowCount] = useState(0); // 経費に使わなかったサンプル単価の行数
   const [suppliersAll, setSuppliersAll] = useState<Supplier[]>([]); // 卸名解決用 (非表示含む全件)
-  const [careOfficesMap, setCareOfficesMap] = useState<Map<string, string>>(new Map()); // id -> name
+  // id -> name。親が読んだ居宅の一覧から作る (親の読み込みが後から終わっても追従する)
+  const careOfficesMap = useMemo(() => new Map(careOffices.map((o) => [o.id, o.name] as [string, string])), [careOffices]);
   const [careManagersMap, setCareManagersMap] = useState<Map<string, string>>(new Map()); // id -> name
   const [loading, setLoading] = useState(true);
+  /** 2 段目 (書類・仕入・ケアマネ名・卸) を読み終えるまで true。月次損益の経費はこれを待つ */
+  const [subLoading, setSubLoading] = useState(true);
 
   // 取得対象は月非依存 (全件ロード→クライアント側で月フィルタ)。
   // 月ナビや orderItems の参照変化で毎回全再取得していたのを、
@@ -2321,20 +2328,24 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
           }
           return all;
         };
-        const [sr, docs, priceHist, ppRes, offs, mgrs, sups] = await Promise.all([
+        // ★ 2026-11-13 高速化: 表の金額に効くもの (手入力の記録・価格履歴) を先に読んで表を出し、
+        //   ✓ の列 (書類)・仕入・居宅/ケアマネ名・卸 は あとから埋める (読む表と回数は同じ。居宅は親が読んだものを使うので 1 本減)
+        const [sr, priceHist] = await Promise.all([
           getSalesRecords(tenantId),
-          fetchAllRows<{ client_id: string; type: string }>("client_documents", "client_id, type"),
           getPriceHistory(tenantId, [...new Set(orderItems.map((i) => i.product_code))]),
+        ]);
+        setSalesRecords(sr);
+        setPriceHistory(priceHist);
+        setLoading(false);
+        const [docs, ppRes, mgrs, sups] = await Promise.all([
+          fetchAllRows<{ client_id: string; type: string }>("client_documents", "client_id, type"),
           // ★ 2,556 行あるので必ずページング (以前は非ページングで先頭 1,000 行しか見ていなかった)
           fetchAllRows<{ product_code: string; supplier_id: string; purchase_price: number | null; valid_from: string | null; is_active: boolean | null; supplier_product_code: string | null }>(
             "equipment_prices", "product_code, supplier_id, purchase_price, valid_from, is_active, supplier_product_code"),
-          fetchAllRows<{ id: string; name: string }>("care_offices", "id, name"),
           fetchAllRows<{ id: string; name: string }>("care_managers", "id, name"),
           getSuppliers().catch((e) => { console.error("getSuppliers に失敗 (空で続行):", e); return [] as Supplier[]; }),
         ]);
-        setSalesRecords(sr);
         setDocuments(docs);
-        setPriceHistory(priceHist);
         // ★ サンプル単価 (supplier_product_code が 'SAMPLE-' 始まり。seed_fake_supplier_prices.mjs) は
         //   架空の値なので経費に使わない。DB の行の削除は user 判断 (ここでは件数だけ出す)
         const isSample = (p: { supplier_product_code: string | null }) => (p.supplier_product_code ?? "").startsWith("SAMPLE-");
@@ -2345,14 +2356,12 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
             .map((p) => ({ product_code: p.product_code, supplier_id: p.supplier_id, purchase_price: p.purchase_price as number, valid_from: p.valid_from ?? "0000-01-01" })),
         );
         setSuppliersAll(sups);
-        const om = new Map<string, string>();
-        offs.forEach((o) => om.set(o.id, o.name));
-        setCareOfficesMap(om);
         const mm = new Map<string, string>();
         mgrs.forEach((m) => mm.set(m.id, m.name));
         setCareManagersMap(mm);
       } finally {
         setLoading(false);
+        setSubLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 月非依存。品目コード集合(productCodesKey)変化時のみ再取得
@@ -2690,8 +2699,13 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
         </div>
       </div>
 
-      {/* 月次損益（発生ベース） */}
-      {!loading && (
+      {/* 月次損益（発生ベース）。経費 (仕入) は 2 段目の読み込み後 */}
+      {!loading && subLoading && (
+        <div className="border-b border-gray-300 bg-slate-50 shrink-0 px-3 py-2 text-xs text-gray-400 flex items-center gap-2">
+          <Loader2 size={12} className="animate-spin" />月次損益・仕入・書類の ✓ を読み込み中 (表は先に出しています)
+        </div>
+      )}
+      {!loading && !subLoading && (
         <div className="border-b border-gray-300 bg-slate-50 shrink-0">
           <div className="px-3 py-2 flex items-center gap-4 flex-wrap text-xs">
             <span className="font-semibold text-gray-700">月次損益（発生ベース）</span>

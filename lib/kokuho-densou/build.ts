@@ -499,7 +499,7 @@ export function buildFukuyoguDensou(
       //   ⚠ "2" (被保険者が自己作成) は実際にケアマネが居る利用者に付けると
       //     居宅側の給付管理票と突合できず返戻になり得る。上の warning を必ず潰すこと。
       // ★ 2026-11-09: ほのぼの実伝送 KK261004 では 区分 3 は 7132 (要支援) の 5 事業所だけ (care_offices.plan_kubun)
-      r.careOfficeNumber ? (yobo && r.carePlanKubun === "3" ? "3" : "1") : "2", // 19 居宅サービス計画作成区分コード
+      fukuyoguPlanKubunCode(r.careOfficeNumber, yobo, r.carePlanKubun), // 19 居宅サービス計画作成区分コード
       r.careOfficeNumber ?? "", // 20 事業所番号 (居宅介護支援事業所)
       dateNum(r.serviceStartDate ?? null), // 21 開始年月日 (月内にサービスを始めた人)
       dateNum(r.serviceStopDate ?? null), // 22 中止年月日 (月内にサービスをやめた人)
@@ -665,3 +665,13 @@ export function buildFukuyoguDensou(
     warnings,
   };
 }
+
+/**
+ * 7131/7132 の 項19 居宅サービス計画作成区分コード (伝送と画面で同じ値を出すため 1 か所に)。
+ *   居宅事業所番号が無い → "2" (自己作成) / 要支援 かつ 担当居宅が 区分 3 (care_offices.plan_kubun) → "3" / それ以外 → "1"
+ */
+export function fukuyoguPlanKubunCode(careOfficeNumber: string | null | undefined, yobo: boolean, carePlanKubun: string | null | undefined): "1" | "2" | "3" {
+  return careOfficeNumber ? (yobo && carePlanKubun === "3" ? "3" : "1") : "2";
+}
+/** 作成区分コード → 画面の表示名 */
+export const FUKUYOGU_PLAN_KUBUN_LABEL: Record<"1" | "2" | "3", string> = { "1": "居宅介護支援事業者作成", "2": "被保険者自己作成", "3": "介護予防支援事業者作成" };
