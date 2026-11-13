@@ -40,6 +40,8 @@ export type InsRow = {
 export type KohiRow = {
   id: string; client_id: string; office_id?: string | null; hohei_code: string | null; futan_sha_number: string | null;
   jukyu_sha_number: string | null; valid_start: string | null; valid_end: string | null;
+  /** 介護券の本人支払額 (2026-11-13 追加。古い控え (--db-cache) には無い → 0 扱い) */
+  self_pay_amount?: number | null;
 };
 export type OrderRow = { id: string; client_id: string | null; office_id: string | null; payment_type: string | null; status: string | null };
 export type ItemRow = {
@@ -197,7 +199,7 @@ export async function loadSnapshot(month: string, cachePath: string, refresh: bo
     offices: await all<OfficeRow>("offices", "id,name,business_number,insurance_scope"),
     clients: await all<ClientRow>("clients", "id,user_number,name,furigana,birth_date,gender,care_level,insurer_number,insured_number,benefit_rate,certification_start_date,certification_end_date,care_office_id,office_id,deleted_at,postal_code,address,phone,mobile,status"),
     ins: await all<InsRow>("client_insurance_records", "id,client_id,office_id,effective_date,insurer_number,insured_number,care_level,certification_start_date,certification_end_date,benefit_rate,certification_status,care_office_id,care_office_number,birth_date,insurer_name,certification_date,issued_date,insurance_confirmed_date,qualification_date,insurance_valid_start,insurance_valid_end,limit_period_start,limit_period_end,service_limit_amount,care_manager,care_manager_org,care_office_name,service_restriction,service_memo"),
-    kohi: await all<KohiRow>("client_public_expenses", "id,client_id,office_id,hohei_code,futan_sha_number,jukyu_sha_number,valid_start,valid_end"),
+    kohi: await all<KohiRow>("client_public_expenses", "id,client_id,office_id,hohei_code,futan_sha_number,jukyu_sha_number,valid_start,valid_end,self_pay_amount"),
     orders: await all<OrderRow>("orders", "id,client_id,office_id,payment_type,status"),
     items: await all<ItemRow>("order_items", "id,order_id,product_code,status,payment_type,rental_start_date,rental_end_date,quantity,cancelled_at,rental_price"),
     equipment: await all<EqRow>("equipment_master", "id,product_code,tais_code,name,category,kind,rental_price"),

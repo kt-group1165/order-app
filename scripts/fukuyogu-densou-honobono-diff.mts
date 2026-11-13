@@ -347,7 +347,8 @@ async function main() {
       totalUnits += l.units;
     }
     const k = pickKohi(cid);
-    const kohi = k ? { hobetsu: k.hohei_code!, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number } : null;
+    // 本人支払額 (介護券) も BillingTab (lib/fukuyoguKohiMonth.ts) と同じく渡す (2026-11-13: 渡しておらず 中島 紀久子 で 1,200 円ずれていた)
+    const kohi = k ? { hobetsu: k.hohei_code!, futansha: k.futan_sha_number, jukyusha: k.jukyu_sha_number, selfPay: k.self_pay_amount ?? null } : null;
     const certsOf = (xs: BenefitCertRow[]) => perOffice ? xs.filter((x) => (x as { office_id?: string | null }).office_id === office.id) : xs;
     const benefitRaw = benefitBy
       ? (() => { const r = resolveBenefitForMonth(model.insByClient.get(cid) ?? [], certsOf(benefitBy.get(cid) ?? []), model.monthStartS, model.monthEndS); return r.benefitRate != null ? String(r.benefitRate) : (perOffice ? null : c.benefit_rate); })()
@@ -373,6 +374,8 @@ async function main() {
       insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
       kohiHobetsu: amt.kohiHobetsu, kohiFutansha: kohi?.futansha ?? null, kohiJukyusha: kohi?.jukyusha ?? null,
       kohiAmount: amt.kohiAmount, kohiTandoku: amt.kohiTandoku,
+      // BillingTab と同じ (公費の対象単位・費用・本人負担。本人負担は 01 項41 / 10 項20 に出る)
+      kohiUnits: amt.kohiUnits, kohiTargetCost: amt.kohiTargetCost, kohiHonninFutan: amt.kohiHonninFutan,
       // 開始年月日は BillingTab と同じく 貸与履歴から (lib/kokuho-densou/fukuyogu-period.ts)。中止は渡さない
       serviceStartDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH),
     });
