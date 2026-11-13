@@ -1688,9 +1688,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     ),
   ];
 
-  // 国保対象フィルタ: ON なら月遅れ(自動+手動)の当月行を除外。再請求(過去月)行は国保連提出対象なので常に残す。
+  // 国保対象フィルタ: ON なら 自動の月遅れ (認定 申請中 等) の当月行を除外。再請求(過去月)行は国保連提出対象なので常に残す。
+  // ★ 2026-11-13 user 依頼: 手で「月遅」にした行は ON でも一覧に残す (黄色の行・月遅の印)。
+  //   旧: 月遅にした瞬間に一覧から消え、その月の画面で月遅れにしたことが見えなくなっていた。
+  //   金額には入らない (伝送 = 1059 行付近・フッター合計 = billingGroupsForTotal は lateFlags で別に除外している)
   const displayRows = kokuhoOnly
-    ? allRows.filter((r) => r.type === "rebill" || !(autoLateClients.has(r.client.id) || lateFlags.has(r.client.id)))
+    ? allRows.filter((r) => r.type === "rebill" || lateFlags.has(r.client.id) || !autoLateClients.has(r.client.id))
     : allRows;
 
   // ★ 2026-11-13 高速化: 介護請求の一覧 (約 1,150 行) は 行を React.memo の部品 (BillingClientRow) にし、
@@ -1825,7 +1828,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">請求書</button>
         <button
           onClick={() => setKokuhoOnly(v => !v)}
-          title="国保連提出対象(月遅れを除く)のみ表示 ⇔ 全件表示 を切替"
+          title="国保連提出対象のみ表示 (自動の月遅れ = 申請中 等を除く。手で月遅にした行は 月遅の印付きで残す・金額には入らない) ⇔ 全件表示 を切替"
           className={`border rounded px-2.5 py-1 font-semibold transition-colors ${kokuhoOnly ? "border-blue-500 bg-blue-100 text-blue-800" : "border-gray-400 bg-white text-gray-700 hover:bg-gray-50"}`}
         >{kokuhoOnly ? "国保対象のみ" : "全件表示"}</button>
         <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">管理帳票</button>
