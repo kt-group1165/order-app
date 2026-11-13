@@ -582,7 +582,7 @@ export default function DocTasksTab({
       <div className="border-b border-gray-300 bg-gray-100 px-3 py-2 shrink-0 flex items-center gap-2 flex-wrap">
         <FileWarning size={16} className="text-amber-600" />
         <span className="font-semibold text-gray-700">書類タスク</span>
-        <span className="text-xs text-gray-500">動きに紐付く書類タスク (event-driven, v3)</span>
+        <span className="text-xs text-gray-500">発注・レンタル開始・解約・認定更新 などで発生した書類のタスク</span>
         <span className="ml-auto text-xs text-gray-600 flex items-center gap-3">
           <span>未作成 <strong className="text-amber-700">{countByStatus.pending}</strong></span>
           <span>受領待ち <strong className="text-blue-700">{countByStatus.completed}</strong></span>
@@ -720,7 +720,7 @@ export default function DocTasksTab({
                   <div className="flex items-center gap-2 min-w-0">
                     {expanded ? <ChevronDown size={14} className="text-gray-400 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
                     <span className="font-semibold text-gray-800 truncate">{client?.name ?? clientId.slice(0, 8)}</span>
-                    {client?.furigana && <span className="text-[10px] text-gray-400 truncate min-w-0">{client.furigana}</span>}
+                    {client?.furigana && <span className="text-[10px] text-gray-400 truncate min-w-0">{client.furigana.normalize("NFKC")}</span>}
                     <span className="ml-auto text-[11px] text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full shrink-0">
                       {totalCount} 件
                     </span>
@@ -828,7 +828,7 @@ export default function DocTasksTab({
                         {client ? (
                           <>
                             <div>{client.name}</div>
-                            {client.furigana && <div className="text-gray-400 text-[10px] mt-0.5">{client.furigana}</div>}
+                            {client.furigana && <div className="text-gray-400 text-[10px] mt-0.5">{client.furigana.normalize("NFKC")}</div>}
                           </>
                         ) : (
                           <span className="text-gray-400">{row.client_id.slice(0, 8)}…</span>
