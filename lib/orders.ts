@@ -4,14 +4,16 @@ import { selectAllPagedParallel } from "./pagedParallel";
 
 export async function getMembers(tenantId: string): Promise<Member[]> {
   return cached(`members:${tenantId}`, async () => {
-    const { data, error } = await supabase
-      .from("members")
-      .select("*")
+    // ★ 2026-11-13: ページングする (旧: 1 回だけ読み 1,000 行で切れていた。members は 1,198 名)。
+    //   並びは従来どおり sort_order → name、同順位は id で固定 (ページの境目で抜け・重複しないため)
+    const build = (head: boolean) => (head
+      ? supabase.from("members").select("id", { count: "exact", head: true })
+      : supabase.from("members").select("*"))
       .eq("tenant_id", tenantId)
       .order("sort_order", { nullsFirst: false })
-      .order("name");
-    if (error) throw error;
-    return data ?? [];
+      .order("name")
+      .order("id");
+    return selectAllPagedParallel<Member>(() => build(true), (from, to) => build(false).range(from, to));
   });
 }
 

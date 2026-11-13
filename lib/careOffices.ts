@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { cached, invalidateCache } from "./cache";
+import { selectAllPagedParallel } from "./pagedParallel";
 
 export type CareOffice = {
   id: string;
@@ -19,13 +20,12 @@ export type CareOffice = {
 
 export async function getCareOffices(tenantId: string): Promise<CareOffice[]> {
   return cached(`care_offices:${tenantId}`, async () => {
-    const { data, error } = await supabase
-      .from("care_offices")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .order("name", { ascending: true });
-    if (error) throw error;
-    return data ?? [];
+    // ★ 2026-11-13: ページングする (旧: 1 回だけ読み 1,000 行で切れる。今は 480 行)。並びは name → id
+    return selectAllPagedParallel<CareOffice>(
+      () => supabase.from("care_offices").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) => supabase.from("care_offices").select("*").eq("tenant_id", tenantId)
+        .order("name", { ascending: true }).order("id").range(from, to),
+    );
   });
 }
 

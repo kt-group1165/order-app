@@ -394,8 +394,9 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
 
   const filtered = useMemo(() => clients
     .filter((c) => {
-      // 事業所フィルタ（自事業所のみモードの場合）
-      if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && !clientOfficeMap.has(c.id)) return false;
+      // 事業所フィルタ（自事業所のみモードの場合）: clients.office_id が自事業所 ∪ 割当がある利用者 (lib/clients.ts getClients と同じ)
+      //   (2026-11-13: 旧 = 割当だけを見ていて、office_id が自事業所でも割当の無い利用者が一覧に出なかった)
+      if (currentOfficeId && !officeViewAll && clientOfficeMap.size > 0 && c.office_id !== currentOfficeId && !clientOfficeMap.has(c.id)) return false;
       // 仮登録のみ表示
       if (provisionalFilter && !c.is_provisional) return false;
       if (exceptionFilter && !exceptionStatusByClient.has(c.id)) return false;

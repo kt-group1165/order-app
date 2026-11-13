@@ -238,8 +238,10 @@ function MonthlyInfoTab({
         const units = computeMonthlyUnits(client.id);
         return { client, ins, careOffice, units };
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- ins/careOffice/units 集計は state 依存だが意図的に billingMonth + unitOverrides 切替時にだけ recompute
-  }, [clients, orderItems, orders, billingMonth, unitOverrides, currentOfficeId, careOffices, insuranceRecords, hospitalizations, equipment, pausesByItem]);
+  // computeMonthlyUnits / getActiveInsuranceRecord は毎回作り直す関数なので deps には入れず、中で読む state を並べる
+  //   (2026-11-13: priceHistory・prorations が漏れていて、価格改定の履歴・日割り設定が後から届いても単位が古いままだった)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, orderItems, orders, billingMonth, unitOverrides, currentOfficeId, careOffices, insuranceRecords, hospitalizations, equipment, pausesByItem, priceHistory, prorations]);
 
   // かな行フィルター
   const filteredRows = useMemo(() => {
@@ -631,8 +633,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (item.status !== "rental_started" && item.status !== "terminated") return false;
       return true;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
-  }, [billingMonth, orderItems]);
+  }, [billingMonth, orderItems, orders]);
 
   // 利用者ごとにグループ化（事業所フィルタ付き）
   const clientGroups = useMemo(() => {
@@ -654,8 +655,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (fa !== fb) return fa - fb;
       return (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja");
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional dep stability
-  }, [activeRentals, orders, clients]);
+  }, [activeRentals, orders, clients, currentOfficeId]);
 
   // 例外給付の判定 (利用者ごと)。ok の利用者は入れない
   const exceptionByClient = useMemo(() => {
@@ -773,7 +773,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const ids = screenClientIdsKey ? screenClientIdsKey.split(",") : [];
     if (ids.length === 0) return;
     const [yy, mm] = billingMonth.split("-").map(Number);
-    loadKohiForMonth(tenantId, ids, `${billingMonth}-01`, monthEndYmd(yy, mm))
+    // 事業所の範囲は伝送 (出力時) と同じ (2026-11-13: 画面用だけ範囲を渡しておらず、他事業所の公費行も数えていた)
+    loadKohiForMonth(tenantId, ids, `${billingMonth}-01`, monthEndYmd(yy, mm), { officeId: currentOfficeId, perOfficeIds })
       .then((r) => {
         if (cancelled) return;
         setScreenKohi({ month: billingMonth, byClient: r.byClient });
@@ -788,7 +789,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         }
       });
     return () => { cancelled = true; };
-  }, [tenantId, billingMonth, screenClientIdsKey]);
+  }, [tenantId, billingMonth, screenClientIdsKey, currentOfficeId, perOfficeIds]);
 
   // 公費が当月の貸与期間の一部だけの利用者 (= 「公費の扱い」を選ぶ必要がある人)
   const kohiPartialByClient = useMemo(() => {
@@ -3359,8 +3360,9 @@ function InvoiceReceiptModal({
         isTaxable,
       };
     });
+    // getEq / histPrice は毎回作り直す関数なので、中で読む equipment / priceHistory を並べる (2026-11-13: equipment が漏れていた)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [careItems, priceHistory, targetMonth, y, m, hospitalizations, pausesByItem, prorations]);
+  }, [careItems, priceHistory, equipment, targetMonth, y, m, hospitalizations, pausesByItem, prorations]);
 
   const totalUnits = detailRows.reduce((s, r) => s + r.totalUnits, 0);
   // ★ CM 指示単位数 (2026-11-09): 対象月に入力があれば その単位数までが保険、超過分は保険外 (全額自己負担)。
