@@ -219,6 +219,15 @@ const commonPrice = (e, ym) => {
 const officeRowsOf = (code) => hist.filter((h) => h.product_code === code && h.office_id === FO.officeId);
 const ceilByTais = new Map();
 for (const c of snap.ceilings ?? []) { const t = nTais(c.tais_code); if (!ceilByTais.has(t)) ceilByTais.set(t, []); ceilByTais.get(t).push(c); }
+// 今日時点の上限価格 (円)。上限マスタに無い TAIS は null
+const TODAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+const ceilingNow = (t) => { const cs = (ceilByTais.get(t) ?? []).filter((c) => c.effective_from <= TODAY && c.ceiling_price != null).sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1)); return cs[0]?.ceiling_price ?? null; };
+// ★ 2026-11-14: 上限の 2 倍以上の行は「今の価格」の候補にしない (楽起 縦型 01339-000007: FYGMST01 に 2,000・2,000・20,000 (記号なし) があり、
+//   「同じ記号なら ID 最大」で 打ち間違いの 20,000 を拾った = 上限 2,330 の 8.6 倍)。全部が 2 倍以上のときは J。
+//   --no-ceiling-filter で外せる (負のコントロール用: 外すと 楽起 縦型 が 20,000 に戻ることを確かめる)
+const CEILING_FILTER = !argv.includes("--no-ceiling-filter");
+// 外すのは 上限の 2 倍以上 (= check:ceiling の ① 入力ミス濃厚 と同じ閾値)。1〜2 倍の超過 (上限の改定に追従していない) は 外さない — check:ceiling ② / ③ で見る
+const CEILING_TYPO_RATIO = 2;
 const eqByTais = new Map();
 // ③ 価格の行は 親 (parent_product_code が空) にだけ作る (子は親の価格を使う)
 const parentEquipment = (snap.equipment ?? []).filter((e) => !e.parent_product_code);
@@ -228,7 +237,7 @@ const knownCats = new Set((snap.equipment ?? []).map((e) => e.category).filter(B
 if (parentEquipment.length !== (snap.equipment ?? []).length) console.log(`(用具マスタの子 ${(snap.equipment ?? []).length - parentEquipment.length} 行は 価格の行を作る対象から外した)`);
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], RP: [], J: [], G: [], A: [], hist: [], symVsId: [], raise: [], unused: [] };
+const R = { P1: [], P2: [], P3: [], RP: [], overCeil: [], split5: [], J: [], G: [], A: [], hist: [], symVsId: [], raise: [], unused: [] };
 const jOf = (tais, name, why, extra = {}) => R.J.push({ TAIS: tais, 名前: name, 理由: why, ...extra });
 /** ① 記号の優先。★ = 最新・最安 / ☆ = その前 / ◇ / ◎・▲ / 無印 */
 const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
@@ -299,7 +308,14 @@ for (const [tais, rows] of byTais) {
   }
   const actOk = act.filter((r) => !wrongCode.has(r));
   if (!actOk.length) continue;
-  const poolBase = IS_CARESAPO ? (actOk.filter((r) => !r.name.startsWith("●")).length ? actOk.filter((r) => !r.name.startsWith("●")) : actOk) : actOk;
+  const poolRaw = IS_CARESAPO ? (actOk.filter((r) => !r.name.startsWith("●")).length ? actOk.filter((r) => !r.name.startsWith("●")) : actOk) : actOk;
+  const cap = ceilingNow(tais);
+  const overRows = cap != null ? poolRaw.filter((r) => r.units * 10 >= CEILING_TYPO_RATIO * cap) : [];
+  if (CEILING_FILTER && overRows.length && overRows.length === poolRaw.length) { jOf(tais, poolRaw[0].abbr || poolRaw[0].name, `使用中の行が全部 上限 ${cap} の ${CEILING_TYPO_RATIO} 倍以上 (${poolRaw.map(label).join(" ")})`); continue; }
+  if (overRows.length) R.overCeil.push({ TAIS: tais, 上限: cap, 外した行: overRows.map(label).join(" "), 残した行: poolRaw.filter((r) => !overRows.includes(r)).map(label).join(" "), 外した: CEILING_FILTER });
+  const poolBase = CEILING_FILTER ? poolRaw.filter((r) => !overRows.includes(r)) : poolRaw;
+  // 同じ TAIS の使用中の価格が 5 倍以上割れている (打ち間違いの疑い) は 数えて出す
+  { const us = poolRaw.map((r) => r.units); if (Math.max(...us) >= 5 * Math.min(...us)) R.split5.push({ TAIS: tais, 行: poolRaw.map(label).join(" "), 上限: cap ?? "-" }); }
   const byId = poolBase.reduce((a, b) => (b.id > a.id ? b : a));
   const cur = IS_CARESAPO ? byId : poolBase.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
   const name = cur.abbr || cur.name;
@@ -422,6 +438,10 @@ if (!IS_CARESAPO) {
   for (const x of R.raise.slice(0, Number(process.env.SHOW_DIFF ?? 5))) console.log(`      - ${JSON.stringify(x)}`);
   console.log(`  提供票で使われていない 別価格の行がある TAIS: ${R.unused.length} (履歴にしない)`);
 }
+console.log(`\n  上限の 2 倍以上の行を 今の価格の候補から外した TAIS: ${R.overCeil.length}${CEILING_FILTER ? "" : " (★ --no-ceiling-filter: 外していない)"}`);
+for (const x of R.overCeil) console.log(`      - ${JSON.stringify(x)}`);
+console.log(`  同じ TAIS の使用中の価格が 5 倍以上割れている (打ち間違いの疑い): ${R.split5.length}`);
+for (const x of R.split5) console.log(`      - ${JSON.stringify(x)}`);
 console.log(`\n  P3 の内訳: 事業所の方が高い ${R.P3.filter((x) => x.差 > 0).length} / 安い ${R.P3.filter((x) => x.差 < 0).length} / 今は同じ (履歴だけ違う) ${R.P3.filter((x) => x.差 === 0).length}`);
 console.log(`★ ${vfYm}〜${MONTH} に ${FO.area} の注文で貸与していた明細が使っていた品目 ${hitCodes.size} (明細 ${hit.length} 本) は J に回した → 請求額が変わる明細は 0 本`);
 console.log(`\n書込みの見込み (承認後): equipment_master insert ${plan.equipment.length} 品目 / equipment_price_history insert ${plan.prices.length} 行 (office_id=${FO.area})${plan.deletes.length ? ` / 事業所の行を消す ${plan.deletes.length} 行 (--replace-tais)` : ""}。J・G は書かない`);
