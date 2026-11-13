@@ -83,6 +83,28 @@ const cases: Case[] = [
     return r([], certs, "2026-08-01", "2026-08-31", { officeId: "A" }).benefitRate === 90 && r([], certs, "2026-08-01", "2026-08-31", { officeId: "B" }).benefitRate === 70;
   } },
   { name: "期限なし (valid_to NULL) の証は以後ずっと有効", run: (r) => r([], [F(FUTAN, 70, "2020-08-01", null)], "2030-01-01", "2030-01-31").benefitRate === 70 },
+  // ★ 2026-11-14: 読めない証を黙って捨てない (「証なし」と区別する)。落ち先は従来どおり認定行
+  { name: "化けた証 (給付率 '九十') 1 枚: 認定行 80 で計算 + badRate 1 + 「給付率を読めません」", run: (r) => {
+    const x = r([row("2026-01-01", null, { benefit_rate: "80" })], [F(FUTAN, null, "2026-08-01", "2027-07-31", { benefit_rate: "九十" })], "2026-08-01", "2026-08-31");
+    return x.source === "cert_row" && x.benefitRate === 80 && x.droppedCerts.badRate === 1 && x.warnings.some((w) => w.includes("給付率を読めません"));
+  } },
+  { name: "範囲外の証 (給付率 900) 1 枚も同じ (badRate 1)", run: (r) => r([], [F(FUTAN, 900, "2026-08-01", null)], "2026-08-01", "2026-08-31").droppedCerts.badRate === 1 },
+  { name: "読める証と化けた証が両方: 読める証 70 で計算 + badRate 1 + 警告", run: (r) => {
+    const x = r([], [F(FUTAN, 70, "2026-08-01", null), F(FUTAN, null, "2026-08-01", null, { benefit_rate: "x" })], "2026-08-01", "2026-08-31");
+    return x.source === "certificate" && x.benefitRate === 70 && x.droppedCerts.badRate === 1 && x.warnings.some((w) => w.includes("給付率を読めません"));
+  } },
+  { name: "開始日が化けた証: badFrom 1 + 「開始日を読めません」", run: (r) => {
+    const x = r([row("2026-01-01", null, { copay_rate: "1" })], [F(FUTAN, 80, "R8/8/1", null)], "2026-08-01", "2026-08-31");
+    return x.source === "cert_row" && x.droppedCerts.badFrom === 1 && x.warnings.some((w) => w.includes("開始日を読めません"));
+  } },
+  { name: "正常な証では 読めない警告を出さない (droppedCerts 0/0)", run: (r) => {
+    const x = r([], [F(FUTAN, 80, "2026-08-01", null)], "2026-08-01", "2026-08-31");
+    return x.droppedCerts.badRate === 0 && x.droppedCerts.badFrom === 0 && !x.warnings.some((w) => w.includes("読めません"));
+  } },
+  { name: "本当に証が無いときは 読めない警告を出さない", run: (r) => {
+    const x = r([row("2026-01-01", null, { copay_rate: "1" })], [], "2026-08-01", "2026-08-31");
+    return x.droppedCerts.badRate === 0 && !x.warnings.some((w) => w.includes("読めません"));
+  } },
 ];
 console.log("② 固定データ (resolveBenefitForMonth)");
 for (const c of cases) ok(c.name, c.run(M.resolveBenefitForMonth));
@@ -114,6 +136,8 @@ eq("今日有効な証が無い → expired", M.judgeBenefitCertAlert([F(FUTAN, 
 eq("30 日以内に切れる・次なし → expiring (残 22 日)", (() => { const a = M.judgeBenefitCertAlert([F(FUTAN, 90, "2025-08-01", "2026-07-31")], "2026-07-09"); return [a.level, a.daysLeft]; })(), ["expiring", 22]);
 eq("30 日以内に切れるが翌日からの証あり → ok", M.judgeBenefitCertAlert([F(FUTAN, 90, "2025-08-01", "2026-07-31"), F(FUTAN, 80, "2026-08-01", "2027-07-31")], "2026-07-09").level, "ok");
 eq("31 日先 → ok", M.judgeBenefitCertAlert([F(FUTAN, 90, "2025-08-01", "2026-07-31")], "2026-06-30").level, "ok");
+ok("化けた証だけ → missing だが説明は「読めません」(登録されていません ではない)", (() => { const al = M.judgeBenefitCertAlert([F(FUTAN, null, "2026-08-01", null, { benefit_rate: "九十" })], "2026-11-09"); return al.level === "missing" && al.detail.includes("読めません"); })());
+ok("証 0 枚 → 説明は「登録されていません」", M.judgeBenefitCertAlert([], "2026-11-09").detail.includes("登録されていません"));
 eq("給付制限だけ → missing (負担割合証ではない)", M.judgeBenefitCertAlert([F(SEIGEN, 70, "2026-01-01", null)], "2026-11-09").level, "missing");
 // 止める切替は今は false
 eq("BLOCK_DENSOU_WITHOUT_BENEFIT_CERT は今は false (user 合意 2026-11-09)", M.BLOCK_DENSOU_WITHOUT_BENEFIT_CERT, false);
@@ -144,6 +168,10 @@ const brokenImpls: { name: string; impl: typeof M.resolveBenefitForMonth }[] = [
   { name: "開始が最古の証を採る", impl: (rows, certs, ms, me, o) => M.resolveBenefitForMonth(rows, certs.slice().sort((a, b) => ((a.valid_from ?? "") < (b.valid_from ?? "") ? -1 : 1)).map((c, i, arr) => (i === 0 ? c : { ...c, valid_from: arr[0].valid_from })), ms, me, o) },
   { name: "負担割合証を見ずに認定行だけ", impl: (rows, _certs, ms, me, o) => M.resolveBenefitForMonth(rows, [], ms, me, o) },
   { name: "処理月 (= 月末の翌月) で証を選ぶ", impl: (rows, certs, ms, me, o) => { const [y, m] = ms.split("-").map(Number); const n = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; return M.resolveBenefitForMonth(rows, certs, `${n}-01`, `${n}-28`, o); } },
+  { name: "読めない証を黙って捨てる (2026-11-14 以前の挙動)", impl: (rows, certs, ms, me, o) => {
+    const x = M.resolveBenefitForMonth(rows, certs.filter((c) => M.parseBenefitRate(c.benefit_rate) != null && /^\d{4}-\d{2}-\d{2}$/.test(c.valid_from ?? "")), ms, me, o);
+    return x;
+  } },
   { name: "給付制限を給付率に混ぜる", impl: (rows, certs, ms, me, o) => M.resolveBenefitForMonth(rows, certs.map((c) => (c.kind === SEIGEN ? { ...c, kind: FUTAN, valid_from: "2026-08-02" } : c)), ms, me, o) },
 ];
 for (const b of brokenImpls) {

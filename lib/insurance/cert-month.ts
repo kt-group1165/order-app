@@ -113,6 +113,12 @@ export type BenefitForMonth = {
   warnings: string[];
   /** 伝送を作らせないか (BLOCK_DENSOU_WITHOUT_BENEFIT_CERT が true のときだけ立つ) */
   blockDensou: boolean;
+  /**
+   * 使えずに捨てた負担割合証の枚数 (2026-11-14)。「証が無い」と「証はあるが読めない」を分けるため。
+   *   badRate = その月に掛かるが 給付率が読めない・0〜100 の外
+   *   badFrom = 開始日が読めない (どの月に掛かるか決められない。月を問わず数える)
+   */
+  droppedCerts: { badRate: number; badFrom: number };
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -244,10 +250,20 @@ export function resolveBenefitForMonth(
   }
 
   // 1. 負担割合証
-  const futan = certs
+  const futanInMonth = certs
     .filter((c) => c.kind === BENEFIT_CERT_KIND_FUTAN && overlaps(c.valid_from, c.valid_to, monthStart, monthEnd))
-    .map((c) => ({ c, rate: parseBenefitRate(c.benefit_rate) }))
-    .filter((x) => x.rate != null);
+    .map((c) => ({ c, rate: parseBenefitRate(c.benefit_rate) }));
+  const futan = futanInMonth.filter((x) => x.rate != null);
+  // ★ 2026-11-14: 読めない証を黙って捨てない。「証が無い」と同じ扱い (認定行へ) にはするが、警告を分けて出す
+  const badRate = futanInMonth.filter((x) => x.rate == null);
+  const badFrom = certs.filter((c) => c.kind === BENEFIT_CERT_KIND_FUTAN && !isDate(c.valid_from));
+  const droppedCerts = { badRate: badRate.length, badFrom: badFrom.length };
+  if (badRate.length > 0) {
+    warnings.push(`負担割合証が ${badRate.length} 枚ありますが 給付率を読めません (${badRate.map((x) => `${x.c.valid_from}〜${x.c.valid_to ?? ""} "${x.c.benefit_rate ?? ""}"`).join(" / ")}) — ${futan.length > 0 ? "読める証" : "認定行の値"}で計算します。負担割合証の給付率を確認してください`);
+  }
+  if (badFrom.length > 0) {
+    warnings.push(`負担割合証が ${badFrom.length} 枚ありますが 開始日を読めません (${badFrom.map((c) => `"${c.valid_from ?? ""}"`).join(" / ")}) — どの月にも使っていません。負担割合証の期間を確認してください`);
+  }
   if (futan.length > 0) {
     futan.sort((a, b) => {
       if (a.c.valid_from !== b.c.valid_from) return a.c.valid_from! < b.c.valid_from! ? 1 : -1; // 開始 DESC
@@ -277,6 +293,7 @@ export function resolveBenefitForMonth(
       restriction,
       warnings,
       blockDensou: false,
+      droppedCerts,
     };
   }
 
@@ -297,6 +314,7 @@ export function resolveBenefitForMonth(
       restriction,
       warnings,
       blockDensou: BLOCK_DENSOU_WITHOUT_BENEFIT_CERT,
+      droppedCerts,
     };
   }
 
@@ -314,6 +332,7 @@ export function resolveBenefitForMonth(
     restriction,
     warnings,
     blockDensou: BLOCK_DENSOU_WITHOUT_BENEFIT_CERT,
+    droppedCerts,
   };
 }
 
@@ -357,7 +376,13 @@ export function judgeBenefitCertAlert(
     c.kind === BENEFIT_CERT_KIND_FUTAN && isDate(c.valid_from) && parseBenefitRate(c.benefit_rate) != null &&
     (!officeId || (c.office_id ?? null) === officeId));
   if (futan.length === 0) {
-    return { level: "missing", label: "負担割合証なし", detail: "負担割合証が登録されていません — 請求は認定行の負担割合で出ます", validTo: null, daysLeft: null };
+    // ★ 2026-11-14: 証はあるが 給付率・開始日が読めない場合は 説明を分ける (印は従来どおり missing)
+    const unreadable = benefitCerts.filter((c) => c.kind === BENEFIT_CERT_KIND_FUTAN && (!officeId || (c.office_id ?? null) === officeId)).length;
+    return { level: "missing", label: "負担割合証なし",
+      detail: unreadable > 0
+        ? `負担割合証が ${unreadable} 枚ありますが 給付率か開始日を読めません — 請求は認定行の負担割合で出ます。証の中身を確認してください`
+        : "負担割合証が登録されていません — 請求は認定行の負担割合で出ます",
+      validTo: null, daysLeft: null };
   }
   const valid = futan.filter((c) => overlaps(c.valid_from, c.valid_to, today, today));
   if (valid.length === 0) {
