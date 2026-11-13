@@ -62,12 +62,16 @@ const LIVE = argv.includes("--live");
 const CACHE = opt("--db-cache");
 if (!LIVE && !CACHE) { console.error("usage: --area 誉田 (--db-cache <json> | --live [--execute --expect <品目>,<価格の行>]) [--valid-from 2026-04-01] [--month 2026-11]"); process.exit(1); }
 if (EXECUTE && !LIVE) { console.error("★ --execute は --live (今の DB) と一緒に"); process.exit(1); }
-if (EXECUTE && !/^\d+,\d+$/.test(opt("--expect") ?? "")) { console.error("★ --execute には --expect <P1 の品目数>,<価格の行数> が要る (DRY RUN の「書込みの見込み」の数)"); process.exit(1); }
+if (EXECUTE && !/^\d+,\d+(,\d+)?$/.test(opt("--expect") ?? "")) { console.error("★ --execute には --expect <P1 の品目数>,<価格の行数>[,<消す事業所の行数>] が要る (DRY RUN の「書込みの見込み」の数)"); process.exit(1); }
 const FO = resolveFukuyoguOffice(argv);
 const VALID_FROM = opt("--valid-from") ?? "2026-04-01";
 const MONTH = opt("--month") ?? new Date().toISOString().slice(0, 7);
 // ② 改定月が提供票で決まらないとき 今の価格に切り替える月 (2026-11-14 user 決定: 2026-11 までは古い価格・2026-12-01 から全員 今の価格)
 const SWITCH_UNKNOWN = opt("--switch-unknown") ?? "2026-12";
+// 既にある事業所の行を 決め方どおりに置き換えてよい TAIS (カンマ区切り)。指定が無ければ 既にある行と違うものは J (勝手に書き換えない)
+// user が「--valid-from から今の価格」と決めた TAIS (カンマ区切り)。同じ月の混在が無くても 履歴にしない (例 BPZ丸ト伸固9012: ケアサポの現役 4900・誉田は古い 5000 だけで請求)
+const FROM_START = new Set((opt("--price-from-start") ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+const REPLACE = new Set((opt("--replace-tais") ?? "").split(",").map((x) => x.trim()).filter(Boolean));
 const OUT = opt("--out") ?? join(tmpdir(), "office-prices-from-fygmst");
 const TENANT = "kt-group";
 const SOURCE_SYSTEM = "honobono-fukuyogu";
@@ -122,6 +126,7 @@ for (const f of files) for (const r of readMaster(join(mdir, f))) { if (!byTais.
 //   use = 実績行の数 / fresh = 新しく始まった (利用者, 行) の数 (提供票の最初の月より後に初めて出たもの) / spanOf = 利用者ごとの使用期間
 const useOf = new Map(), freshOf = new Map();
 const spanOf = new Map(); // 利用者|略称|単位 → { min, max } (YYYY-MM)
+const ymsOf = new Map(); // 略称|単位 → Set<YYYY-MM> (その行で請求した月)
 const TDIR = latestTeikyoDir(FO.dir);
 if (TDIR) {
   const firstSeen = new Map();
@@ -142,6 +147,7 @@ if (TDIR) {
       useOf.set(k, (useOf.get(k) ?? 0) + 1);
       const pk = `${nf(r[c.利用者番号])}|${k}`;
       if (!firstSeen.has(pk) || firstSeen.get(pk) > ym) firstSeen.set(pk, ym);
+      if (!ymsOf.has(k)) ymsOf.set(k, new Set()); ymsOf.get(k).add(ym);
       const sp = spanOf.get(pk); if (!sp) spanOf.set(pk, { min: ym, max: ym }); else { if (ym < sp.min) sp.min = ym; if (ym > sp.max) sp.max = ym; }
     }
   }
@@ -222,7 +228,7 @@ const knownCats = new Set((snap.equipment ?? []).map((e) => e.category).filter(B
 if (parentEquipment.length !== (snap.equipment ?? []).length) console.log(`(用具マスタの子 ${(snap.equipment ?? []).length - parentEquipment.length} 行は 価格の行を作る対象から外した)`);
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], J: [], G: [], A: [], hist: [], symVsId: [], raise: [], unused: [] };
+const R = { P1: [], P2: [], P3: [], RP: [], J: [], G: [], A: [], hist: [], symVsId: [], raise: [], unused: [] };
 const jOf = (tais, name, why, extra = {}) => R.J.push({ TAIS: tais, 名前: name, 理由: why, ...extra });
 /** ① 記号の優先。★ = 最新・最安 / ☆ = その前 / ◇ / ◎・▲ / 無印 */
 const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
@@ -250,6 +256,15 @@ function place(tais, name, cat, timeline, note) {
   if (existing.length) {
     const same = eqs.every((e) => { const ex = officeRowsOf(e.product_code); return ex.length === timeline.length && timeline.every((t) => ex.some((x) => x.valid_from === `${t.from}-01` && x.rental_price === t.price)); });
     if (same) return R.P2.push({ TAIS: tais, 既に: "事業所の行あり" });
+    if (REPLACE.has(tais)) {
+      // 置き換え: 決め方どおりの価格が 毎月 共通の価格と同じなら 事業所の行は要らない (消すだけ)
+      const needRows = noCommon || !MS.every((m, i) => common[i] === priceAt(m));
+      const want = needRows ? eqs.flatMap((e) => timeline.map((t) => ({ product_code: e.product_code, valid_from: `${t.from}-01`, rental_price: t.price }))) : [];
+      const same1 = (a, b) => a.product_code === b.product_code && a.valid_from === b.valid_from && a.rental_price === b.rental_price;
+      const del = existing.filter((x) => !want.some((w) => same1(w, x)));
+      const ins = want.filter((w) => !existing.some((x) => same1(w, x)));
+      return R.RP.push({ TAIS: tais, 名前: name, 今の行: existing.map((x) => `${x.product_code} ${x.valid_from}=${x.rental_price}`).join(" / "), 直した行: want.length ? want.map((w) => `${w.product_code} ${w.valid_from}=${w.rental_price}`).join(" / ") : "(無し = 共通の価格どおり)", 消す: del, 足す: ins, 備考: note ?? "" });
+    }
     return jOf(tais, name, `${FO.area} の事業所の行が既に別の内容である (${existing.map((x) => `${x.product_code} ${x.valid_from}=${x.rental_price}`).join(" / ")})`, { 今の価格: cur });
   }
   if (!noCommon && MS.every((m, i) => common[i] === priceAt(m))) return R.P2.push({ TAIS: tais });
@@ -313,6 +328,22 @@ for (const [tais, rows] of byTais) {
   const switchers = [...oldUsers].filter(([n, sp]) => curUsers.has(n) && curUsers.get(n).min > sp.max);
   const stillOld = [...oldUsers].filter(([n]) => !switchers.some(([m]) => m === n));
   const fresh = otherRows.reduce((a, r) => a + freshOfRow(r), 0);
+  // ★ 同じ月に 今の価格と古い価格の両方で請求している = 請求ミス (2026-11-14 user: 「同じ月に同じ TAIS を複数価格で出していたら 100% ミス」)
+  //   → 改定ではない。--valid-from から今の価格 (記号の順。ケアサポの現役の価格とも突き合わせた: BPZ 4900・KQ-C6322 12200・クリンディ 2800)
+  const curYms = ymsOf.get(`${cur.abbr}|${cur.units}`) ?? new Set();
+  const mixed = [...new Set(otherRows.flatMap((r) => [...(ymsOf.get(`${r.abbr}|${r.units}`) ?? [])]))].filter((ym) => curYms.has(ym)).sort();
+  if (FROM_START.has(tais) && !mixed.length) {
+    const nt = `user 決定 (2026-11-14) で ${vfYm} から ${cur.units * 10} (古い価格 ${olds[0] * 10} は使わない)`;
+    R.hist.push({ TAIS: tais, 名前: name, ...base, 付け替えた月: "(user 決定)", 移った人: 0, 備考: nt });
+    place(tais, name, cur.cat, [{ from: vfYm, price: cur.units * 10 }], nt);
+    continue;
+  }
+  if (mixed.length) {
+    const nt = `同じ月 (${mixed.join(",")}) に ${olds[0] * 10} と ${cur.units * 10} の両方で請求 = 請求ミス → ${vfYm} から ${cur.units * 10} (2026-11-14 user 決定)`;
+    R.hist.push({ TAIS: tais, 名前: name, ...base, 付け替えた月: "(請求ミス)", 移った人: switchers.length, 備考: nt });
+    place(tais, name, cur.cat, [{ from: vfYm, price: cur.units * 10 }], nt);
+    continue;
+  }
   const unknownSwitch = (why) => {
     // 値上げは書かない (2026-11-14 user: 了解は「値下げなので 古い価格の人を移しても過大にならない」が前提。値上げは別に確認する)
     if (cur.units > olds[0]) return jOf(tais, name, `改定月が分からない・値上げ (${olds[0] * 10}→${cur.units * 10}) → 12 月から今借りている人の請求を上げることになるので書かない (user 確認待ち)`, base);
@@ -358,7 +389,11 @@ for (const x of [...R.P3]) {
 }
 
 // ── 書込みの計画 ───────────────────────────────────────────────────────────
-const plan = { equipment: [], prices: [] };
+const plan = { equipment: [], prices: [], deletes: [] };
+for (const x of R.RP) {
+  for (const d of x.消す) plan.deletes.push({ key: `価格|${d.product_code}|${FO.officeId}|${d.valid_from.slice(0, 7)}`, ref: { 理由: `置き換え: ${x.備考}`, TAIS: x.TAIS }, row: d });
+  for (const w of x.足す) plan.prices.push({ key: `価格|${w.product_code}|${FO.officeId}|${w.valid_from.slice(0, 7)}`, ref: { 理由: `置き換え: ${x.備考}`, TAIS: x.TAIS }, row: { tenant_id: TENANT, ...w, office_id: FO.officeId } });
+}
 for (const x of R.P1) {
   plan.equipment.push({ key: `品目|${x.TAIS}`, ref: { 理由: "FYGMST01 にあり 用具マスタに無い TAIS", 名前: x.名前, 備考: x.備考 }, row: { tenant_id: TENANT, product_code: x.TAIS, tais_code: x.TAIS, name: x.名前, category: x.種目, kind: "single", rental_price: x.価格 } });
   if (x.事業所の行) for (const s of x.事業所の行.split(" → ")) { const [from, p] = s.split("="); plan.prices.push({ key: `価格|${x.TAIS}|${FO.officeId}|${from}`, ref: { 理由: x.備考 || "事業所の価格", TAIS: x.TAIS }, row: { tenant_id: TENANT, product_code: x.TAIS, office_id: FO.officeId, valid_from: `${from}-01`, rental_price: Number(p) } }); }
@@ -367,15 +402,15 @@ for (const x of R.P3) for (const code of x.品目コード) for (const t of x.ti
 
 mkdirSync(OUT, { recursive: true });
 const esc = (v) => `"${String(Array.isArray(v) ? v.join(" / ") : v ?? "").replace(/"/g, '""')}"`;
-const labels = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の候補 (ケアサポ)", A: "A_本数違い_正しいコード", hist: "H_古い価格を履歴に" };
+const labels = { RP: "RP_事業所の行を置き換える", P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の候補 (ケアサポ)", A: "A_本数違い_正しいコード", hist: "H_古い価格を履歴に" };
 console.log(`事業所 ${FO.area} ${FO.bn} / FYGMST01 ${files.join(" / ")} / 使用中の TAIS ${[...byTais.values()].filter((rs) => rs.some((r) => !r.stop)).length}`);
 console.log(`控え ${snap.fetchedAt} / 事業所の行の valid_from ${VALID_FROM} / 比べる月 ${vfYm}〜${MONTH}${IS_CARESAPO ? " / 今の価格 = 中止=0 で ● の無い行 (複数なら ID 最大)" : " / 今の価格 = 中止=0 の行で 記号 ★ > ☆ > ◇ > ◎▲ > 無印 (同じ記号なら ID 最大)"}  ※ 提供票 ${TDIR ? TDIR.split(/[\\/]/).pop() : "★ 無い"}\n`);
-for (const k of ["P1", "P2", "P3", "J", "G", "A", "hist"]) {
+for (const k of ["P1", "P2", "P3", "RP", "J", "G", "A", "hist"]) {
   const xs = R[k];
   console.log(`  ${labels[k].padEnd(28)} ${String(xs.length).padStart(5)}`);
-  for (const x of k === "P2" ? [] : xs.slice(0, Number(process.env.SHOW ?? 3))) console.log(`      - ${JSON.stringify({ ...x, timeline: undefined }).slice(0, 260)}`);
+  for (const x of k === "P2" ? [] : xs.slice(0, Number(process.env.SHOW ?? 3))) console.log(`      - ${JSON.stringify({ ...x, timeline: undefined, 消す: undefined, 足す: undefined }).slice(0, 260)}`);
   if (!xs.length || k === "P2") continue;
-  const cols = [...new Set(xs.flatMap((x) => Object.keys(x)))].filter((c) => c !== "timeline"); // 理由ごとに列が違う (J) ので全部の列
+  const cols = [...new Set(xs.flatMap((x) => Object.keys(x)))].filter((c) => !["timeline", "消す", "足す"].includes(c)); // 理由ごとに列が違う (J) ので全部の列
   writeFileSync(join(OUT, `${FO.area}_${labels[k]}.csv`), "﻿" + [cols.map(esc).join(","), ...xs.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\r\n"));
 }
 if (!IS_CARESAPO) {
@@ -389,15 +424,15 @@ if (!IS_CARESAPO) {
 }
 console.log(`\n  P3 の内訳: 事業所の方が高い ${R.P3.filter((x) => x.差 > 0).length} / 安い ${R.P3.filter((x) => x.差 < 0).length} / 今は同じ (履歴だけ違う) ${R.P3.filter((x) => x.差 === 0).length}`);
 console.log(`★ ${vfYm}〜${MONTH} に ${FO.area} の注文で貸与していた明細が使っていた品目 ${hitCodes.size} (明細 ${hit.length} 本) は J に回した → 請求額が変わる明細は 0 本`);
-console.log(`\n書込みの見込み (承認後): equipment_master insert ${plan.equipment.length} 品目 / equipment_price_history insert ${plan.prices.length} 行 (office_id=${FO.area})。J・G は書かない`);
-console.log(`  → 本番: --live --execute --expect ${plan.equipment.length},${plan.prices.length}`);
+console.log(`\n書込みの見込み (承認後): equipment_master insert ${plan.equipment.length} 品目 / equipment_price_history insert ${plan.prices.length} 行 (office_id=${FO.area})${plan.deletes.length ? ` / 事業所の行を消す ${plan.deletes.length} 行 (--replace-tais)` : ""}。J・G は書かない`);
+console.log(`  → 本番: --live --execute --expect ${plan.equipment.length},${plan.prices.length}${plan.deletes.length ? `,${plan.deletes.length}` : ""}${REPLACE.size ? ` --replace-tais ${[...REPLACE].join(",")}` : ""}`);
 console.log(`→ CSV: ${OUT}`);
 
 if (!EXECUTE) { console.log("DRY RUN — DB は書き換えていない"); process.exit(0); }
 
 // ── 本番書込み ──────────────────────────────────────────────────────────────
-const [xEq, xPr] = opt("--expect").split(",").map(Number);
-if (xEq !== plan.equipment.length || xPr !== plan.prices.length) { console.error(`★ 書込み ${plan.equipment.length},${plan.prices.length} が --expect ${xEq},${xPr} と違う。止める (DRY RUN をやり直して確かめる)`); process.exit(2); }
+const [xEq, xPr, xDel = 0] = opt("--expect").split(",").map(Number);
+if (xEq !== plan.equipment.length || xPr !== plan.prices.length || xDel !== plan.deletes.length) { console.error(`★ 書込み ${plan.equipment.length},${plan.prices.length},${plan.deletes.length} が --expect ${xEq},${xPr},${xDel} と違う。止める (DRY RUN をやり直して確かめる)`); process.exit(2); }
 // 重複の確認 (計画の中)
 for (const [k, xs] of [["品目", plan.equipment], ["価格の行", plan.prices]]) {
   const keys = xs.map((x) => x.key);
@@ -414,7 +449,7 @@ writeFileSync(bpath, JSON.stringify({ taken_at: d.toISOString(), office: FO, val
 console.log(`\n退避 (書込みの計画): ${bpath}`);
 const batch = await execLockAcquire(sb, EXEC_LOCK, {
   tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: files.map((f) => `伝送データ/${FO.area}/福祉用具/マスタ/${f}`), script: SCRIPT_REL, args: argv.join(" "), step: STEP,
-  notes: `${FO.area} の事業所の価格を FYGMST01 から: 品目 ${plan.equipment.length} / 価格の行 ${plan.prices.length} (valid_from ${VALID_FROM})`,
+  notes: `${FO.area} の事業所の価格を FYGMST01 から: 品目 ${plan.equipment.length} / 価格の行 ${plan.prices.length} / 消す事業所の行 ${plan.deletes.length} (valid_from ${VALID_FROM}${REPLACE.size ? ` / 置き換え ${[...REPLACE].join(",")}` : ""})`,
 });
 const BATCH = batch.id;
 console.log(`batch ${BATCH}`);
@@ -436,6 +471,15 @@ for (const x of plan.equipment) {
   await record({ batch_id: BATCH, tenant_id: TENANT, table_name: "equipment_master", row_id: data[0].id, op: "insert", source_key: x.key, source_ref: x.ref, before: null, after: x.row });
   nEq++;
 }
+let nDel = 0;
+for (const x of plan.deletes) {
+  // 消す前の行が DRY RUN のときと同じ (id・価格・事業所・適用開始) ことを条件に 1 行ずつ消し、件数 1 を確かめる
+  const { data, error } = await sb.from("equipment_price_history").delete().eq("id", x.row.id).eq("tenant_id", TENANT).eq("office_id", FO.officeId).eq("product_code", x.row.product_code).eq("valid_from", x.row.valid_from).eq("rental_price", x.row.rental_price).select("id");
+  if (error) await fail(`delete equipment_price_history ${x.row.product_code} ${x.row.valid_from}: ${error.message}`);
+  if (data?.length !== 1) await fail(`delete equipment_price_history ${x.row.product_code} ${x.row.valid_from}: 消した行数 ${data?.length} (DRY RUN の後に変わった)`);
+  await record({ batch_id: BATCH, tenant_id: TENANT, table_name: "equipment_price_history", row_id: x.row.id, op: "delete", source_key: x.key, source_ref: x.ref, before: x.row, after: null });
+  nDel++;
+}
 for (const x of plan.prices) {
   const { data: ex, error: e0 } = await sb.from("equipment_price_history").select("id,rental_price").eq("tenant_id", TENANT).eq("product_code", x.row.product_code).eq("office_id", x.row.office_id).eq("valid_from", x.row.valid_from);
   if (e0) await fail(`equipment_price_history を読めない: ${e0.message}`);
@@ -448,4 +492,4 @@ for (const x of plan.prices) {
 }
 const { error: eDone } = await sb.from("data_import_batches").update({ status: "executed", executed_at: new Date().toISOString() }).eq("id", BATCH);
 if (eDone) await fail(`batch を executed にできない: ${eDone.message}`);
-console.log(`\n完了: 品目 ${nEq} / 価格の行 ${nPr}。batch ${BATCH}。確認: --live の DRY RUN で 書込みの見込みが 0,0 になること。取り消しは --revert ${BATCH}`);
+console.log(`\n完了: 品目 ${nEq} / 価格の行 ${nPr} / 消した事業所の行 ${nDel}。batch ${BATCH}。確認: --live の DRY RUN で 書込みの見込みが 0,0 になること。取り消しは --revert ${BATCH}`);
