@@ -123,8 +123,10 @@ let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_l
 const SOURCE_SYSTEM = "honobono-fukuyogu";
 const STEP = "teikyo-rebuild";
 const MARK = "[teikyo-rebuild-20261109]";
-const MIGRATION_START = "2026-04-01";
-const BEFORE_APR = "[4/1以前から]";
+// 移行の起点 = 提供票の最初の月の 1 日 (ケアサポは 2026-04 から → 2026-04-01 / [4/1以前から] で従来どおり)。
+//   ★ 2026-11-13: 誉田は R8/5 からしか無いので 4/1 固定だと 5/1 から続く台に 4/1 を仮置きしていた → 最初の月から決める (main で確定)
+let MIGRATION_START = "2026-04-01";
+let BEFORE_APR = "[4/1以前から]";
 const REF_TABLES = [["billing_unit_overrides", "order_item_id"], ["order_item_price_changes", "order_item_id"], ["monitoring_items", "order_item_id"]];
 
 // ── 小道具 ────────────────────────────────────────────────────────────────
@@ -331,6 +333,9 @@ async function main() {
   const months = [...new Set(all.map((r) => r.ym))].sort();
   for (let i = 1; i < months.length; i++) if (monthIdx(months[i]) - monthIdx(months[i - 1]) !== 1) throw new Error(`★ 提供票の月が飛んでいる ${months[i - 1]} → ${months[i]}`);
   const FIRST = months[0], LAST = months[months.length - 1];
+  MIGRATION_START = `${FIRST}-01`;
+  BEFORE_APR = `[${Number(FIRST.slice(5, 7))}/1以前から]`;
+  if (FIRST !== "2026-04") console.log(`★ 提供票の最初の月が ${FIRST} なので、${MIGRATION_START} より前から続く台は ${MIGRATION_START} を仮置きし notes に ${BEFORE_APR}`);
   const rows = all.filter((r) => r.pa === "実績" && !SKIP_USERS.has(r.userNo));
   if (SKIP_USERS.size) console.log(`--skip-users: 提供票の利用者番号 ${[...SKIP_USERS].join(",")} は扱わない`);
   const R = { map: new Report(), users: new Report(), link: new Report(), plan: new Report(), db: new Report(), warn: new Report() };
@@ -600,7 +605,12 @@ async function main() {
     if (AS_OF != null && a > AS_OF) continue;
     p.notes.push(`[休止 ${a}〜${AS_OF != null && b > AS_OF ? AS_OF : b}]`);
   }
-  console.log(`\n提供票 ${FIRST}〜${LAST}: 実績 ${rows.length} 行 → 台 ${planned.length} (継続中 ${planned.filter((p) => p.open).length} / 終了 ${planned.filter((p) => !p.open).length} / 4/1以前から ${planned.filter((p) => p.beforeApr).length})`);
+  console.log(`\n提供票 ${FIRST}〜${LAST}: 実績 ${rows.length} 行 → 台 ${planned.length} (継続中 ${planned.filter((p) => p.open).length} / 終了 ${planned.filter((p) => !p.open).length} / ${BEFORE_APR.slice(1, -1)} ${planned.filter((p) => p.beforeApr).length})`);
+  { // 開始月の分布 (仮置きの「○/1以前から」は別に数える。2026-11-13 誉田の受入れで追加)
+    const by = new Map();
+    for (const p of planned) { const k = p.beforeApr ? `${BEFORE_APR.slice(1, -1)}` : p.start.slice(0, 7); by.set(k, (by.get(k) ?? 0) + 1); }
+    console.log(`  開始月の分布: ${[...by].sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(([k, v]) => `${k} ${v}`).join(" / ")}`);
+  }
 
   // ── 用具の product_code と equipment_master の追加 ─────────────────────
   const ops = [];
@@ -723,7 +733,7 @@ async function main() {
     for (const it of ds.filter((x) => !used.has(x.id))) {
       const c = clientById.get(cid);
       const ex = { 氏名: c?.name, 番号: c?.user_number, 用具: it.product_code, 開始: ymdOK(it.rental_start_date), 終了: ymdOK(it.rental_end_date), 状態: it.status, 今朝の同期: (it.notes ?? "").includes("[honobono-sync-") };
-      if ((ymdOK(it.rental_end_date) ?? "9999") < MIGRATION_START) { R.db.add("DB だけ・4/1 より前に終了 (触らない)", ex); keepItems.push(it.id); continue; }
+      if ((ymdOK(it.rental_end_date) ?? "9999") < MIGRATION_START) { R.db.add(`DB だけ・${MIGRATION_START === "2026-04-01" ? "4/1" : MIGRATION_START} より前に終了 (触らない)`, ex); keepItems.push(it.id); continue; }
       const ref = REF_TABLES.filter(([tb]) => db.refs[tb]?.has(it.id)).map(([tb]) => tb);
       if (ref.length) { R.db.add(`★ DB だけ・参照あり (${ref.join(",")}) → 消さない`, ex); keepItems.push(it.id); continue; }
       if (holdClients.has(cid)) { R.db.add("★ DB だけ・その利用者に引き当て不可の行がある → 消さない", ex); keepItems.push(it.id); continue; }
