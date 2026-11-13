@@ -41,6 +41,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import type { EquipmentPriceHistory } from "../lib/supabase";
+import { halfMonthFlags, hospitalizationRanges } from "../lib/half-month-units";
 
 // lib/equipment.ts 等は module top-level で `@/lib/supabase` (browser client) を
 // 生成しており、env が無いと import 時点で即クラッシュする。static import だと
@@ -120,7 +121,6 @@ for (const k of kohiAll) {
 const [y, m] = MONTH.split("-").map(Number);
 const monthStart = new Date(y, m - 1, 1);
 const monthEnd = new Date(y, m, 0, 23, 59, 59);
-const daysInMonth = new Date(y, m, 0).getDate();
 const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
 
 const paymentTypeCounts = new Map<string, number>();
@@ -142,24 +142,12 @@ const activeRentals = orderItemsAll.filter((item) => {
 });
 console.log(`【分母】activeRentals (= ${MONTH} の請求対象候補): ${activeRentals.length} 行 / order_items全体 ${orderItemsAll.length} 行\n`);
 
-// ── 半月按分バケツ判定 (BillingTab.tsx:560-584 の日ループを軽量に再現。
-//    ★ 金額の正確性ではなく「前半のみ/後半のみ/全月/該当なし」の分類だけが目的) ──
+// ── 半月按分バケツ判定 (請求と同じ lib/half-month-units.ts halfMonthFlags。入院の日は除く。2026-11-13 に逐語コピーから寄せた)
+//    ★ 金額の正確性ではなく「前半のみ/後半のみ/全月/該当なし」の分類だけが目的。休止 (order_item_pauses) は見ない
 function halfMonthBucket(item: OrderItemRow, clientId: string): "全月" | "前半のみ" | "後半のみ" | "該当なし" {
   if (!item.rental_start_date) return "該当なし";
-  const rentalStart = parseLocalDate(item.rental_start_date);
-  const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
-  const clientHosp = hospByClient.get(clientId) ?? [];
-  let firstHalf = false, secondHalf = false;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(y, m - 1, d);
-    if (date < rentalStart || date > rentalEnd) continue;
-    const inHosp = clientHosp.some((h) => {
-      const admit = parseLocalDate(h.admission_date);
-      const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
-      return date >= admit && date <= discharge;
-    });
-    if (!inHosp) { if (d <= 15) firstHalf = true; else secondHalf = true; }
-  }
+  const { firstHalf, secondHalf } = halfMonthFlags(item.rental_start_date, item.rental_end_date, MONTH,
+    hospitalizationRanges(hospByClient.get(clientId) ?? []));
   if (firstHalf && secondHalf) return "全月";
   if (firstHalf) return "前半のみ";
   if (secondHalf) return "後半のみ";

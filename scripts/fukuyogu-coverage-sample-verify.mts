@@ -7,7 +7,7 @@
  *   node migrations/seed_sample_fukuyogu_coverage_g.mjs --delete --execute  (後で撤去)
  *
  * BillingTab.tsx の getUnits/computeUnitsForMonth を軽量に再現し
- * (halfMonthUnits/getPriceForMonth/hasBrokenRentalDates は本物をimport)、
+ * (rentalMonthUnits/getPriceForMonth/hasBrokenRentalDates は本物をimport)、
  * 7シナリオの単位数・金額が期待通りかを確認する。
  *
  * ⚠ 「貸与期間の逆転」は直さない。落ちるか弾くかを **記録するだけ**。
@@ -29,15 +29,12 @@ for (const l of readFileSync(join(__dirname, "..", "..", "kaigo-app", ".env.loca
 if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_SERVICE_ROLE_KEY が無い");
 const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-const { halfMonthUnits } = await import("../lib/half-month-units");
+const { rentalMonthUnits, hospitalizationRanges } = await import("../lib/half-month-units");
 const { getPriceForMonth } = await import("../lib/equipment");
 const { hasBrokenRentalDates } = await import("../app/[tenant]/order-item-helpers");
 
 const MONTH = "2026-12";
 const [y, m] = MONTH.split("-").map(Number);
-const monthEnd = new Date(y, m, 0, 23, 59, 59);
-const daysInMonth = new Date(y, m, 0).getDate();
-const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
 
 let n = 0, ng = 0;
 function eq(label: string, actual: unknown, expected: unknown) {
@@ -73,25 +70,13 @@ async function getHosp(clientId: string) {
 }
 const { data: priceHistAll } = await sb.from("equipment_price_history").select("*");
 
-// BillingTab.tsx の getUnits を軽量に再現 (逐語のロジックそのもの。値の正確性が目的)
+// BillingTab.tsx の getUnits と同じ計算 (lib/half-month-units.ts rentalMonthUnits。2026-11-13 に逐語コピーから寄せた)。
+// サンプルには 休止・日割り設定が無いので 入院だけを除く日に渡す (mode = 自動)
 function computeUnits(item: { product_code: string; rental_start_date: string | null; rental_end_date: string | null }, hosp: { admission_date: string; discharge_date: string | null }[], eqPrice: number) {
   const price = getPriceForMonth(priceHistAll as never, item.product_code, MONTH) ?? eqPrice;
   const base = price ? Math.round(price / 10) : 0;
   if (!item.rental_start_date) return 0;
-  const rentalStart = parseLocalDate(item.rental_start_date);
-  const rentalEnd = item.rental_end_date ? parseLocalDate(item.rental_end_date) : monthEnd;
-  let firstHalf = false, secondHalf = false;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(y, m - 1, d);
-    if (date < rentalStart || date > rentalEnd) continue;
-    const inHosp = hosp.some((h) => {
-      const admit = parseLocalDate(h.admission_date);
-      const discharge = h.discharge_date ? parseLocalDate(h.discharge_date) : monthEnd;
-      return date >= admit && date <= discharge;
-    });
-    if (!inHosp) { if (d <= 15) firstHalf = true; else secondHalf = true; }
-  }
-  return halfMonthUnits(base, firstHalf, secondHalf);
+  return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, MONTH, hospitalizationRanges(hosp), "auto");
 }
 
 console.log("\n═══ C1 前半のみ ═══");
