@@ -1,3 +1,5 @@
+import { mapWithConcurrency } from "./concurrency";
+
 /**
  * `.in(列, ids)` を ids の数に関係なく安全に使うための分割読み込み。
  *
@@ -15,12 +17,16 @@ export async function selectInChunks<T>(
 ): Promise<T[]> {
   // 空の id が混ざると .in() に "null" が渡って uuid の型エラー (22P02) で全体が落ちるので除く
   const unique = [...new Set(ids)].filter((id): id is string => typeof id === "string" && id !== "");
-  const out: T[] = [];
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    const { data, error } = await run(unique.slice(i, i + chunkSize));
-    // 包み直さずにそのまま投げる (呼出側が error.code で「表が無い」等を見分けている)
-    if (error) throw error;
-    out.push(...((data ?? []) as T[]));
-  }
-  return out;
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += chunkSize) chunks.push(unique.slice(i, i + chunkSize));
+  // 2026-11-13: 直列 → 同時 4 本まで。結果は チャンクの順につなぐ (従来と同じ並び)。
+  //   worker 内では throw せず集めてから、いちばん前のチャンクのエラーを 包み直さずにそのまま投げる
+  //   (呼出側が error.code で「表が無い」等を見分けている。lib/concurrency.ts の注意書き)
+  const results = await mapWithConcurrency(chunks, async (chunk) => {
+    const { data, error } = await run(chunk);
+    return { rows: (data ?? []) as T[], error };
+  }, 4);
+  const firstErr = results.find((r) => r.error)?.error;
+  if (firstErr) throw firstErr;
+  return results.flatMap((r) => r.rows);
 }

@@ -9,6 +9,9 @@ import { todayYmd, addDaysYmd } from "@/lib/date-jst";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { mapWithConcurrency } from "@/lib/concurrency";
 
+/** 認定更新の仮想タスクに使う認定の列 */
+type CertEndRow = Pick<ClientInsuranceRecord, "id" | "client_id" | "certification_end_date">;
+
 // ─── DocTasksTab v3 ───────────────────────────────────────────────────────────
 // v1 (commit da99236) の「client × 書類種別」計算ベースから、event-driven な
 // doc_tasks table ベースに refactor (cfd252e=v2, 2026-05-09)。
@@ -150,7 +153,8 @@ export default function DocTasksTab({
   onOpenDocuments: (clientId?: string, docTaskId?: string | null, expectedDocType?: string | null) => void;
 }) {
   const [tasks, setTasks] = useState<DocTask[]>([]);
-  const [insuranceRecords, setInsuranceRecords] = useState<ClientInsuranceRecord[]>([]);
+  // 認定更新の仮想タスクに使う 3 列だけ持つ (2026-11-13: select("*") → 列を絞って転送量を減らす)
+  const [insuranceRecords, setInsuranceRecords] = useState<CertEndRow[]>([]);
   const [clientById, setClientById] = useState<Map<string, Client>>(new Map());
   const [careplanByClient, setCareplanByClient] = useState<Map<string, string>>(new Map()); // clientId → 最新 care_plan の created_at
   // B-2n: 「作成済書類で完了」の候補判定用 (書類タスク経由以外で作られた書類)
@@ -216,26 +220,27 @@ export default function DocTasksTab({
           ),
         ]);
 
-        // 4. client_insurance_records (cert_renewal 計算用) — 利用者 200 人ずつ、同時 6 本まで
-        //    1 回の返事は 1000 行まで。200 人分が 1000 行に届いたら切れているので黙らずエラーにする
-        //    (2026-10-21 実測: ケアサポ 1,566 名で 1 回あたり最大 311 行)。
+        // 4. client_insurance_records (cert_renewal 計算用) — 利用者 150 人ずつ、同時 6 本まで
+        //    1 回の返事は 1000 行まで。150 人分が 1000 行に届いたら切れているので黙らずエラーにする
+        //    (2026-10-21 実測: 1 回あたり最大 311 行 → 2026-11-13 実測: 200 人で最大 724 行に増えたので 150 人に。
+        //     .in() は 150 程度に抑える: memory feedback_postgrest_in_query_plan_cliff)。
         const clientIdSet = new Set(allClients.map((c) => c.id));
-        const insRecs: ClientInsuranceRecord[] = [];
+        const insRecs: CertEndRow[] = [];
         if (clientIdSet.size > 0) {
           const ids = Array.from(clientIdSet);
-          const CHUNK = 200;
+          const CHUNK = 150;
           const idChunks: string[][] = [];
           for (let i = 0; i < ids.length; i += CHUNK) idChunks.push(ids.slice(i, i + CHUNK));
           const errors: string[] = [];
           const results = await mapWithConcurrency(idChunks, async (slice) => {
             const { data, error } = await supabase
               .from("client_insurance_records")
-              .select("*")
+              .select("id, client_id, certification_end_date")
               .eq("tenant_id", tenantId)
               .in("client_id", slice);
-            if (error) { errors.push(error.message); return [] as ClientInsuranceRecord[]; }
+            if (error) { errors.push(error.message); return [] as CertEndRow[]; }
             if ((data ?? []).length >= 1000) { errors.push(`認定が ${slice.length} 人分で 1000 行に達し、切れています (CHUNK を小さくする)`); }
-            return (data ?? []) as ClientInsuranceRecord[];
+            return (data ?? []) as CertEndRow[];
           }, 6);
           if (errors.length > 0) throw new Error(errors[0]);
           for (const rows of results) insRecs.push(...rows);

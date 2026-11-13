@@ -1,5 +1,7 @@
 import { supabase, Client } from "./supabase";
 import { cached, invalidateCache } from "./cache";
+import { selectAllPagedParallel } from "./pagedParallel";
+import { mapWithConcurrency } from "./concurrency";
 
 // Supabase のデフォルト 1000件制限を回避するためページング取得
 // 既定では削除済み（deleted_at IS NOT NULL）を除外する
@@ -12,31 +14,29 @@ export async function getClients(
   const officeKey = opts.officeId ?? "all";
   const key = `clients:${tenantId}:${filterKey}:${officeKey}`;
   const fetcher = async (): Promise<Client[]> => {
-    const PAGE = 1000;
-    const all: Client[] = [];
-    let from = 0;
-    while (true) {
-      let q = supabase
-        .from("clients")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("furigana", { ascending: true, nullsFirst: false })
-        .order("id").range(from, from + PAGE - 1);
-      if (opts.officeId) {
-        q = q.eq("office_id", opts.officeId);
-      }
-      if (opts.onlyDeleted) {
-        q = q.not("deleted_at", "is", null);
-      } else if (!opts.includeDeleted) {
-        q = q.is("deleted_at", null);
-      }
-      const { data, error } = await q;
-      if (error) throw error;
-      if (!data || data.length === 0) break;
-      all.push(...data);
-      if (data.length < PAGE) break;
-      from += PAGE;
-    }
+    // 削除済みの扱い (clients 本体と 割当で足す分で同じ条件)
+    const withDeletedFilter = <Q extends { is: (c: string, v: null) => Q; not: (c: string, op: string, v: null) => Q }>(q: Q): Q =>
+      opts.onlyDeleted ? q.not("deleted_at", "is", null) : !opts.includeDeleted ? q.is("deleted_at", null) : q;
+    const clientsQ = (head: boolean) => {
+      let q = head
+        ? supabase.from("clients").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId)
+        : supabase.from("clients").select("*").eq("tenant_id", tenantId);
+      if (opts.officeId) q = q.eq("office_id", opts.officeId);
+      return withDeletedFilter(q);
+    };
+    // ★ 2026-11-13 高速化: clients は 件数を聞いてページを並列に読む (並び順・中身は従来どおり furigana → id)。
+    //   事業所指定時の割当の読込は clients の結果に依存しないので 同時に始める (旧: clients を読み終わってから直列)
+    const clientsP = selectAllPagedParallel<Client>(
+      () => clientsQ(true),
+      (from, to) => clientsQ(false).order("furigana", { ascending: true, nullsFirst: false }).order("id").range(from, to),
+    );
+    const assignedP = opts.officeId
+      ? selectAllPagedParallel<{ client_id: string | null }>(
+          () => supabase.from("client_office_assignments").select("id", { count: "exact", head: true }).eq("office_id", opts.officeId!),
+          (from, to) => supabase.from("client_office_assignments").select("client_id").eq("office_id", opts.officeId!).order("id").range(from, to),
+        )
+      : Promise.resolve([] as { client_id: string | null }[]);
+    const [all, assignedRows] = await Promise.all([clientsP, assignedP]);
     // ★ 2026-11-10: 事業所で絞るときは client_office_assignments (junction) で割り当てられた利用者も含める。
     //   kaigo と共有の利用者は clients.office_id が空 (または kaigo 側の事業所) のことがあり、
     //   office_id だけで絞ると ケアサポの貸与があるのに請求画面に出ず 請求漏れになる
@@ -44,26 +44,17 @@ export async function getClients(
     //   終了した割当も含める (office_id で絞る側も元利用者を含むのと揃える。過去月の請求・過誤で要る)。
     if (opts.officeId) {
       const have = new Set(all.map((c) => c.id));
-      const assigned: string[] = [];
-      for (let f = 0; ; f += PAGE) {
-        const { data, error } = await supabase
-          .from("client_office_assignments")
-          .select("client_id")
-          .eq("office_id", opts.officeId)
-          .order("id").range(f, f + PAGE - 1);
-        if (error) throw error;
-        for (const r of data ?? []) if (r.client_id && !have.has(r.client_id)) assigned.push(r.client_id);
-        if (!data || data.length < PAGE) break;
-      }
-      const extraIds = [...new Set(assigned)];
-      for (let i = 0; i < extraIds.length; i += 150) {
-        let q = supabase.from("clients").select("*").eq("tenant_id", tenantId).in("id", extraIds.slice(i, i + 150));
-        if (opts.onlyDeleted) q = q.not("deleted_at", "is", null);
-        else if (!opts.includeDeleted) q = q.is("deleted_at", null);
-        const { data, error } = await q;
-        if (error) throw error;
-        all.push(...(data ?? []));
-      }
+      const extraIds = [...new Set(assignedRows.map((r) => r.client_id).filter((id): id is string => !!id && !have.has(id)))];
+      const chunks: string[][] = [];
+      for (let i = 0; i < extraIds.length; i += 150) chunks.push(extraIds.slice(i, i + 150));
+      const errors: string[] = [];
+      const extra = await mapWithConcurrency(chunks, async (ids) => {
+        const { data, error } = await withDeletedFilter(supabase.from("clients").select("*").eq("tenant_id", tenantId).in("id", ids));
+        if (error) { errors.push(error.message); return [] as Client[]; }
+        return (data ?? []) as Client[];
+      });
+      if (errors.length) throw new Error(errors[0]);
+      all.push(...extra.flat());
       if (extraIds.length) all.sort((a, b) => (a.furigana ?? "￿").localeCompare(b.furigana ?? "￿", "ja"));
     }
     return all;

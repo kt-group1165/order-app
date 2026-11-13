@@ -102,29 +102,35 @@ function nonEmpty(v: string | null | undefined): string | undefined {
 }
 
 export async function getOfficeCompanyInfo(tenantId: string, officeId: string | null): Promise<ResolvedCompanyInfo> {
-  const tenant: Tenant | null = await getTenantById(tenantId);
+  // テナントと事業所は互いに依存しないので同時に読む (2026-11-13。どちらかが失敗したら従来どおり throw)
+  const readOffice = async (): Promise<{ o: OfficeRow | null; cm: boolean }> => {
+    let o: OfficeRow | null = null;
+    let cm = false;
+    if (officeId) {
+      const sel = "name, business_number, address, postal_code, phone, fax, manager_name, company_id";
+      const res = await supabase.from("offices").select(`${sel}, doc_company_info`).eq("id", officeId).maybeSingle();
+      if (res.error) {
+        // 列追加 (office_doc_company_info.sql) の前でも帳票が出るよう、列なしで読み直す
+        if (/doc_company_info/.test(res.error.message)) {
+          cm = true;
+          const r2 = await supabase.from("offices").select(sel).eq("id", officeId).maybeSingle();
+          if (r2.error) throw r2.error;
+          o = r2.data as OfficeRow | null;
+        } else {
+          throw res.error;
+        }
+      } else {
+        o = res.data as OfficeRow | null;
+      }
+    }
+    return { o, cm };
+  };
+  const [tenant, officeRead] = await Promise.all([getTenantById(tenantId) as Promise<Tenant | null>, readOffice()]);
+  const office: OfficeRow | null = officeRead.o;
+  const columnMissing = officeRead.cm;
   const fromTenant = emptyCompanyInfoRow();
   for (const k of COMPANY_INFO_KEYS) fromTenant[k] = nonEmpty((tenant as Record<string, string | null> | null)?.[k]) ?? "";
 
-  let office: OfficeRow | null = null;
-  let columnMissing = false;
-  if (officeId) {
-    const sel = "name, business_number, address, postal_code, phone, fax, manager_name, company_id";
-    const res = await supabase.from("offices").select(`${sel}, doc_company_info`).eq("id", officeId).maybeSingle();
-    if (res.error) {
-      // 列追加 (office_doc_company_info.sql) の前でも帳票が出るよう、列なしで読み直す
-      if (/doc_company_info/.test(res.error.message)) {
-        columnMissing = true;
-        const r2 = await supabase.from("offices").select(sel).eq("id", officeId).maybeSingle();
-        if (r2.error) throw r2.error;
-        office = r2.data as OfficeRow | null;
-      } else {
-        throw res.error;
-      }
-    } else {
-      office = res.data as OfficeRow | null;
-    }
-  }
   let companyName: string | undefined;
   if (office?.company_id) {
     const { data, error } = await supabase.from("companies").select("name").eq("id", office.company_id).maybeSingle();

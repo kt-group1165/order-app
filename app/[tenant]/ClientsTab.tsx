@@ -29,7 +29,7 @@ import { getClients, promoteProvisionalClient, softDeleteClient, restoreClient }
 import { getTenantById, type Tenant } from "@/lib/tenants";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import {
-  getOffices, getClientOfficeAssignments, getClientAssignmentsForClient,
+  getOffices, getClientAssignmentsForClient,
   ensureActiveAssignment, closeActiveAssignment, addAssignment, updateAssignment, deleteAssignment,
   type Office, type ClientOfficeAssignment,
 } from "@/lib/offices";
@@ -182,7 +182,14 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
             return all;
           })(),
           getTenantById(tenantId),
-          getClientOfficeAssignments(tenantId),
+          // 自事業所の割当だけ読む (2026-11-13 高速化: 旧 = テナント全件 約 9,700 行を読んでから office で絞っていた。
+          //   ケアサポは約 1,450 行。下の clientOfficeMap と同じ集合になる)
+          currentOfficeId
+            ? selectAllPagedParallel<{ client_id: string }>(
+                () => supabase.from("client_office_assignments").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("office_id", currentOfficeId),
+                (from, to) => supabase.from("client_office_assignments").select("client_id").eq("tenant_id", tenantId).eq("office_id", currentOfficeId).order("id").range(from, to),
+              )
+            : Promise.resolve([] as { client_id: string }[]),
         ]);
         setClients(c);
         setOrderItems(items);
@@ -194,7 +201,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
         setTenantInfo(tenant);
         // 事業所別利用者マップ
         if (currentOfficeId) {
-          const assigned = new Set(assignments.filter(a => a.office_id === currentOfficeId).map(a => a.client_id));
+          const assigned = new Set(assignments.map(a => a.client_id));
           setClientOfficeMap(assigned);
         }
         if (initialClientId) {
@@ -288,6 +295,8 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
     let cancelled = false;
     (async () => {
       const notices: string[] = [];
+      // 例外給付記録と市町村ルールは互いに依存しないので同時に読む (2026-11-13。エラーの扱いは従来どおり)
+      const rulesP = getExceptionInsurerRules(tenantId);
       try {
         const g = await getAllExceptionGrants(tenantId);
         if (!cancelled) setExceptionGrantsAll(g);
@@ -299,7 +308,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
           : `例外給付記録を読めなかったため、例外給付の印は出していません (${(e as { message?: string })?.message ?? String(e)})`);
         if (!cancelled) setExceptionGrantsAll(null);
       }
-      const r = await getExceptionInsurerRules(tenantId);
+      const r = await rulesP;
       if (r.message) notices.push(r.message);
       if (!cancelled) {
         setExceptionRules(r.rules);

@@ -1,5 +1,6 @@
 import { supabase, Order, OrderItem, Member } from "./supabase";
 import { cached, invalidateCache } from "./cache";
+import { selectAllPagedParallel } from "./pagedParallel";
 
 export async function getMembers(tenantId: string): Promise<Member[]> {
   return cached(`members:${tenantId}`, async () => {
@@ -80,23 +81,12 @@ export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
 
 export async function getAllOrderItemsByTenant(tenantId: string): Promise<OrderItem[]> {
   return cached(`order_items:${tenantId}`, async () => {
-    const PAGE = 1000;
-    const all: OrderItem[] = [];
-    let from = 0;
-    while (true) {
-      const { data, error } = await supabase
-        .from("order_items")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("created_at", { ascending: false })
-        .order("id").range(from, from + PAGE - 1);
-      if (error) throw error;
-      if (!data || data.length === 0) break;
-      all.push(...data);
-      if (data.length < PAGE) break;
-      from += PAGE;
-    }
-    return all;
+    // ★ 2026-11-13: 件数を聞いてページを並列に読む (旧: 1000 行ずつ 9 回直列。並び順・中身は従来どおり created_at 降順 → id)
+    return selectAllPagedParallel<OrderItem>(
+      () => supabase.from("order_items").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) => supabase.from("order_items").select("*").eq("tenant_id", tenantId)
+        .order("created_at", { ascending: false }).order("id").range(from, to),
+    );
   });
 }
 

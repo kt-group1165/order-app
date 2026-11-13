@@ -398,6 +398,13 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         () => supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
         (from, to) => supabase.from(table).select("*").eq("tenant_id", tenantId).order("id").range(from, to),
       );
+    // 価格改定の履歴は テナント全件 (約 700 行) を最初から同時に読み、order_items が揃ってから品目で絞る
+    //   (2026-11-13 高速化: 旧 = order_items を待ってから 150 品目ずつ 6 回直列。結果は getPriceHistory(tenantId, codes) と同じ
+    //    = 同じ品目・valid_from 昇順 (同日は id))。失敗しても画面の読込は止めない (従来どおり warn だけ)
+    const priceHistAllP: Promise<EquipmentPriceHistory[] | null> = selectAllPagedParallel<EquipmentPriceHistory>(
+      () => supabase.from("equipment_price_history").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
+      (from, to) => supabase.from("equipment_price_history").select("*").eq("tenant_id", tenantId).order("id").range(from, to),
+    ).catch((err) => { console.warn("getPriceHistory failed:", err); return null; });
     Promise.all([
       getClients(tenantId, { officeId: currentOfficeId ?? undefined }),
       getEquipment(tenantId),
@@ -419,10 +426,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       setHospitalizations(hospRaw as ClientHospitalization[]);
       setCareOffices(coffs as CareOffice[]);
       // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
-      const codes = [...new Set(items.map((i: OrderItem) => i.product_code))];
-      if (codes.length > 0) {
-        getPriceHistory(tenantId, codes).then(setPriceHistoryAll).catch((err) => {
-          console.warn("getPriceHistory failed:", err);
+      const codes = new Set(items.map((i: OrderItem) => i.product_code));
+      if (codes.size > 0) {
+        void priceHistAllP.then((all) => {
+          if (!all) return;
+          setPriceHistoryAll(all.filter((h) => codes.has(h.product_code))
+            .sort((a, b) => a.valid_from.localeCompare(b.valid_from) || String(a.id).localeCompare(String(b.id))));
         });
       }
     }).catch(console.error).finally(() => setDataLoading(false));
@@ -558,6 +567,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     let cancelled = false;
     (async () => {
       const notices: string[] = [];
+      // 例外給付記録と市町村ルールは互いに依存しないので同時に読む (2026-11-13。エラーの扱いは従来どおり)
+      const rulesP = getExceptionInsurerRules(tenantId);
       try {
         const g = await getAllExceptionGrants(tenantId);
         if (!cancelled) setExGrants(g);
@@ -568,7 +579,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           : `例外給付記録を読めなかったため、利用者行の例外給付の印は出していません (${(e as { message?: string })?.message ?? String(e)})`);
         if (!cancelled) setExGrants(null);
       }
-      const r = await getExceptionInsurerRules(tenantId);
+      const r = await rulesP;
       if (r.message) notices.push(r.message);
       if (!cancelled) { setExRules(r.rules); setExNotice(notices.length > 0 ? notices.join(" / ") : null); }
     })();
