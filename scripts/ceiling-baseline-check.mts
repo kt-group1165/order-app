@@ -99,11 +99,17 @@ async function main() {
     }
   }
 
-  type EM = { product_code: string; tais_code: string | null; name: string; rental_price: number | null };
+  type EM = { product_code: string; tais_code: string | null; name: string; rental_price: number | null; parent_product_code?: string | null };
   type Ceil = { tais_code: string; effective_from: string; ceiling_price: number };
   type Item = { product_code: string; status: string | null; payment_type: string | null };
 
-  const em = await all<EM>("equipment_master", "product_code, tais_code, name, rental_price");
+  // ★ 2026-11-13: 用具マスタが「品目 (親) + サイズ・型 (子)」の 2 段になった (equipment_master_variants.sql)。
+  //   子は請求に自分の価格を使わない (getEquipment・getPriceHistory が親の価格・TAIS を使う) ので、上限と比べるのは 親だけ。
+  //   子を数えると 親と違う古い rental_price のまま残った子が 超過に見える。
+  //   ★ 子にする統合の前後で 件数・指紋が変わる (= データが変わった)。統合の前の件数は このコードで数えること。
+  const emAll = await all<EM>("equipment_master", "product_code, tais_code, name, rental_price, parent_product_code");
+  const em = emAll.filter((e) => !e.parent_product_code);
+  if (emAll.length !== em.length) console.log(`(用具マスタの子 ${emAll.length - em.length} 行は 上限と比べない。親 ${em.length} 行で判定)`);
   const ceil = await all<Ceil>("equipment_price_ceilings", "tais_code, effective_from, ceiling_price");
   const items = await all<Item>("order_items", "product_code, status, payment_type");
 

@@ -128,7 +128,11 @@ const commonPrice = (e, ym) => {
   return hs[0]?.rental_price ?? e.rental_price ?? null;
 };
 const eqByTais = new Map();
-for (const e of snap.equipment ?? []) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
+// ★ 2026-11-13: 用具マスタは「品目 (親) + サイズ・型 (子)」。価格の行は 親 (parent_product_code が空) にだけ作る (子は親の価格を使う)
+//   控えに parent_product_code の列が無い (統合前の控え) ときは 全部を親とみなす
+const parentEquipment = (snap.equipment ?? []).filter((e) => !e.parent_product_code);
+for (const e of parentEquipment) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
+if (parentEquipment.length !== (snap.equipment ?? []).length) console.log(`(用具マスタの子 ${(snap.equipment ?? []).length - parentEquipment.length} 行は 価格の行を作る対象から外した)`);
 const vfYm = VALID_FROM.slice(0, 7);
 
 const R = { P1: [], P2: [], P3: [], J: [], G: [], A: [], B: [], C: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
