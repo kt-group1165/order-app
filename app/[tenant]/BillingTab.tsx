@@ -1495,6 +1495,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     }
     const allWarnings: string[] = [...officePlan.warnings];
     let fileCount = 0;
+    const built: ReturnType<typeof buildFukuyoguDensou>[] = []; // 月別のファイル (確認してから まとめて出力)
     // 軽度者 原則対象外品目 × 例外給付記録なし の警告 (B-6d)。generateTransferData と同じロジック。
     let exceptionGrants: Awaited<ReturnType<typeof getExceptionGrants>> = [];
     let exceptionCheckAvailable = true;
@@ -1641,6 +1642,21 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       { const s = benefitNoCertSummary(benefitNoCert); if (s) allWarnings.push(`[${ym}] ${s}`); }
       const result = buildFukuyoguDensou(rows, { officeNumber, year: yy, month: mm });
       allWarnings.push(...result.warnings.map((w) => `[${ym}] ${w}`));
+      built.push(result);
+    }
+    if (built.length === 0) {
+      alert("返戻・過誤の出力対象がありませんでした。");
+      return;
+    }
+    // ★ 2026-11-14: 月次の伝送 (generateTransferData) と同じく「出力の前」に確認する。
+    //   以前は出力してから alert で警告を見せていた (月次は確認するのに 再出力だけ確認なし = 向きが逆。過誤申立が二重になりうる)
+    if (allWarnings.length > 0) {
+      const ok = window.confirm(
+        `以下の項目を確認してください (伝送ソフトの取込チェックでエラーになる可能性があります):\n\n・${allWarnings.slice(0, 12).join("\n・")}${allWarnings.length > 12 ? `\n…他 ${allWarnings.length - 12} 件` : ""}\n\nこのまま返戻・過誤の伝送ファイル ${built.length} 件 (月別) を出力しますか？`,
+      );
+      if (!ok) return;
+    }
+    for (const result of built) {
       const sjis = Encoding.convert(Encoding.stringToCode(result.content), { to: "SJIS", from: "UNICODE" });
       const blob = new Blob([new Uint8Array(sjis)], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
@@ -1651,14 +1667,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       URL.revokeObjectURL(url);
       fileCount++;
     }
-    if (fileCount === 0) {
-      alert("返戻・過誤の出力対象がありませんでした。");
-      return;
-    }
-    alert(
-      `返戻・過誤の伝送ファイルを ${fileCount} 件(月別)出力しました。` +
-      (allWarnings.length > 0 ? `\n\n⚠ 不足項目 (取込前に確認):\n・${allWarnings.slice(0, 10).join("\n・")}${allWarnings.length > 10 ? `\n…他 ${allWarnings.length - 10} 件` : ""}` : ""),
-    );
+    alert(`返戻・過誤の伝送ファイルを ${fileCount} 件(月別)出力しました。`);
   };
 
   const [y, m] = billingMonth.split("-").map(Number);
