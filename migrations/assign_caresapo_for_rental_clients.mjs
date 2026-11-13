@@ -5,6 +5,7 @@
  *   node migrations/assign_caresapo_for_rental_clients.mjs                       # DRY RUN
  *   node migrations/assign_caresapo_for_rental_clients.mjs --execute
  *   node migrations/assign_caresapo_for_rental_clients.mjs --revert <batch_id> [--execute]
+ *   [--area <拠点> | --office-bn <番号>]  既定 ケアサポ。誉田など他の福祉用具事業所の貸与にも同じ割当を足す (_fukuyogu_office.mjs)
  *
  * 背景 (2026-11-10): 請求画面 (lib/clients.ts getClients) は clients.office_id で利用者を絞っていたため、
  *   kaigo と共有の利用者 (clients.office_id が空) は ケアサポの貸与があっても請求に乗らなかった。
@@ -20,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { execLockStart, execLockAcquire, execLockRun } from "./_exec_lock.mjs";
+import { resolveFukuyoguOffice, describeFukuyoguOffice } from "./_fukuyogu_office.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
@@ -39,7 +41,11 @@ const REVERT = opt("--revert");
 const SCRIPT_REL = "apps/order-app/migrations/assign_caresapo_for_rental_clients.mjs";
 const SOURCE_SYSTEM = "order-app";
 const STEP_NAME = "assign-caresapo-for-rental-clients";
-const CS = "1bfc0d57-9ee0-4ae2-baa5-80edb776290a";
+// 対象事業所: 既定 ケアサポ (介護ショップ ケア・サポート千葉 1bfc0d57…)。--area / --office-bn で切替 (_fukuyogu_office.mjs)
+//   (名前は従来のまま CS / caresapo。中身は選んだ事業所)
+const FO = resolveFukuyoguOffice(argv);
+if (!FO.isDefault) console.log(describeFukuyoguOffice(FO));
+const CS = FO.officeId;
 let EXEC_LOCK = null;
 
 const chunks = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
@@ -93,7 +99,7 @@ async function plan(sb) {
 async function execute(sb, ops) {
   const batch = await execLockAcquire(sb, EXEC_LOCK, {
     tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: STEP_NAME,
-    notes: `ケアサポの貸与があるのに割当が無い ${ops.length} 名にケアサポの割当を足す`,
+    notes: `${FO.area}の貸与があるのに割当が無い ${ops.length} 名に${FO.area}の割当を足す`,
   });
   const BATCH = batch.id;
   console.log(`batch ${BATCH}`);
