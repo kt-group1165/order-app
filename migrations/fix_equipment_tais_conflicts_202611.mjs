@@ -53,13 +53,22 @@ console.log(doCat ? `   → ${CAT_TO} に直す` : "   → 既に直っている
 
 console.log(`② ${DEL_CODE}「${del?.name ?? "(無い)"}」 TAIS ${del?.tais_code ?? "-"} 種目 ${del?.category ?? "-"} 単位数 ${del?.rental_price ?? "-"}`);
 let doDel = !!del;
+let ownHist = []; // EQ-000957 自身の価格履歴 (品目と一緒に消す。発注・計画書などの参照ではない)
 if (del) {
   if (del.tais_code !== DEL_TAIS || del.category !== "車いす") stop("削除する行の中身が想定と違う");
   const refs = [];
-  for (const [t, col] of REF_TABLES) {
-    const { count, error: e } = await sb.from(t).select("*", { count: "exact", head: true }).eq(col, DEL_CODE);
-    if (e) { if (e.code === "42703" || e.code === "42P01" || /does not exist|schema cache/.test(e.message)) continue; throw new Error(`${t}.${col}: ${e.message}`); }
-    if (count) refs.push(`${t}.${col} ${count} 行`);
+  {
+    const { data: h, error: he } = await sb.from("equipment_price_history").select("*").eq("product_code", DEL_CODE);
+    if (he) throw new Error(`equipment_price_history: ${he.message}`);
+    ownHist = h ?? [];
+    console.log(`   自身の価格履歴 ${ownHist.length} 行 (${ownHist.map((x) => `${x.valid_from}:${x.rental_price}${x.office_id ? "@" + x.office_id : ""}`).join(" ")}) → 品目と一緒に消す`);
+  }
+  for (const [t, col] of REF_TABLES.filter(([t]) => t !== "equipment_price_history")) {
+    // head:true だと 列が無いときのエラーが空になる (本文が無い) ので 1 行だけ実際に取る
+    const { data: hit, error: e } = await sb.from(t).select(col).eq(col, DEL_CODE).limit(1);
+    const count = hit?.length ?? 0;
+    if (e) { console.log(`   (${t}.${col}: ${e.code} ${e.message.slice(0, 60)} → 飛ばす)`); if (e.code === "42703" || e.code === "42P01" || /does not exist|schema cache/.test(e.message)) continue; throw new Error(`${t}.${col}: ${e.message}`); }
+    if (count) refs.push(`${t}.${col} あり`);
   }
   const { data: cmp, error: ce } = await sb.from("equipment_master").select("product_code").contains("comparison_product_codes", [DEL_CODE]);
   if (ce) throw new Error(`comparison_product_codes: ${ce.message}`);
@@ -72,7 +81,7 @@ if (del) {
 if (!EXECUTE) { console.log("DRY RUN (書いていない)"); process.exit(0); }
 if (!doCat && !doDel) { console.log("何もすることが無い"); process.exit(0); }
 const bk = join(HERE, `_backup_equipment_tais_conflicts_${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-writeFileSync(bk, JSON.stringify({ createdAt: new Date().toISOString(), rows }, null, 2));
+writeFileSync(bk, JSON.stringify({ createdAt: new Date().toISOString(), rows, priceHistory: ownHist }, null, 2));
 console.log(`退避: ${bk}`);
 await execLockRun(sb, lock, { tenant_id: "kt-group", source_system: "order-app", source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "fix-tais-conflicts", notes: `${CAT_CODE} 種目→${CAT_TO} / ${DEL_CODE} 削除` }, async () => {
   if (doCat) {
@@ -81,8 +90,12 @@ await execLockRun(sb, lock, { tenant_id: "kt-group", source_system: "order-app",
     console.log("① 直した");
   }
   if (doDel) {
+    for (const h of ownHist) {
+      const { data: d, error: he } = await sb.from("equipment_price_history").delete().eq("id", h.id).eq("product_code", DEL_CODE).select("id");
+      if (he || d?.length !== 1) throw new Error(`② 価格履歴 ${h.id}: ${he?.message ?? `削除 ${d?.length} 件`}`);
+    }
     const { data, error: e } = await sb.from("equipment_master").delete().eq("id", del.id).select("id");
     if (e || data?.length !== 1) throw new Error(`②: ${e?.message ?? `削除 ${data?.length} 件`}`);
-    console.log("② 削除した");
+    console.log(`② 削除した (価格履歴 ${ownHist.length} 行も)`);
   }
 });
