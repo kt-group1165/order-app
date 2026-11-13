@@ -902,7 +902,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
     const n = parseInt(value, 10);
     const eq = equipment.find((e) => e.product_code === item.product_code);
-    const autoUnits = eq?.rental_price ? Math.round(eq.rental_price / 10) : 0;
+    // 自動の単位 (按分前の月額) は getUnits と同じく当月の改定価格 → マスタ価格 (2026-11-13 寄せ)
+    const autoPrice = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
+    const autoUnits = autoPrice ? Math.round(autoPrice / 10) : 0;
     if (!value || isNaN(n) || n === autoUnits) {
       await removeUnitOverride(tenantId, clientId, billingMonth, item.id);
       setUnitOverridesState((prev) => { const m = new Map(prev); m.delete(item.id); return m; });

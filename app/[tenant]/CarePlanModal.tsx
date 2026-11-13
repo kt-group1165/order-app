@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
 import { ChevronLeft, Printer } from "lucide-react";
-import { OrderItem, Equipment, Client } from "@/lib/supabase";
+import { OrderItem, Equipment, Client, EquipmentPriceHistory } from "@/lib/supabase";
+import { getPriceHistory, getPriceForMonth } from "@/lib/equipment";
 import { normalizeYmd, todayYmd, toJapaneseEra } from "@/lib/date-jst";
 import { type CompanyInfo } from "./company-info";
 import { STATUS_LABEL, STATUS_COLOR } from "./order-item-helpers";
@@ -33,7 +34,7 @@ function calcAge(birthDateStr: string): number {
 
 // ─── CarePlanPages (sub-component to avoid shared JSX node issue) ─────────────
 function CarePlanPages({
-  selectedItems, getEq, client, companyInfo,
+  selectedItems, getEq, priceOf, client, companyInfo,
   creationDate, gender, birthDate, certStartDate,
   consultantName, consultantRelation, consultationDate,
   monitoringMonths, goalsText, precautionsText,
@@ -41,6 +42,8 @@ function CarePlanPages({
 }: {
   selectedItems: OrderItem[];
   getEq: (code: string) => Equipment | undefined;
+  /** 作成日の月の貸与価格 (円・価格改定を反映。無ければ null) */
+  priceOf: (code: string) => number | null;
   client: Client;
   companyInfo: CompanyInfo;
   creationDate: string;
@@ -300,7 +303,9 @@ function CarePlanPages({
                     {pageItems.map((gi, idx) => {
                       const { item, count } = gi;
                       const eq = getEq(item.product_code);
-                      const unitBase = eq?.rental_price ? Math.round(eq.rental_price / 10) : "";
+                      // 単位数 = 作成日の月の価格 (改定を反映。請求の getUnits と同じ getPriceForMonth → マスタ価格) ÷ 10。按分前の月額
+                      const price = priceOf(item.product_code);
+                      const unitBase = price ? Math.round(price / 10) : "";
                       const unitsDisplay = unitBase === "" ? "" : count > 1 ? `${unitBase}×${count}` : String(unitBase);
                       const nameDisplay = count > 1 ? `${eq?.name ?? item.product_code}　×${count}` : (eq?.name ?? item.product_code);
                       return (
@@ -501,6 +506,25 @@ export default function CarePlanModal({
 
   const selectedItems = selectableItems.filter((i) => selectedIds.has(i.id));
   const getEq = (code: string) => equipment.find((e) => e.product_code === code);
+  // 価格改定の履歴 (作成日の月の価格で単位数を出す)。読めなければ マスタ価格で出し、理由を表示する
+  const [priceHistory, setPriceHistory] = useState<EquipmentPriceHistory[]>([]);
+  const [priceHistoryError, setPriceHistoryError] = useState<string | null>(null);
+  const itemCodesKey = [...new Set(clientItems.map((i) => i.product_code))].sort().join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const codes = itemCodesKey ? itemCodesKey.split(",") : [];
+    getPriceHistory(tenantId, codes)
+      .then((h) => { if (!cancelled) { setPriceHistory(h); setPriceHistoryError(null); } })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+        console.error("価格改定の履歴の読込失敗:", msg);
+        if (!cancelled) setPriceHistoryError(msg);
+      });
+    return () => { cancelled = true; };
+  }, [tenantId, itemCodesKey]);
+  const priceMonth = (creationDate || todayStr).slice(0, 7);
+  const priceOf = (code: string): number | null =>
+    getPriceForMonth(priceHistory, code, priceMonth) ?? getEq(code)?.rental_price ?? null;
   const selectedCategories = [...new Set(
     selectedItems.map((i) => getEq(i.product_code)?.category).filter(Boolean) as string[]
   )];
@@ -690,6 +714,9 @@ export default function CarePlanModal({
                   <label className="text-xs text-gray-500 block mb-1">作成日</label>
                   <input type="date" value={creationDate} onChange={(e) => setCreationDate(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-emerald-400" />
+                  {priceHistoryError && (
+                    <p className="mt-1 text-[11px] text-amber-700">価格改定の履歴を読めませんでした ({priceHistoryError}) — 単位数は用具マスタの現在価格で出しています</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">相談日</label>
@@ -732,6 +759,7 @@ export default function CarePlanModal({
             <CarePlanPages
               selectedItems={selectedItems}
               getEq={getEq}
+              priceOf={priceOf}
               client={client}
               companyInfo={companyInfo}
               creationDate={creationDate}
