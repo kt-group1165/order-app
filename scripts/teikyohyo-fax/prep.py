@@ -35,20 +35,31 @@ def rot(g, deg):
     return cv2.rotate(g, {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}[deg])
 
 
-def cmd_pages(pdf, outdir):
+def cmd_pages(inputs, outdir):
+    """inputs = PDF / 写真のリスト。順にページ番号を振る (提供票の写真 → 別表の写真 のように並べて渡す)"""
     os.makedirs(outdir, exist_ok=True)
-    # スマホの写真 (JPEG / PNG) も 1 ページとして扱う (撮ったまま: 向き・台形のゆがみは直さない → 2 段目の Claude に任せる)
+    pages = []
+    n = 0
+    for pdf in inputs:
+        n = _pages_of(pdf, outdir, pages, n)
+    with open(os.path.join(outdir, "pages.json"), "w", encoding="utf-8") as f:
+        json.dump({"pdf": " + ".join(inputs), "inputs": inputs, "pages": pages}, f, ensure_ascii=False, indent=1)
+    print(json.dumps({"pages": len(pages)}))
+
+
+def _pages_of(pdf, outdir, pages, n):
+    # スマホの写真 (JPEG / PNG) も 1 ページとして扱う (撮ったまま: 台形のゆがみは直さない → 2 段目の Claude に任せる)
     if os.path.splitext(pdf)[1].lower() in (".jpg", ".jpeg", ".png", ".heic", ".webp"):
         d = [None]
         photo = True
     else:
         d = fitz.open(pdf)
         photo = False
-    pages = []
     for i, p in enumerate(d):
-        n = i + 1
+        n += 1
         if photo:
-            g = to_cv(Image.open(pdf))
+            from PIL import ImageOps
+            g = to_cv(ImageOps.exif_transpose(Image.open(pdf)))  # スマホの向き情報 (EXIF) を反映
             imgs = None
         else:
             imgs = p.get_images()
@@ -72,10 +83,8 @@ def cmd_pages(pdf, outdir):
             bp = os.path.join(outdir, f"band{n:02d}_{deg}.png")
             cv2.imwrite(bp, band)
             bands[str(deg)] = bp
-        pages.append({"page": n, "raw": path, "w": int(g.shape[1]), "h": int(g.shape[0]), "ink": round(ink_ratio(g), 4), "bands": bands, "photo": photo})
-    with open(os.path.join(outdir, "pages.json"), "w", encoding="utf-8") as f:
-        json.dump({"pdf": pdf, "pages": pages}, f, ensure_ascii=False, indent=1)
-    print(json.dumps({"pages": len(pages)}))
+        pages.append({"page": n, "raw": path, "w": int(g.shape[1]), "h": int(g.shape[0]), "ink": round(ink_ratio(g), 4), "bands": bands, "photo": photo, "source": os.path.basename(pdf)})
+    return n
 
 
 def deskew(g):
@@ -224,7 +233,8 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(1)
     if a[0] == "pages":
-        cmd_pages(a[1], a[2])
+        # prep.py pages <PDF か 写真> <outdir> [<追加の PDF / 写真> …]
+        cmd_pages([a[1]] + a[3:], a[2])
     elif a[0] == "cells":
         cmd_cells(a[1], int(a[2]), int(a[3]))
     elif a[0] == "digits":

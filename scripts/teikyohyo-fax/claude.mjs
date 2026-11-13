@@ -134,12 +134,26 @@ function mergeKohiRows(rows) {
   return out;
 }
 
+/**
+ * 介護保険の保険者番号の検証数字 (先頭 5 桁 → 6 桁目)。modulus10・重み 2,1,2,1,2
+ * kaigo-app/src/lib/insurer-number.ts の insurerCheckDigit と同じ式 (order-app の script から TS を読めないので写し。式を変えるときは両方)
+ */
+function insurerCheckDigit(five) {
+  const w = [2, 1, 2, 1, 2];
+  let sum = 0;
+  for (let i = 0; i < 5; i++) { let v = Number(five[i]) * w[i]; if (v > 9) v = Math.floor(v / 10) + (v % 10); sum += v; }
+  const r = 10 - (sum % 10);
+  return r === 10 ? 0 : r;
+}
+
 /** 読み直しが要るか (Sonnet に回す理由)。空配列なら OK */
 function problems(kind, d) {
   const p = [];
   if (kind === "teikyo") {
     if (!d.insured_no || !/^[0-9H●]{10}$/.test(d.insured_no.normalize("NFKC"))) p.push(`被保険者番号 ${d.insured_no}`);
     if (!d.insurer_no || !/^[0-9●]{6}$/.test(d.insurer_no.normalize("NFKC"))) p.push(`保険者番号 ${d.insurer_no}`);
+    // 保険者番号の検証数字 (modulus10)。写真で 122069 を 123069 と読んだ例 (2026-11-13 石● 玲●)
+    else if (/^\d{6}$/.test(d.insurer_no) && insurerCheckDigit(d.insurer_no.slice(0, 5)) !== Number(d.insurer_no[5])) p.push(`保険者番号 ${d.insurer_no} (検証数字が合わない)`);
     if (!d.name) p.push("氏名なし");
     if (!d.kyotaku_name) p.push("居宅名なし");
     // 生年月日の妥当性: 提供月の時点で 40〜110 歳 (福祉用具の利用者。元号の取り違え 昭和↔平成 を弾く。p1 相田で実例)
@@ -179,7 +193,8 @@ async function main() {
     if (sent >= MAX) { rec.note = "--max で送らなかった"; out.push(rec); continue; }
     sent++;
     // 1 段目で種類が決まらなかったページ (スマホの写真など) は、補正前の画像を送り、まず種類を Claude に聞く
-    const img = py(kind === "unknown" ? "exportraw" : "export", resolve(OUT), String(p.page), String(LONG));
+    // 写真は台形のゆがみを直していないので 補正前の画像をそのまま送る (Claude が読む)
+    const img = py(kind === "unknown" || p.photo ? "exportraw" : "export", resolve(OUT), String(p.page), String(LONG));
     if (kind === "unknown") {
       const res = await client.messages.create({
         model: MODELS[0], max_tokens: 2000,
@@ -227,6 +242,8 @@ async function main() {
     }
     if (d) {
       rec.fax_seq = d.fax_seq ?? null;
+      // 氏名の頭にフリガナが付いてきたら外す (写真で「イ●イレ●コ 石● 玲●」と返した例)
+      if (kind === "teikyo" && d.name && d.kana && d.name.startsWith(d.kana) && d.name.length > d.kana.length) d.name = d.name.slice(d.kana.length).trim();
       if (kind === "beppyo") {
         for (const r of d.rows ?? []) if (r.units === 0) r.units = null; // 空欄を 0 と読んだもの (いわい型の別表)
         d.rows = mergeKohiRows(d.rows ?? []);

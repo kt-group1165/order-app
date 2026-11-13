@@ -32,7 +32,9 @@ import { createWorker, createScheduler, PSM } from "tesseract.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const opt = (n) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null; };
-const PDF = opt("--pdf");
+// --pdf は複数可 (提供票の写真と別表の写真を 1 回で: --pdf 提供票.jpg --pdf 別表.jpg)。並べた順にページ番号を振る
+const PDFS = argv.flatMap((a, i) => (a === "--pdf" && argv[i + 1] ? [argv[i + 1]] : []));
+const PDF = PDFS[0] ?? null;
 if (!PDF) { console.error("usage: node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf> [--out <dir>] [--pages 1-10]"); process.exit(1); }
 const OUT = resolve(opt("--out") ?? join(tmpdir(), "teikyohyo-fax", basename(PDF).replace(/\.pdf$/i, "")));
 const TESSDATA = resolve(opt("--tessdata") ?? join(tmpdir(), "teikyohyo-fax-tessdata"));
@@ -246,7 +248,7 @@ async function main() {
     if (proto && existsSync(proto) && !existsSync(join(TESSDATA, `${l}.traineddata`))) copyFileSync(proto, join(TESSDATA, `${l}.traineddata`));
   }
   const t0 = Date.now();
-  py("pages", resolve(PDF), OUT);
+  py("pages", resolve(PDF), OUT, ...PDFS.slice(1).map((p) => resolve(p)));
   const PJ = JSON.parse(readFileSync(join(OUT, "pages.json"), "utf8"));
   JP = await makeSched("jpn", { tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
   JPLINE = await makeSched("jpn", { tessedit_pageseg_mode: PSM.SINGLE_LINE });
@@ -255,7 +257,7 @@ async function main() {
   const results = [];
   for (const pg of PJ.pages) {
     if (PAGES && !PAGES.has(pg.page)) continue;
-    const res = { page: pg.page, ink: pg.ink };
+    const res = { page: pg.page, ink: pg.ink, photo: !!pg.photo, source: pg.source ?? null };
     if (pg.ink < CONST.BLANK_INK) { res.type = "白紙"; results.push(res); console.log(`p${pg.page}: 白紙`); continue; }
     const tries = await Promise.all(Object.entries(pg.bands).map(async ([deg, p]) => ({ deg: Number(deg), ...(await ocrJp(p)), })));
     for (const t of tries) Object.assign(t, scoreTitle(t.text));
