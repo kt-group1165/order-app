@@ -401,6 +401,18 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         () => supabase.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
         (from, to) => supabase.from(table).select(select).eq("tenant_id", tenantId).order("id").range(from, to),
       );
+    // ★ 2026-11-13: per_office の事業所を開いているときは 認定を office_id = 自事業所 の行だけ読む
+    //   (下の rowsForOffice の per_office 分岐で残る行と同じ。ケアサポ 22,543 → 約 5,800 行)。
+    //   shared・事業所未選択は従来どおり全件 (rowsForOffice が per_office の事業所の行を外す)。
+    //   per_office の判定 (offices 1 行) を先に聞いてから読むので 二重読みにならない
+    const insP = loadPerOfficeOfficeIds().then((ids) => {
+      const ownOffice = isPerOffice(currentOfficeId, ids) ? currentOfficeId : null;
+      if (!ownOffice) return fetchAllPaged<BillingCertRow>("client_insurance_records", BILLING_CERT_SELECT);
+      return selectAllPagedParallel<BillingCertRow>(
+        () => supabase.from("client_insurance_records").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("office_id", ownOffice),
+        (from, to) => supabase.from("client_insurance_records").select(BILLING_CERT_SELECT).eq("tenant_id", tenantId).eq("office_id", ownOffice).order("id").range(from, to),
+      );
+    });
     // 価格改定の履歴は テナント全件 (約 700 行) を最初から同時に読み、order_items が揃ってから品目で絞る
     //   (2026-11-13 高速化: 旧 = order_items を待ってから 150 品目ずつ 6 回直列。結果は getPriceHistory(tenantId, codes) と同じ
     //    = 同じ品目・valid_from 昇順 (同日は id))。失敗しても画面の読込は止めない (従来どおり warn だけ)
@@ -415,8 +427,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       getAllOrders(tenantId, currentOfficeId),
       getTenantById(tenantId),
       getOffices(tenantId),
-      // 認定は請求で使う列だけ (lib/insurance/billing-cert-cols.ts。旧 select("*") 約 36MB)
-      fetchAllPaged<BillingCertRow>("client_insurance_records", BILLING_CERT_SELECT),
+      // 認定は請求で使う列だけ (lib/insurance/billing-cert-cols.ts。旧 select("*") 約 36MB)・per_office なら自事業所の行だけ
+      insP,
       fetchAllPaged<ClientHospitalization>("client_hospitalizations"),
       getCareOffices(tenantId),
     ]).then(([c, eq, items, ords, tenant, offs, insRaw, hospRaw, coffs]) => {
