@@ -111,6 +111,12 @@ const AS_OF = opt("--as-of") ?? null;
 //   「最後の月の月末まで続く台だけ継続」の判定で 10 月末まで借りている台が軒並み 10/31 終了になる (誉田で 現利用者 1,121 名中 貸与中 71 名)。
 //   読まなかった月に始まった台は入らない (揃った提供票で回し直すと入る)。
 const UNTIL = opt("--until") ?? null;
+// ★ 2026-11-14: --partial-last — 最新月の提供票が「一部の利用者だけ」出ているとき (★ 暫定。揃った提供票が来たら外して回し直す)。
+//   最新月に実績行がある利用者 → 最新月まで使う (その人の最新月は信用する)。
+//   最新月に実績行が 1 行も無い利用者 → 前の月の月末まで続く台を 継続扱いにし notes に PARTIAL_LAST_MARK。
+//   ⚠ 本当に前の月末で終わった台も 継続になる (過大請求の向き)。--until より狭いが 誤りの向きは同じ。基準値に焼かないこと。
+const PARTIAL_LAST = argv.includes("--partial-last");
+if (PARTIAL_LAST && UNTIL) { console.error("--partial-last と --until は併用しない"); process.exit(1); }
 if (UNTIL && !/^\d{6}$/.test(UNTIL)) { console.error("--until は YYYYMM"); process.exit(1); }
 if (AS_OF && !/^\d{4}-\d{2}-\d{2}$/.test(AS_OF)) { console.error("--as-of は YYYY-MM-DD"); process.exit(1); }
 // ★ --as-of で飛ばした 開始予定の台に当たる DB の明細 (先に手で登録された未来開始の明細) を「DB だけ」として消してしまうので併用禁止
@@ -351,6 +357,8 @@ async function main() {
   BEFORE_APR = `[${Number(FIRST.slice(5, 7))}/1以前から]`;
   if (FIRST !== "2026-04") console.log(`★ 提供票の最初の月が ${FIRST} なので、${MIGRATION_START} より前から続く台は ${MIGRATION_START} を仮置きし notes に ${BEFORE_APR}`);
   const rows = all.filter((r) => r.pa === "実績" && !SKIP_USERS.has(r.userNo));
+  const lastMonthUsers = new Set(rows.filter((r) => r.ym === LAST).map((r) => r.userNo));
+  if (PARTIAL_LAST) console.log(`★ --partial-last (暫定): ${LAST} に実績がある利用者 ${lastMonthUsers.size} 名は ${LAST} まで / それ以外は 前月末まで続く台を継続扱い`);
   if (SKIP_USERS.size) console.log(`--skip-users: 提供票の利用者番号 ${[...SKIP_USERS].join(",")} は扱わない`);
   const R = { map: new Report(), users: new Report(), link: new Report(), plan: new Report(), db: new Report(), warn: new Report() };
 
@@ -668,7 +676,9 @@ async function main() {
     const rawEnd = `${r1.ym}-${pad(s1.b)}`;
     // as-of 当日以降の終了 (最新月の予定) は 確定していないので 継続扱い (提供票は予定の写しなので as-of 当日の終了も予定)
     const futureEnd = AS_OF != null && r1.ym === LAST && !(s1.b === r1.nd) && rawEnd >= AS_OF;
-    const open = (r1.ym === LAST && s1.b === r1.nd) || futureEnd;
+    // --partial-last: 最新月に実績が無い利用者の 前月末まで続く台は 継続扱い (暫定)
+    const partialOpen = PARTIAL_LAST && months.length >= 2 && r1.ym === months[months.length - 2] && s1.b === r1.nd && !lastMonthUsers.has(r1.userNo);
+    const open = (r1.ym === LAST && s1.b === r1.nd) || futureEnd || partialOpen;
     const start = beforeApr ? MIGRATION_START : `${s0.r.ym}-${pad(s0.a)}`;
     const end = open ? null : rawEnd;
     if (futureEnd) R.warn.add(`--as-of ${AS_OF} 当日以降の終了予定 → 継続扱い (確定版の提供票で回し直すと終了になる)`, { 氏名: r1.name, 用具: r1.item, 終了予定: rawEnd });
@@ -677,6 +687,7 @@ async function main() {
     const full = fullR?.full ?? r1.mrow?.units ?? null;
     const notes = [MARK];
     if (beforeApr) notes.push(BEFORE_APR);
+    if (partialOpen) notes.push(`[暫定: ${LAST} の提供票に実績なし・${r1.ym} 末で継続扱い]`);
     // ★ 2026-11-14: --disambiguate-by-billing で 品目を ほのぼのの請求の出力 (KDS0031) から決めた台には印を付ける。
     //   この台は KDS0031 との答え合わせで当然一致するので、一致率の分母から外せるようにする (循環の印)
     if (ch.segs.some((s) => String(s.r.how ?? "").includes("請求 (明細書明細付) の TAIS で特定"))) notes.push(BILLED_TAIS_MARK);
@@ -765,6 +776,7 @@ async function main() {
   const touchedClients = new Set([...plannedByClient.keys()]);
   // 提供票に 1 台も無いが DB に当期 (4/1 以降) の貸与がある利用者も対象 (DB だけ)
   for (const [cid, its] of itemsByClient) if (cid && its.some((it) => (ymdOK(it.rental_end_date) ?? "9999") >= MIGRATION_START)) touchedClients.add(cid);
+  const statusDir = new Map(); // 状態・終了日がどちら向きに動くか (2026-11-14。「更新 n 行」だけでは向きが分からない)
   for (const cid of touchedClients) {
     const ws = (want.filter((w) => w.cid === cid));
     const ds = [...(itemsByClient.get(cid) ?? [])];
@@ -794,6 +806,8 @@ async function main() {
         const label = kinds.some((k) => ["rental_start_date", "rental_end_date", "status"].includes(k)) ? "日付・状態を直す" : kinds.includes("quantity") ? "数量を直す" : "支払区分・単価を直す";
         R.db.add(`update: ${label}`, { 氏名: w.name, 用具: w.item, 前: { 開始: ymdOK(it.rental_start_date), 終了: ymdOK(it.rental_end_date), 状態: it.status, 数量: it.quantity }, 後: { 開始: w.start, 終了: w.end, 状態: status, 数量: w.qty, 支払: w.payType } });
         updItems.push(it.id);
+        if (patch.status) statusDir.set(`${it.status} → ${patch.status}`, (statusDir.get(`${it.status} → ${patch.status}`) ?? 0) + 1);
+        if ("rental_end_date" in patch) { const k = patch.rental_end_date == null ? "終了日を消す" : it.rental_end_date == null ? "終了日を新たに入れる" : "終了日を変える"; statusDir.set(k, (statusDir.get(k) ?? 0) + 1); }
         ops.push({ table: "order_items", action: "update", id: it.id, cid, why: label, patch, src: { key: `提供票|${w.name}|${w.code}`, ref: { 区間: w.segs.slice(0, 12) } } });
       } else {
         let oid = orderFor.get(cid);
@@ -826,6 +840,13 @@ async function main() {
       if (REMOVE_DB_ONLY) { delItems.push(it.id); ops.push({ table: "order_items", action: "delete", id: it.id, cid, why: "提供票に無い DB の明細", src: { key: `DB|${c?.name}|${it.product_code}` } }); }
       else keepItems.push(it.id);
     }
+  }
+  console.log(`
+状態・終了日の動く向き (既存の明細): ${statusDir.size ? [...statusDir].map(([k, v]) => `${k} ${v}`).join(" / ") : "なし"}`);
+  {
+    const before = new Set(rentalItems.filter((it) => it.status === "rental_started").map((it) => ordersById.get(it.order_id)?.client_id));
+    const after = new Set(want.filter((w) => w.open).map((w) => w.cid));
+    console.log(`  貸与中の利用者: ${before.size} → ${after.size} 名 (提供票から組んだ値。DB だけの明細は含まない)`);
   }
 
   // ── 報告 ─────────────────────────────────────────────────────────────
