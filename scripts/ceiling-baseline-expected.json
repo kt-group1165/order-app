@@ -21,23 +21,31 @@
     "■ 2026-11-14 の更新: ② 267 → 87",
     "  用具マスタを 品目 (親) + サイズ・型 (子) にまとめ (子 266 行)、子は上限と比べなくなった (子は請求に親の価格を使う)。",
     "  統合の前 (同じコード) で ② 131 → 統合の後 87。化けた TAIS のサイドレール 4 品目を直した後も 87 (TAIS の直しでは動かない)。",
-    "  ① は 0 のまま。貸与中の超過は ①② とも 0 品目。"
+    "  ① は 0 のまま。貸与中の超過は ①② とも 0 品目。",
+    "",
+    "■ 2026-11-14 の更新 (2 回目): ① 0 → 1 / ② 87 → 147",
+    "  増えた 61 件は 全部 誉田の価格取込 (batch bf1fcae2・migrations/import_office_prices_from_fygmst.mjs) で足した品目 (用具マスタに無かった TAIS 538 品目。",
+    "  rental_price = 誉田の ほのぼの用具マスタ FYGMST01 の今の価格)。誉田の貸与の取込 (batch 46b83e5b) で足した自費 39 品目は TAIS が無いので 0 件。前からの 87 件は変わらず。",
+    "  ① 1 件 = 01339-000007 楽起 縦型 20,000 (上限 2,330・8.6 倍)。TAIS か価格の取り違えの疑い → 誉田に確認 (docs/homda-office-prices-2026-11.md §6)。",
+    "  ② 60 件 = 誉田の FYGMST01 の価格が 今の上限を超えている (1.01〜1.72 倍)。上限の改定に ほのぼの側が追従していない疑い。誉田に確認する。",
+    "  貸与中 6 品目 13 口 (月 ¥2,600) は 前からの 87 件の品目を 誉田の貸与 (batch 46b83e5b) が使っているもの (EQ-000446・EQ-000158・EQ-000692・EQ-000558・EQ-000814・EQ-000933)。誉田の請求額は 誉田の価格の行があればそちら (この検査は見ていない)。",
+    "  ⚠ この検査は equipment_master.rental_price だけを見る。事業所の価格の行 (equipment_price_history.office_id) は見ていない (誉田の行 300)。"
   ],
   "fingerprint": {
-    "equipmentMaster": "5587d994ca8d66d6",
+    "equipmentMaster": "0e132b875471e4aa",
     "ceilings": "4a1087a0c886d9b1"
   },
   "asOf": "2026-11-14",
   "dataEntryErrors": {
-    "total": 0,
+    "total": 1,
     "rentedItems": 0,
     "rentedLines": 0,
     "monthlyExcessYen": 0
   },
   "ceilingDrift": {
-    "total": 87,
-    "rentedItems": 0,
-    "rentedLines": 0,
-    "monthlyExcessYen": 0
+    "total": 147,
+    "rentedItems": 6,
+    "rentedLines": 13,
+    "monthlyExcessYen": 2600
   }
 }
