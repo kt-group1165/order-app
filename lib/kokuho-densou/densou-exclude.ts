@@ -93,3 +93,16 @@ export function densouLoadBlockers(s: { priceHistory: PriceHistoryLoadState }): 
   if (s.priceHistory === "failed") return ["価格改定の履歴を読み込めませんでした — 画面を読み直してください (このまま出すと 事業所の価格ではなく 用具マスタの価格で請求します)"];
   return [];
 }
+
+/**
+ * 伝送から外した人の 1 行まとめ (人数・金額・理由ごとの人数)。外した人がいなければ null。
+ * 請求画面の確認 (月次・返戻) の先頭に出す。1 人ずつの理由は buildFukuyoguDensou の warnings に別に出る
+ */
+export function summarizeExcluded(excluded: { reason: string; totalCost: number }[]): string | null {
+  if (excluded.length === 0) return null;
+  const byReason = new Map<string, number>();
+  for (const e of excluded) byReason.set(e.reason, (byReason.get(e.reason) ?? 0) + 1);
+  const total = excluded.reduce((s, e) => s + e.totalCost, 0);
+  const parts = [...byReason].sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r} ${n} 名`);
+  return `★ 伝送から外した人 ${excluded.length} 名・費用 計 ${total.toLocaleString()} 円 (${parts.join(" / ")}) — この人たちは このファイルでは請求されません`;
+}

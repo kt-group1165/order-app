@@ -45,7 +45,7 @@ import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
 import { findRentalOverruns, indexCeilings, countUnjudgeable, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { planDensouOffice } from "@/lib/kokuho-densou/densou-office";
-import { densouLoadBlockers, type PriceHistoryLoadState } from "@/lib/kokuho-densou/densou-exclude";
+import { densouLoadBlockers, summarizeExcluded, type PriceHistoryLoadState } from "@/lib/kokuho-densou/densou-exclude";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
@@ -1312,7 +1312,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     { const s = benefitNoCertSummary(benefitNoCert); if (s) preWarnings.unshift(s); }
 
     const result = buildFukuyoguDensou(rows, { officeNumber, year: y, month: m });
-    const allWarnings = [...preWarnings, ...result.warnings];
+    // ★ 2026-11-14: 外した人 (人数・金額・理由の内訳) を確認の先頭に出す (静かに外すと請求漏れになる)
+    const excludedSummary = summarizeExcluded(result.excluded);
+    const allWarnings = [...(excludedSummary ? [excludedSummary] : []), ...preWarnings, ...result.warnings];
     if (allWarnings.length > 0) {
       const list = allWarnings.slice(0, 12).join("\n・");
       const ok = window.confirm(
@@ -1518,6 +1520,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const allWarnings: string[] = [...officePlan.warnings];
     let fileCount = 0;
     const built: ReturnType<typeof buildFukuyoguDensou>[] = []; // 月別のファイル (確認してから まとめて出力)
+    const excludedSummaries: string[] = []; // 月ごとの「外した人」のまとめ (確認の先頭に出す)
     // 軽度者 原則対象外品目 × 例外給付記録なし の警告 (B-6d)。generateTransferData と同じロジック。
     let exceptionGrants: Awaited<ReturnType<typeof getExceptionGrants>> = [];
     let exceptionCheckAvailable = true;
@@ -1664,6 +1667,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (rows.length === 0) continue;
       { const s = benefitNoCertSummary(benefitNoCert); if (s) allWarnings.push(`[${ym}] ${s}`); }
       const result = buildFukuyoguDensou(rows, { officeNumber, year: yy, month: mm });
+      { const s = summarizeExcluded(result.excluded); if (s) excludedSummaries.push(`[${ym}] ${s}`); }
       allWarnings.push(...result.warnings.map((w) => `[${ym}] ${w}`));
       built.push(result);
     }
@@ -1673,6 +1677,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     }
     // ★ 2026-11-14: 月次の伝送 (generateTransferData) と同じく「出力の前」に確認する。
     //   以前は出力してから alert で警告を見せていた (月次は確認するのに 再出力だけ確認なし = 向きが逆。過誤申立が二重になりうる)
+    allWarnings.unshift(...excludedSummaries);
     if (allWarnings.length > 0) {
       const ok = window.confirm(
         `以下の項目を確認してください (伝送ソフトの取込チェックでエラーになる可能性があります):\n\n・${allWarnings.slice(0, 12).join("\n・")}${allWarnings.length > 12 ? `\n…他 ${allWarnings.length - 12} 件` : ""}\n\nこのまま返戻・過誤の伝送ファイル ${built.length} 件 (月別) を出力しますか？`,

@@ -12,7 +12,7 @@
  * ・buildFukuyoguDensou に組み込んだ結果: 外した人は 01/02/10 にも 7111 の件数・単位・金額にも入らず excluded に理由つきで出る /
  *   正常な人は 1 人も外れず 7111 に全員入る (逆向きの対照)
  */
-import { densouExcludeReasons, densouLoadBlockers, type DensouExcludeInput } from "../lib/kokuho-densou/densou-exclude";
+import { densouExcludeReasons, densouLoadBlockers, summarizeExcluded, type DensouExcludeInput } from "../lib/kokuho-densou/densou-exclude";
 import { computeFukuyoguAmounts, type KohiPiece } from "../lib/kokuho-densou/fukuyogu-amounts";
 import { buildFukuyoguDensou, type FukuyoguDetailLine, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 
@@ -133,6 +133,13 @@ console.log("══ buildFukuyoguDensou — 外した人は 7111 からも抜け
   }
   const oldExcl = buildFukuyoguDensou([...goodRows, row("番号 無し", "")], { officeNumber: "1272400050", year: 2026, month: 9 });
   eq("既存の除外 (被保険者番号が空) も excluded に載る", oldExcl.excluded.map((e) => [e.userName, e.reason]), [["番号 無し", "被保険者番号が未登録"]]);
+
+  // 請求画面の確認の先頭に出す 1 行 (summarizeExcluded)
+  eq("まとめ: 外した人がいなければ null (確認に余計な行を出さない)", summarizeExcluded(good.excluded), null);
+  const two = buildFukuyoguDensou([...goodRows, row("壊れ 甲", "1000000098", { birthDate: null }), row("番号 無し", "")], { officeNumber: "1272400050", year: 2026, month: 9 });
+  const sm = summarizeExcluded(two.excluded) ?? "";
+  eq("★ まとめ: 2 名・費用 計 20,000 円・理由ごとの人数 (生年月日 1 / 被保険者番号 1)",
+    [sm.includes("外した人 2 名"), sm.includes("計 20,000 円"), sm.includes("生年月日が未登録 1 名"), sm.includes("被保険者番号が未登録 1 名")], [true, true, true, true]);
 }
 
 console.log("══ densouLoadBlockers (価格改定の履歴) ══");
