@@ -14,6 +14,7 @@
  *   P1 用具マスタに無い TAIS → equipment_master に品目を足す (product_code = TAIS・rental_price = 今の価格)。事業所の行は作らない (共通 = その価格)
  *   P2 用具マスタにあり、共通の価格 (--valid-from の月初・今月 の両方) が今の価格と同じ → 何もしない
  *   P3 用具マスタにあり、共通の価格と違う → equipment_price_history に office_id = その事業所・valid_from = --valid-from の行 (その TAIS の品目コードごと)
+ *      ★ ケアサポは作らない (2026-11-13 決定。共通の価格 = ケアサポの請求価格なので二重に持たせない) → J に出すだけ
  *   J  判断が要る (書かない): 用具マスタの同じ TAIS に価格の違う品目が複数 (世代が分かれている) / 共通の価格が無い
  *   G  使用中の価格が 2 通り以上ある TAIS は、今の価格のほかの価格を「古い世代の品目が要る候補」として出す
  *      (① の方針: 古い世代は別の product_code の品目にして、その価格で借りている明細をそちらに付ける。品目の作成・付け替えは別の手順)
@@ -97,6 +98,8 @@ for (const [tais, rows] of byTais) {
   const [p0, p1] = cps[0].split("|").map((x) => (x === "null" ? null : Number(x)));
   if (p0 == null && p1 == null) { R.J.push({ TAIS: tais, 名前: cur.abbr || cur.name, 理由: "共通の価格が無い", 品目: eqs.map((e) => e.product_code).join(" / "), 今の価格: price }); continue; }
   if (p0 === price && p1 === price) { R.P2.push({ TAIS: tais }); continue; }
+  // ★ ケアサポは 事業所の行を作らない (2026-11-13 決定: 共通の価格 = ケアサポで実際に請求してきた価格。二重に持たせない)
+  if (IS_CARESAPO) { R.J.push({ TAIS: tais, 名前: cur.abbr || cur.name, 理由: "ケアサポは 事業所の行を作らない (共通の価格がケアサポの請求価格)。FYGMST01 の今の価格と共通の価格が違う", 品目: eqs.map((e) => e.product_code).join(" / "), 今の価格: price }); continue; }
   R.P3.push({ TAIS: tais, 名前: cur.abbr || cur.name, 品目コード: eqs.map((e) => e.product_code), 共通の価格: `${p0}→${p1}`, 事業所の価格: price, 差: price - (p1 ?? p0) });
 }
 
