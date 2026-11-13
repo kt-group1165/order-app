@@ -2367,7 +2367,7 @@ export default function ClientsTab({ mode = "manage", tenantId, currentOfficeId,
                         <span className="truncate min-w-0">{client.name}</span>
                         {client.is_provisional && <span className="shrink-0 text-[9px] font-semibold bg-amber-100 text-amber-700 px-1 py-0.5 rounded">仮</span>}
                       </div>
-                      <span className="w-28 shrink-0 text-xs text-gray-400 truncate" title={client.furigana ?? ""}>{client.furigana ?? ""}</span>
+                      <span className="w-28 shrink-0 text-xs text-gray-400 truncate" title={client.furigana ?? ""}>{(client.furigana ?? "").normalize("NFKC") /* 半角カナ (ｱｲｶﾜ) を全角にそろえて表示。データは変えない */}</span>
                       <div className="w-8 shrink-0 flex items-center">
                         {hasKaigo && (
                           <span className="text-xs px-1 py-0.5 bg-emerald-100 text-emerald-700 rounded font-medium">介護</span>
@@ -3689,7 +3689,7 @@ function ClientDetail({
               : <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">在籍中</span>
             }
           </div>
-          {client.furigana && <p className="text-xs text-gray-400">{client.furigana}</p>}
+          {client.furigana && <p className="text-xs text-gray-400">{client.furigana.normalize("NFKC")}</p>}
         </div>
         {/* 利用者の基本の情報 (見ながら確認できるように)。狭い画面では隠す */}
         <dl className="hidden lg:grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-0.5 text-xs mr-auto">

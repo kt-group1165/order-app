@@ -501,7 +501,7 @@ export default function EquipmentTab({ tenantId }: { tenantId: string }) {
                     </td>
                     {/* 用具名 */}
                     <td className="py-2.5 text-sm font-medium text-gray-800 max-w-0">
-                      <span className="block truncate">{item.name}</span>
+                      <span className="block truncate" title={item.name}>{item.name.normalize("NFKC") /* 半角カナ (ﾓｰﾀｰ) を全角にそろえて表示。データ・検索は変えない */}</span>
                     </td>
                     {/* コード */}
                     <td className="py-2.5 px-3 text-xs text-gray-400 whitespace-nowrap w-[6.5rem]">
