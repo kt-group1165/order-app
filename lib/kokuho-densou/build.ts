@@ -44,6 +44,7 @@
  * Shift_JIS への変換は呼出側 (UI) で行う。
  */
 import { fukuyoguLinePieces, type KohiPiece } from "./fukuyogu-amounts";
+import { densouExcludeReasons, DENSOU_EXCLUDE_LABEL } from "./densou-exclude";
 import { rentalDayMask, type DateRange } from "../half-month-units";
 
 // ─── コード値 ────────────────────────────────────────────────────────────────
@@ -253,6 +254,11 @@ export interface FukuyoguSeikyuRow {
   serviceStartDate?: string | null;
   /** 基本 項22 中止年月日。月内にサービスをやめた人だけ (同上の理由で 今は渡していない) */
   serviceStopDate?: string | null;
+  /**
+   * 給付率が未設定・読めず 既定の 90 (1 割) で計算した (computeFukuyoguAmounts の benefitRateDefaulted をそのまま渡す)。
+   * ★ 必須 (2026-11-14 群1): 任意にすると呼出側が渡し忘れて 静かに除外が効かなくなる。true なら伝送から外す (lib/kokuho-densou/densou-exclude.ts)
+   */
+  benefitRateDefaulted: boolean;
   /** 基本 項23 中止理由コード (1 非該当 / 3 医療機関入院 / 4 死亡 / 5 その他 …)。DB に持っていないので通常 null */
   stopReason?: string | null;
 }
@@ -293,6 +299,11 @@ export interface DensouBuildResult {
   fileName: string;
   dataRecordCount: number;
   warnings: string[];
+  /**
+   * 伝送から外した人 (理由ごと)。★ 2026-11-14: 画面と出力に「外した人数と理由の内訳」を出すため (静かに外すと請求漏れになる)。
+   * 既存の除外 (保険者・被保険者番号 / 要介護度 / CM 指示 0 / CM 指示 未入力) と densouExcludeReasons の理由を全部載せる。1 人に理由が複数なら 1 人 1 行で理由を「・」でつなぐ
+   */
+  excluded: { userName: string; reason: string; totalCost: number }[];
 }
 
 // ★ 2026-11-09: clients.certification_start/end_date に "2026/2/19" 形式 (ほのぼの由来) が混ざっていた
@@ -312,6 +323,12 @@ export function buildFukuyoguDensou(
   opts: FukuyoguDensouOptions,
 ): DensouBuildResult {
   const warnings: string[] = [];
+  const excluded: DensouBuildResult["excluded"] = [];
+  const exclude = (r: FukuyoguSeikyuRow, reason: string, message: string) => {
+    warnings.push(message);
+    excluded.push({ userName: r.userName, reason, totalCost: r.totalCost });
+    return false;
+  };
   // ★ 2026-10-15 (B-2t②): 保険者番号・被保険者番号のどちらかが空の行は **伝送に載せない**。
   //   国保連で確実に返戻になるうえ、請求書 (7111) の件数・金額まで水増しされるため。
   //   kaigo-app build.ts:105-127 と同じ扱い (以前は warning だけで 7111 に含めていた)。
@@ -320,37 +337,40 @@ export function buildFukuyoguDensou(
     const hasInsured = !!(r.insuredNumber ?? "").trim();
     if (hasInsurer && hasInsured) return true;
     const miss = [!hasInsurer && "保険者番号", !hasInsured && "被保険者番号"].filter(Boolean).join("・");
-    warnings.push(
+    return exclude(r, `${miss}が未登録`,
       `${r.userName}: ${miss}が未登録のため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 被保険者証を確認して登録してください`,
     );
-    return false;
   }).filter((r) => {
     // ★ 2026-11-09 (FY-C2): 要介護度をコードにできない行も伝送に載せない。項15 が 0 (空欄の 0 埋め) の
     //   7131 になり確実に返戻するうえ、7131/7132 の振り分けもできない
     //   (実例: 西野 規子(介) 1000062551 — 当月に有効な認定が無く、ほのぼのは要支援2 の 7132 で出していた)。
     if (careLevelCodeForDensou(r.careLevel)) return true;
-    warnings.push(
+    return exclude(r, "要介護度をコードにできない",
       `${r.userName}: 要介護度 ("${r.careLevel ?? "未設定"}") をコードにできないため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 当月に有効な認定を登録してください (月遅れ扱い)`,
     );
-    return false;
   }).filter((r) => {
     // ★ 2026-11-10 (user 承認): CM 指示単位数が 0 (給付管理で 0 単位) の人はレセプトを出さない。
     //   ほのぼのも月次情報の区分支給限度基準内単位数 0 の人 (廣瀬・秦・横瀬 2026-09) は伝送に載せていない。
     //   保険請求 0 のレセプトは国保連で返戻になる。実績分は全額利用者負担 (保険外)。
     if (r.kohiTandoku || r.planUnits !== 0) return true;
-    warnings.push(
+    return exclude(r, "CM 指示単位数が 0",
       `${r.userName}: CM 指示単位数が 0 のため伝送から除外しました (実績 ${r.limitTargetUnits ?? r.totalUnits} 単位は保険外・全額利用者負担)`,
     );
-    return false;
   }).filter((r) => {
     // ★ 2026-11-11 (user 承認): CM 指示単位数 (月次情報 = 給付管理) が その月に無い人は出さない (月遅れ扱い)。
     //   ほのぼのは月次情報に行がある人だけ請求している (2026-09: 請求 1,138 名中 1,136 名が該当・例外は被保番変更の 2 名 /
     //   2026-08: 1,131 名中 1,130 名)。給付管理票が届く前に出すと国保連で突合できず返戻になる。
     if (r.kohiTandoku || !r.cmMissing) return true;
-    warnings.push(
+    return exclude(r, "CM 指示単位数 (月次情報) が未入力",
       `${r.userName}: CM 指示単位数 (月次情報) が未入力のため伝送から除外しました (${r.totalCost.toLocaleString()}円・月遅れ扱い) — 給付管理の単位数が届いたら入力して翌月以降に請求`,
     );
-    return false;
+  }).filter((r) => {
+    // ★ 2026-11-14 (群1+群2): 続行すると 金額が静かにずれる / 返戻になる人を外す (lib/kokuho-densou/densou-exclude.ts)。
+    //   以前はループの中で warning を積むだけで そのまま 01/02/10 と 7111 に入れていた
+    const reasons = densouExcludeReasons(r);
+    if (reasons.length === 0) return true;
+    const label = reasons.map((x) => DENSOU_EXCLUDE_LABEL[x]).join("・");
+    return exclude(r, label, `${r.userName}: ${label} のため伝送から除外しました (${r.totalCost.toLocaleString()}円) — 直してから請求してください`);
   });
   const ym = `${opts.year}${String(opts.month).padStart(2, "0")}`;
   const office = (opts.officeNumber ?? "").trim();
@@ -450,7 +470,6 @@ export function buildFukuyoguDensou(
     const insured = (r.insuredNumber ?? "").trim();
     // 保険者・被保険者番号が空の行 / 要介護度をコードにできない行は冒頭で除外済み (ここには来ない)
     const careLevelCode = careLevelCodeForDensou(r.careLevel);
-    if (!r.birthDate) warnings.push(`${r.userName}: 生年月日が未登録です`);
     if (!r.careOfficeNumber) warnings.push(`${r.userName}: 担当居宅介護支援事業所 (事業所番号) が未登録です`);
 
     // 公費単独 (H 番号 10割公費): 保険給付率は空欄、公費1給付率 100 (kaigo-app build.ts:292 と同じ)
@@ -458,20 +477,11 @@ export function buildFukuyoguDensou(
     // ★ 2026-10-15 (B-2t①): 公費欄は「対象月に有効な公費があるか」で出す。**公費請求額 0 でも出す**
     //   (請求書 7111 の公費請求分と同じ条件。kaigo-app build.ts:300 と同じ)
     const hasKohi = !!r.kohiTandoku || !!r.kohiHobetsu;
-    if (r.kohiTandoku && !r.kohiFutansha) {
-      warnings.push(
-        `${r.userName}: 公費単独 (被保険者番号 H) なのに公費情報 (負担者番号) が未登録です — 生活保護 (法別12) を登録してください`,
-      );
-    } else if (hasKohi && !r.kohiFutansha) {
-      warnings.push(`${r.userName}: 公費 (法別${r.kohiHobetsu}) の負担者番号が未登録です`);
-    }
+    // 生年月日・公費の負担者番号が空 / 公費対象 > 保険 / 請求 > 実績 / 明細の合計違い / 桁あふれ / コード違い は 冒頭で除外済み (densouExcludeReasons)
     // 公費対象単位数 / 公費分本人負担 (生保の本人支払額)。保険分の利用者負担 (01 項35 / 10 項17) から本人支払額を除く
     const kohiUnits = r.kohiUnits ?? r.totalUnits;
     const kohiHonnin = hasKohi ? Math.max(0, r.kohiHonninFutan ?? 0) : 0;
     const hokenUserAmount = Math.max(0, r.userAmount - kohiHonnin);
-    if (hasKohi && kohiUnits > r.totalUnits) {
-      warnings.push(`${r.userName}: 公費対象単位数 (${kohiUnits}) が保険の単位数 (${r.totalUnits}) を超えています — 呼出側の計算を確認してください`);
-    }
 
     // 基本情報レコード (01) — 福祉用具。施設系項目は空欄、公費は生保等のとき充填
     dataParts.push([
@@ -538,24 +548,14 @@ export function buildFukuyoguDensou(
       warnings.push(
         `${r.userName}: CM 指示単位数で頭打ち — 実績 ${limitTargetUnits} 単位のうち ${r.totalUnits} 単位を保険請求 (超過 ${limitTargetUnits - r.totalUnits} 単位は保険外)`,
       );
-    } else if (limitTargetUnits < r.totalUnits) {
-      warnings.push(`${r.userName}: 保険請求の単位数 (${r.totalUnits}) が実績 (${limitTargetUnits}) より多くなっています — 呼出側の計算を確認してください`);
-    }
-    const detailSum = r.details.reduce((s, d) => s + d.units, 0);
-    if (detailSum !== limitTargetUnits) {
-      warnings.push(`${r.userName}: 明細のサービス単位数の合計 (${detailSum}) と 限度額管理対象単位数 (${limitTargetUnits}) が違います`);
     }
     if (planUnits < r.totalUnits) {
       warnings.push(`${r.userName}: 保険請求の単位数 (${r.totalUnits}) が計画単位数 (${planUnits}) を超えています — 国保連で査定されます`);
     }
     let serviceDays = 0;
-    let kohiDetailSum = 0;
     for (const d of r.details) {
       // 桁あふれは返戻になる (_if_form2.txt: 10 日数・回数=数字2 / 14 サービス単位数=数字6)。
       // 福祉用具は月額 ÷10 が単位数 (2026-10-19 時点の最大は 58,000 円 = 5,800 単位)。
-      if (d.unitPer > 9999) warnings.push(`${r.userName}: ${d.serviceCode} の単位数 ${d.unitPer} が 4 桁を超えています (月額 ${d.unitPer * 10} 円?)。伝送できません`);
-      if (d.units > 999999) warnings.push(`${r.userName}: ${d.serviceCode} のサービス単位数 ${d.units} が 6 桁を超えています`);
-      if (!/^(17|67)\d{4}$/.test(d.serviceCode)) warnings.push(`${r.userName}: サービスコード ${d.serviceCode} が福祉用具貸与 (17xxxx / 67xxxx) ではありません`);
       const days = d.days ?? daysInMonth;
       if (days > serviceDays) serviceDays = days;
       // 個数 n は n 行に分ける。unitPer × count と units が合わない (手入力の上書き等) ときは 1 行にまとめる
@@ -568,7 +568,6 @@ export function buildFukuyoguDensou(
       for (const [pi, u] of lineUnits.entries()) {
         // 月途中の公費 (日割り/半月) は その行の公費対象日数・単位。それ以外は貸与日数・その行の単位 (従来どおり)
         const kp = pieces ? pieces[pi] : { days, units: u };
-        if (hasKohi) kohiDetailSum += kp.units;
         dataParts.push([
           formId, // 1
           "02", // 2 レコード種別コード
@@ -593,9 +592,6 @@ export function buildFukuyoguDensou(
       if (!(d.taisCode ?? "").trim()) warnings.push(`${r.userName}: ${d.serviceCode} の TAIS コード (摘要) が未登録です`);
     }
     // 国保連の突合: 明細 02 項15 の合計 = 01 項39 / 10 項18 (CM 指示単位数で頭打ちしたときは明細が実績のままなので差が出うる)
-    if (hasKohi && kohiDetailSum !== kohiUnits && limitTargetUnits === r.totalUnits) {
-      warnings.push(`${r.userName}: 明細の公費対象単位数の合計 (${kohiDetailSum}) と 公費対象単位数 (${kohiUnits}) が違います — 伝送前にレセプトを確認してください`);
-    }
 
     // 集計情報レコード (10) — サービス種類 (17 / 67) 単位
     dataParts.push([
@@ -662,6 +658,7 @@ export function buildFukuyoguDensou(
     content: lines.join("\r\n") + "\r\n",
     fileName: `F${ym}.CSV`, // 英字始まり 8 桁以内 + .CSV (F = 福祉用具)
     dataRecordCount: dataParts.length,
+    excluded,
     warnings,
   };
 }

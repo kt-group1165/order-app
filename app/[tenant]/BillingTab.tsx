@@ -1267,6 +1267,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         kohiUnits: amt.kohiUnits,
         kohiTargetCost: amt.kohiTargetCost,
         kohiHonninFutan: amt.kohiHonninFutan,
+        benefitRateDefaulted: amt.benefitRateDefaulted,
         // 開始年月日 (7131/7132-01 項21): その利用者の介護保険の貸与の最初の開始日が当月内なら (2026-11-13〜)。
         //   貸与の開始日を提供票から組み直したので ほのぼのと一致する (9 月で 38 一致・食い違い 0)。
         //   中止年月日 (項22) は ほのぼのと食い違う行がまだあるので渡さない (lib/kokuho-densou/fukuyogu-period.ts)
@@ -1636,6 +1637,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           kohiUnits: amt.kohiUnits,
           kohiTargetCost: amt.kohiTargetCost,
           kohiHonninFutan: amt.kohiHonninFutan,
+          benefitRateDefaulted: amt.benefitRateDefaulted,
         });
       }
       if (rows.length === 0) continue;

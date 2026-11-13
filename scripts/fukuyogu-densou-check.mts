@@ -61,6 +61,7 @@ const base: FukuyoguSeikyuRow = {
   certStart: "2026-04-01", certEnd: "2029-03-31", careOfficeNumber: "1272401876",
   copayRate: 0.1, details: detail,
   totalUnits: 1400, totalCost: 14000, insuranceAmount: 12600, userAmount: 1400,
+  benefitRateDefaulted: false,
 };
 const kohi: FukuyoguSeikyuRow = {
   ...base, userName: "見本 花子", insuredNumber: "1000000002", careLevel: "要介護1",
@@ -376,6 +377,7 @@ console.log("\n══ ★ CM 指示単位数で頭打ち (2026-11-09・ほのぼ
     details: [{ serviceCode: "171003", unitPer: c[3], count: 1, units: c[3], days: 30, taisCode: "00170-000892" }],
     copayRate: amt.copayRate, totalUnits: amt.billedUnits, limitTargetUnits: amt.actualUnits, planUnits: amt.planUnits,
     totalCost: amt.totalCost, insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
+    benefitRateDefaulted: amt.benefitRateDefaulted,
   });
   /** CM 指示を渡す (useCm) / 渡さない で組み、6 名の値がほのぼのと一致した数を返す */
   const run = (useCm: boolean) => {
@@ -514,9 +516,12 @@ console.log("\n══ ★ CM 指示単位数で頭打ち (2026-11-09・ほのぼ
   const bnl = bn.content.split("\r\n").filter(Boolean).map(cols);
   const n01 = bnl.find((x) => x[2] === "7131" && x[3] === "01")!;
   eq("伝送 none (未選択の既定): 公費欄なし (01 項7・30 空・39 0) / 7111 公費分なし", [n01[8], n01[31], n01[40], bnl.some((x) => x[2] === "7111" && x[5] === "2")], ["", "", "0", false]);
-  // 負のコントロール (1): 明細に kohiPieces を付け忘れると 02 項15 が満額 (502) になり、突合の警告が鳴る
+  // 負のコントロール (1): 明細に kohiPieces を付け忘れると 02 項15 が満額 (502) になり 01 項39 と突合しない。
+  //   ★ 2026-11-14: 警告だけで出していた → その人を伝送から外す (lib/kokuho-densou/densou-exclude.ts kohi_detail_mismatch)
   const bneg = buildFukuyoguDensou([mkKohiRow(dd, false)], { officeNumber: "1272400050", year: 2026, month: 9 });
-  eq("★ 負のコントロール: 明細の公費対象を付け忘れる → 警告「明細の公費対象単位数の合計 (502)」", bneg.warnings.some((w) => w.includes("明細の公費対象単位数の合計 (502)")), true);
+  eq("★ 負のコントロール: 明細の公費対象を付け忘れる → 伝送から外す (excluded 1 名・理由「明細の公費対象単位の合計…」・データレコード 7111 だけ)",
+    [bneg.excluded.length, bneg.excluded[0]?.reason.includes("明細の公費対象単位の合計"), bneg.content.includes(",\"7131\",")],
+    [1, true, false]);
   // 負のコントロール (2): 公費の期間を渡さないと月途中と判定されず 月全体を公費 (= 2026-11-09 以前の当方の挙動)
   const noPeriods = computeFukuyoguAmounts({ benefitRateRaw: "90", insuredNumber: "1", totalUnits: 502, kohi: KOHI, month: YM, lines: LINES, kohiMode: "daily" });
   eq("★ 負のコントロール: periods 無し → 月途中にならず公費 502 (旧挙動)", [noPeriods.kohiPartial, noPeriods.kohiUnits, noPeriods.kohiAmount], [false, 502, 502]);

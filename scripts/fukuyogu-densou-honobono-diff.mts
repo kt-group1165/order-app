@@ -438,6 +438,7 @@ async function main() {
       kohiAmount: amt.kohiAmount, kohiTandoku: amt.kohiTandoku,
       // BillingTab と同じ (公費の対象単位・費用・本人負担。本人負担は 01 項41 / 10 項20 に出る)
       kohiUnits: amt.kohiUnits, kohiTargetCost: amt.kohiTargetCost, kohiHonninFutan: amt.kohiHonninFutan,
+      benefitRateDefaulted: amt.benefitRateDefaulted,
       // 開始年月日は BillingTab と同じく 貸与履歴から (lib/kokuho-densou/fukuyogu-period.ts)。中止は渡さない
       serviceStartDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH),
     });

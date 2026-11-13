@@ -9,11 +9,12 @@
  *   ・computeFukuyoguAmounts の benefitRateDefaulted が 未設定・読めない給付率で true / 正しい給付率と公費単独で false
  *   ・価格改定履歴の状態 loading / failed → 止める / ok → 止めない
  * ・群2 (返戻になる型): 生年月日・公費の負担者番号・明細と 01 の合計・桁あふれ・サービスコード — 正常な行で外れない / 壊した行で外れる
- * ⚠ 「外した人が 7111 から抜ける」は buildFukuyoguDensou に組み込んだあとに ここへ足す (組み込みは 着手前の人数測定のあと)。
+ * ・buildFukuyoguDensou に組み込んだ結果: 外した人は 01/02/10 にも 7111 の件数・単位・金額にも入らず excluded に理由つきで出る /
+ *   正常な人は 1 人も外れず 7111 に全員入る (逆向きの対照)
  */
 import { densouExcludeReasons, densouLoadBlockers, type DensouExcludeInput } from "../lib/kokuho-densou/densou-exclude";
 import { computeFukuyoguAmounts, type KohiPiece } from "../lib/kokuho-densou/fukuyogu-amounts";
-import type { FukuyoguDetailLine } from "../lib/kokuho-densou/build";
+import { buildFukuyoguDensou, type FukuyoguDetailLine, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 
 /** 群1 だけを見る (details 等を持たない行で 群1 の判定を単独に確かめる) */
 const g1 = (r: DensouExcludeInput) => densouExcludeReasons({ ...r, group2: false });
@@ -97,6 +98,42 @@ eq("★ サービス単位 1000000 (6 桁超) → unit_overflow", densouExcludeR
 eq("★ サービスコード 111111 (訪問介護) → service_code_invalid", densouExcludeReasons(full({ details: [det("111111", 600)] })), ["service_code_invalid"]);
 eq("★ サービスコード 5 桁 → service_code_invalid", densouExcludeReasons(full({ details: [det("17100", 600)] })), ["service_code_invalid"]);
 eq("★ 群1 と群2 が重なれば 両方出す", densouExcludeReasons(full({ birthDate: null, benefitRateDefaulted: true })), ["benefit_rate_defaulted", "birth_date_missing"]);
+
+console.log("══ buildFukuyoguDensou — 外した人は 7111 からも抜ける / 正常な人は抜けない ══");
+{
+  const row = (name: string, insured: string, over: Partial<FukuyoguSeikyuRow> = {}): FukuyoguSeikyuRow => ({
+    userName: name, insurerNumber: "122192", insuredNumber: insured, birthDate: "1940-05-03", gender: "男",
+    careLevel: "要介護3", certStart: "2026-04-01", certEnd: "2029-03-31", careOfficeNumber: "1272401876",
+    copayRate: 0.1, details: [det("171001", 600), det("171003", 200, 2)],
+    totalUnits: 1000, limitTargetUnits: 1000, planUnits: 1000, totalCost: 10000, insuranceAmount: 9000, userAmount: 1000,
+    benefitRateDefaulted: false, ...over,
+  });
+  const cols = (l: string) => l.split(",").map((v) => v.replace(/^"|"$/g, ""));
+  const recs = (content: string) => content.split(/\r?\n/).filter(Boolean).map(cols);
+  const t7111 = (content: string) => { const r = recs(content).find((x) => x[2] === "7111" && x[5] === "1"); return r ? [r[8], r[9], r[10], r[11]] : null; }; // 7111 項7 件数・8 単位・9 費用・10 保険請求 (行頭に "2,連番," があるので 項k = x[k+1])
+  const insuredIn01 = (content: string) => recs(content).filter((x) => x[3] === "01").map((x) => x[7]); // 01 項6 被保険者番号
+  const goodRows = [row("正常 一郎", "1000000001"), row("正常 二郎", "1000000002", { copayRate: 0.2, insuranceAmount: 8000, userAmount: 2000 }),
+    row("正常 三郎", "1000000003", { kohiHobetsu: "12", kohiFutansha: "12123519", kohiJukyusha: "0068742", kohiUnits: 1000, kohiAmount: 1000, userAmount: 0 })];
+  const good = buildFukuyoguDensou(goodRows, { officeNumber: "1272400050", year: 2026, month: 9 });
+  eq("正常な 3 名 → excluded 0 / 01 に 3 名 / 7111 保険分 件数 3・単位 3000・費用 30000・保険 26000", [good.excluded.length, insuredIn01(good.content).length, t7111(good.content)], [0, 3, ["3", "3000", "30000", "26000"]]);
+  const broken: [string, Partial<FukuyoguSeikyuRow>, string][] = [
+    ["給付率を既定 1 割", { benefitRateDefaulted: true }, "給付率"],
+    ["公費対象 > 保険", { kohiHobetsu: "12", kohiFutansha: "12123519", kohiUnits: 1200 }, "公費対象単位数が保険"],
+    ["請求 > 実績", { limitTargetUnits: 900 }, "実績を超えて"],
+    ["生年月日が空", { birthDate: null }, "生年月日"],
+    ["公費の負担者番号が空", { kohiHobetsu: "12", kohiFutansha: null, kohiUnits: 1000 }, "負担者番号"],
+    ["桁あふれ", { details: [det("171001", 10000)], totalUnits: 10000, limitTargetUnits: 10000, planUnits: 10000, totalCost: 100000, insuranceAmount: 90000, userAmount: 10000 }, "桁あふれ"],
+    ["サービスコード違い", { details: [det("111111", 600), det("171003", 200, 2)] }, "サービスコード"],
+  ];
+  for (const [label, over, word] of broken) {
+    const res = buildFukuyoguDensou([...goodRows, row("壊れ 太郎", "1000000099", over)], { officeNumber: "1272400050", year: 2026, month: 9 });
+    eq(`★ ${label} → 1 名外れ (理由に「${word}」) / 01 に出ない / 7111 は正常 3 名ぶんのまま`,
+      [res.excluded.map((e) => e.userName), res.excluded[0]?.reason.includes(word), insuredIn01(res.content).includes("1000000099"), t7111(res.content)],
+      [["壊れ 太郎"], true, false, t7111(good.content)]);
+  }
+  const oldExcl = buildFukuyoguDensou([...goodRows, row("番号 無し", "")], { officeNumber: "1272400050", year: 2026, month: 9 });
+  eq("既存の除外 (被保険者番号が空) も excluded に載る", oldExcl.excluded.map((e) => [e.userName, e.reason]), [["番号 無し", "被保険者番号が未登録"]]);
+}
 
 console.log("══ densouLoadBlockers (価格改定の履歴) ══");
 eq("ok → 止めない", densouLoadBlockers({ priceHistory: "ok" }).length, 0);
