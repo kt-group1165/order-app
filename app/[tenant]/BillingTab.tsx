@@ -11,7 +11,7 @@ import { HW_KANA } from "./search-utils";
 import { itemMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GROUP_OF_CATEGORY } from "./order-item-helpers";
 import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
-import { rentalMonthUnits, hospitalizationRanges, type DateRange } from "@/lib/half-month-units";
+import { rentalMonthUnits, hospitalizationRanges, rentalDayMask, halfMonthFlags, type DateRange } from "@/lib/half-month-units";
 import { useRentalCalcContext, excludedOf, modeOf } from "@/lib/rentalCalcContext";
 import { loadProrations, prorationModeOf, type ProrationLoad } from "@/lib/orderItemProration";
 import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
@@ -36,6 +36,7 @@ import { computeFukuyoguAmounts, capFukuyoguUnits, normalizeCmUnits, kohiCoverag
 import { getCmUnits, saveCmUnits } from "@/lib/fukuyoguCmUnits";
 import { loadKohiForMonth, getKohiMonthModes, saveKohiMonthMode } from "@/lib/fukuyoguKohiMonth";
 import { pickCertForMonth, certFieldsForDensou } from "@/lib/kokuho-densou/cert-for-month";
+import { fukuyoguServiceStartDate } from "@/lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth } from "@/lib/insurance/cert-month";
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
@@ -851,6 +852,25 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     setIsDirty(true);
   };
 
+  /**
+   * 利用・提供表 (RentalGridModal / RentalGridPanel) の 1 明細ぶん。単位は請求・伝送と同じ getUnits
+   * (単位上書き・当月の改定価格・入院・休止・日割り設定を反映)、区分は同じ材料で halfMonthFlags (2026-11-13 寄せ)
+   */
+  const rentalGridCalcOf = (clientId: string) => (item: OrderItem): RentalGridCalc => {
+    const excluded = [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)];
+    const mode = prorationModeOf(prorations, item.id, billingMonth);
+    const mask = item.rental_start_date ? rentalDayMask(item.rental_start_date, item.rental_end_date, billingMonth, excluded) : [];
+    const billedDays = mask.filter(Boolean).length;
+    const { firstHalf, secondHalf } = item.rental_start_date
+      ? halfMonthFlags(item.rental_start_date, item.rental_end_date, billingMonth, excluded)
+      : { firstHalf: false, secondHalf: false };
+    const kind: RentalGridCalc["kind"] = billedDays === 0 ? "none"
+      : mode === "daily" ? "daily" : firstHalf && secondHalf ? "full" : "half";
+    const label = kind === "none" ? "—" : kind === "daily" ? `日割(${billedDays}日)`
+      : kind === "full" ? "1か月" : firstHalf ? "前半月" : "後半月";
+    return { units: kind === "none" ? 0 : getUnits(item, clientId) * item.quantity, billedDays, kind, label };
+  };
+
   const getUnits = (item: OrderItem, clientId: string) => {
     if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
     const eq = equipment.find((e) => e.product_code === item.product_code);
@@ -1156,8 +1176,16 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         kohiUnits: amt.kohiUnits,
         kohiTargetCost: amt.kohiTargetCost,
         kohiHonninFutan: amt.kohiHonninFutan,
-        // 開始年月日・中止年月日 (7131/7132-01 項21/22) は渡さない — order_items.rental_start_date が
-        //   移行時の仮の日付 (2026-04-01 / 09-01) のため。build.ts の serviceStartDate の注記を参照
+        // 開始年月日 (7131/7132-01 項21): その利用者の介護保険の貸与の最初の開始日が当月内なら (2026-11-13〜)。
+        //   貸与の開始日を提供票から組み直したので ほのぼのと一致する (9 月で 38 一致・食い違い 0)。
+        //   中止年月日 (項22) は ほのぼのと食い違う行がまだあるので渡さない (lib/kokuho-densou/fukuyogu-period.ts)
+        serviceStartDate: fukuyoguServiceStartDate(
+          orderItems.filter((it) => {
+            const o = orders.find((oo) => oo.id === it.order_id);
+            return o?.client_id === client.id && (it.status === "rental_started" || it.status === "terminated")
+              && (it.payment_type ?? o?.payment_type ?? "介護") === "介護";
+          }).map((it) => ({ rentalStart: it.rental_start_date, rentalEnd: it.rental_end_date })),
+          billingMonth),
       });
     }
 
@@ -1754,6 +1782,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                 items={gridSelectedClient.items}
                 equipment={equipment}
                 hospitalizations={hospitalizations.filter(h => h.client_id === gridSelectedClient.client.id)}
+                pausesOf={pausesOf}
+                calcOf={rentalGridCalcOf(gridSelectedClient.client.id)}
                 month={billingMonth}
               />
             ) : (
@@ -2197,6 +2227,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           items={rentalGridClient.items}
           equipment={equipment}
           hospitalizations={hospitalizations.filter(h => h.client_id === rentalGridClient.client.id)}
+          pausesOf={pausesOf}
+          calcOf={rentalGridCalcOf(rentalGridClient.client.id)}
           month={billingMonth}
           onClose={() => setRentalGridClient(null)}
         />
@@ -2845,15 +2877,27 @@ function SalesReportTab({ tenantId, clients, orderItems, orders, equipment, curr
   );
 }
 
+/** 利用・提供表の 1 明細 (親の rentalGridCalcOf が 請求と同じ計算で作る) */
+type RentalGridCalc = {
+  /** 当月の単位 × 数量 (請求・伝送と同じ) */
+  units: number;
+  /** 算定に数える貸与日数 (入院・休止を除く) */
+  billedDays: number;
+  kind: "full" | "half" | "daily" | "none";
+  label: string;
+};
+
 // ─── RentalGridModal ──────────────────────────────────────────────────────────
 
 function RentalGridModal({
-  client, items, equipment, hospitalizations, month, onClose,
+  client, items, equipment, hospitalizations, pausesOf, calcOf, month, onClose,
 }: {
   client: Client;
   items: OrderItem[];
   equipment: Equipment[];
   hospitalizations: ClientHospitalization[];
+  pausesOf: (itemId: string) => DateRange[];
+  calcOf: (item: OrderItem) => RentalGridCalc;
   month: string;
   onClose: () => void;
 }) {
@@ -2892,18 +2936,11 @@ function RentalGridModal({
     return active;
   };
 
-  // 半月請求判定
-  const getHalfBilling = (item: OrderItem): "full" | "first" | "second" | "none" => {
-    const itemDays = getItemDays(item);
-    if (itemDays.size === 0) return "none";
-    // 入院で除外される日
-    const billingDays = [...itemDays].filter(d => !hospDays.has(d));
-    if (billingDays.length === 0) return "none";
-    const hasFirst = billingDays.some(d => d <= 15);
-    const hasSecond = billingDays.some(d => d > 15);
-    if (hasFirst && hasSecond) return "full";
-    if (hasFirst) return "first";
-    return "second";
+  // 単位・請求区分は 請求・伝送と同じ計算 (親の calcOf = getUnits + halfMonthFlags。自前で半月を判定しない)
+  // 休止の日 (表示用。算定は calcOf 側で除いている)
+  const pausedDay = (item: OrderItem, d: number) => {
+    const day = `${month}-${String(d).padStart(2, "0")}`;
+    return pausesOf(item.id).some((r) => (!r.from || day >= r.from) && (!r.to || day <= r.to));
   };
 
   const eq = (item: OrderItem) => equipment.find(e => e.product_code === item.product_code);
@@ -2951,11 +2988,7 @@ function RentalGridModal({
               {items.map((item, idx) => {
                 const e = eq(item);
                 const itemDays = getItemDays(item);
-                const billing = getHalfBilling(item);
-                const rentalDayCount = [...itemDays].filter(d => !hospDays.has(d)).length;
-                const baseUnits = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
-                const units = (billing === "first" || billing === "second") ? Math.round(baseUnits / 2) : billing === "none" ? 0 : baseUnits;
-                const billingLabel = billing === "full" ? "1か月" : billing === "first" ? "前半月" : billing === "second" ? "後半月" : "—";
+                const { units, billedDays: rentalDayCount, kind: billing, label: billingLabel } = calcOf(item);
                 return (
                   <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
                     <td className="border border-gray-200 px-2 py-1.5 font-medium text-gray-800 leading-tight">
@@ -2964,22 +2997,25 @@ function RentalGridModal({
                     {days.map(d => {
                       const isRental = itemDays.has(d);
                       const isHosp = hospDays.has(d);
+                      const isPause = !isHosp && pausedDay(item, d);
                       const isStart = item.rental_start_date && (() => { const s = pld(item.rental_start_date!); return s.getDate() === d && s.getMonth() === m - 1 && s.getFullYear() === y; })();
                       const isEnd = item.rental_end_date && (() => { const e = pld(item.rental_end_date!); return e.getDate() === d && e.getMonth() === m - 1 && e.getFullYear() === y; })();
                       return (
                         <td key={d} className={`text-center p-0 h-7 ${
                           !isRental ? "border border-gray-200 bg-white" :
                           isHosp ? "border border-orange-300 bg-orange-100" :
+                          isPause ? "border border-gray-300 bg-gray-100" :
                           "border border-blue-300 bg-blue-100"
                         }`}>
                           {isRental && (
                             <span className={`text-[9px] font-bold ${
                               isHosp ? "text-orange-500" :
+                              isPause ? "text-gray-500" :
                               isStart ? "text-blue-700" :
                               isEnd ? "text-purple-600" :
                               "text-blue-500"
                             }`}>
-                              {isStart ? "S" : isEnd ? "E" : isHosp ? "入" : "●"}
+                              {isStart ? "S" : isEnd ? "E" : isHosp ? "入" : isPause ? "休" : "●"}
                             </span>
                           )}
                         </td>
@@ -3020,13 +3056,7 @@ function RentalGridModal({
                 <tr>
                   <td className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-700">合計</td>
                   <td className="border border-gray-200 px-3 py-1 text-right font-mono font-semibold text-gray-800">
-                    {items.reduce((s, item) => {
-                      const e = eq(item);
-                      const billing = getHalfBilling(item);
-                      if (billing === "none") return s;
-                      const u = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
-                      return s + (billing === "first" || billing === "second" ? Math.round(u / 2) : u);
-                    }, 0)}単位
+                    {items.reduce((s, item) => s + calcOf(item).units, 0)}単位
                   </td>
                   <td className="border border-gray-200 px-3 py-1 text-center text-gray-600">介護保険</td>
                 </tr>
@@ -3042,12 +3072,14 @@ function RentalGridModal({
 // ─── RentalGridPanel (inline, no modal wrapper) ───────────────────────────────
 
 const RentalGridPanel = memo(function RentalGridPanel({
-  client, items, equipment, hospitalizations, month,
+  client, items, equipment, hospitalizations, pausesOf, calcOf, month,
 }: {
   client: Client;
   items: OrderItem[];
   equipment: Equipment[];
   hospitalizations: ClientHospitalization[];
+  pausesOf: (itemId: string) => DateRange[];
+  calcOf: (item: OrderItem) => RentalGridCalc;
   month: string;
 }) {
   const [y, m] = month.split("-").map(Number);
@@ -3083,16 +3115,11 @@ const RentalGridPanel = memo(function RentalGridPanel({
     return active;
   };
 
-  const getHalfBilling = (item: OrderItem): "full" | "first" | "second" | "none" => {
-    const itemDays = getItemDays(item);
-    if (itemDays.size === 0) return "none";
-    const billingDays = [...itemDays].filter(d => !hospDays.has(d));
-    if (billingDays.length === 0) return "none";
-    const hasFirst = billingDays.some(d => d <= 15);
-    const hasSecond = billingDays.some(d => d > 15);
-    if (hasFirst && hasSecond) return "full";
-    if (hasFirst) return "first";
-    return "second";
+  // 単位・請求区分は 請求・伝送と同じ計算 (親の calcOf = getUnits + halfMonthFlags。自前で半月を判定しない)
+  // 休止の日 (表示用。算定は calcOf 側で除いている)
+  const pausedDay = (item: OrderItem, d: number) => {
+    const day = `${month}-${String(d).padStart(2, "0")}`;
+    return pausesOf(item.id).some((r) => (!r.from || day >= r.from) && (!r.to || day <= r.to));
   };
 
   const eq = (item: OrderItem) => equipment.find(e => e.product_code === item.product_code);
@@ -3133,11 +3160,7 @@ const RentalGridPanel = memo(function RentalGridPanel({
             {items.map((item, idx) => {
               const e = eq(item);
               const itemDays = getItemDays(item);
-              const billing = getHalfBilling(item);
-              const rentalDayCount = [...itemDays].filter(d => !hospDays.has(d)).length;
-              const baseUnits = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
-              const units = (billing === "first" || billing === "second") ? Math.round(baseUnits / 2) : billing === "none" ? 0 : baseUnits;
-              const billingLabel = billing === "full" ? "1か月" : billing === "first" ? "前半月" : billing === "second" ? "後半月" : "—";
+              const { units, billedDays: rentalDayCount, kind: billing, label: billingLabel } = calcOf(item);
               return (
                 <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
                   <td className="border border-gray-200 px-2 py-1.5 font-medium text-gray-800 leading-tight">
@@ -3146,22 +3169,25 @@ const RentalGridPanel = memo(function RentalGridPanel({
                   {days.map(d => {
                     const isRental = itemDays.has(d);
                     const isHosp = hospDays.has(d);
+                    const isPause = !isHosp && pausedDay(item, d);
                     const isStart = item.rental_start_date && (() => { const s = pld(item.rental_start_date!); return s.getDate() === d && s.getMonth() === m - 1 && s.getFullYear() === y; })();
                     const isEnd = item.rental_end_date && (() => { const e = pld(item.rental_end_date!); return e.getDate() === d && e.getMonth() === m - 1 && e.getFullYear() === y; })();
                     return (
                       <td key={d} className={`text-center p-0 h-7 ${
                         !isRental ? "border border-gray-200 bg-white" :
                         isHosp ? "border border-orange-300 bg-orange-100" :
+                        isPause ? "border border-gray-300 bg-gray-100" :
                         "border border-blue-300 bg-blue-100"
                       }`}>
                         {isRental && (
                           <span className={`text-[9px] font-bold ${
                             isHosp ? "text-orange-500" :
+                            isPause ? "text-gray-500" :
                             isStart ? "text-blue-700" :
                             isEnd ? "text-purple-600" :
                             "text-blue-500"
                           }`}>
-                            {isStart ? "S" : isEnd ? "E" : isHosp ? "入" : "●"}
+                            {isStart ? "S" : isEnd ? "E" : isHosp ? "入" : isPause ? "休" : "●"}
                           </span>
                         )}
                       </td>
@@ -3203,13 +3229,7 @@ const RentalGridPanel = memo(function RentalGridPanel({
             <tr>
               <td className="border border-gray-200 px-3 py-1 bg-gray-50 font-medium text-gray-700">合計</td>
               <td className="border border-gray-200 px-3 py-1 text-right font-mono font-semibold text-gray-800">
-                {items.reduce((s, item) => {
-                  const e = eq(item);
-                  const billing = getHalfBilling(item);
-                  if (billing === "none") return s;
-                  const u = Math.round((e?.rental_price ?? 0) / 10) * item.quantity;
-                  return s + (billing === "first" || billing === "second" ? Math.round(u / 2) : u);
-                }, 0)}単位
+                {items.reduce((s, item) => s + calcOf(item).units, 0)}単位
               </td>
               <td className="border border-gray-200 px-3 py-1 text-center text-gray-600">介護保険</td>
             </tr>

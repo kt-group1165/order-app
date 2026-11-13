@@ -48,6 +48,7 @@ import {
   type FukuyoguSeikyuRow, type FukuyoguDetailLine,
 } from "../lib/kokuho-densou/build";
 import { certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
+import { fukuyoguServiceStartDate } from "../lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
 import { serviceClient, loadBenefitCertsDbOrCsv } from "./_futan-period-core.mjs";
 
@@ -372,7 +373,8 @@ async function main() {
       insuranceAmount: amt.insuranceAmount, userAmount: amt.userAmount,
       kohiHobetsu: amt.kohiHobetsu, kohiFutansha: kohi?.futansha ?? null, kohiJukyusha: kohi?.jukyusha ?? null,
       kohiAmount: amt.kohiAmount, kohiTandoku: amt.kohiTandoku,
-      // 開始・中止は渡さない (BillingTab と同じ)
+      // 開始年月日は BillingTab と同じく 貸与履歴から (lib/kokuho-densou/fukuyogu-period.ts)。中止は渡さない
+      serviceStartDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH),
     });
     const ins8 = (c.insurer_number ?? "").trim().padStart(8, "0");
     for (const f of ["7131", "7132"]) nameByKey.set(`${f}|${ins8}|${(c.insured_number ?? "").trim()}`, `${c.name}`);
