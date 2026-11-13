@@ -114,7 +114,7 @@ const eqByTais = new Map();
 for (const e of snap.equipment ?? []) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], J: [], G: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
+const R = { P1: [], P2: [], P3: [], J: [], G: [], V: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
 /** 誉田の世代の記号 (略称 → 商品名称 の先頭)。★ = 最新・最安 / ☆ = その前 / ◎◇▲ = ☆ より前 / 無印 = 古いか 世代の分かれていない品目 */
 const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
 const genRank = (r) => ({ "★": 4, "☆": 3, "◎": 2, "◇": 2, "▲": 2 })[genMark(r)] ?? 1;
@@ -137,7 +137,19 @@ for (const [tais, rows] of byTais) {
   const unusedRows = IS_CARESAPO ? [] : act.filter((r) => r !== cur && usedOf(r) === 0);
   if (unusedRows.length) R.unused.push({ TAIS: tais, 行: unusedRows.map((r) => `${r.id}:${r.abbr || r.name}:${r.units * 10}円`).join(" ") });
   const others = [...new Set(act.filter((r) => !unusedRows.includes(r)).map((r) => r.units))].filter((u) => u !== cur.units);
-  if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}${IS_CARESAPO ? "" : `(新${freshOfRow(r)}/実${usedOf(r)})`}`).join(" ") });
+  // ★ 2026-11-13: 略称に 本数・枚数・セット の違い (KS-161Q(1本) 30 単位 / (2本) 50 単位) がある行は 世代違いではなく 別品目 (同じ TAIS)。
+  //   古い世代の候補 (G) にせず V に出す (product_code を分けて 両方とも現役にする。品目の分け方は別の手順)
+  const qtyOf = (r) => { const m = (r.abbr || r.name).match(/(\d+)\s*(本|枚|セット|個|組|台)/); return m ? `${m[1]}${m[2]}` : null; };
+  //   提供票で使われていない行も見る (KS-161QT(1本) 50 / (2本) 100 は どちらも提供票に出ないが 同じ型)
+  const usedQty = new Map();
+  if (!IS_CARESAPO) for (const r of act) { const q = qtyOf(r); if (q) { if (!usedQty.has(q)) usedQty.set(q, new Set()); usedQty.get(q).add(r.units); } }
+  if (usedQty.size >= 2 && new Set([...usedQty.values()].flatMap((s) => [...s])).size >= 2) {
+    R.V.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 本数ごとの価格: [...usedQty].map(([q, us]) => `${q}=${[...us].map((u) => u * 10).join("/")}円`).join(" / "),
+      提供票で使われている: act.some((r) => usedOf(r) > 0 && qtyOf(r)) ? "あり" : "なし",
+      行: act.map((r) => `${r.id}:${r.abbr}:${r.units * 10}円(実${usedOf(r)})`).join(" ") });
+  } else if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}${IS_CARESAPO ? "" : `(新${freshOfRow(r)}/実${usedOf(r)})`}`).join(" ") });
+  // 本数・セット違い (V) の TAIS は 品目 (product_code) を分けるまで 価格の行も品目も作らない (どちらの価格を 1 つの品目に付けるか決まらない)
+  if (R.V.length && R.V[R.V.length - 1].TAIS === tais) continue;
   const eqs = eqByTais.get(tais) ?? [];
   if (!eqs.length) { R.P1.push({ TAIS: tais, 名前: cur.abbr || cur.name, 種目: cur.cat, 価格: price }); continue; }
   const cps = [...new Set(eqs.map((e) => `${commonPrice(e, vfYm)}|${commonPrice(e, MONTH)}`))];
@@ -173,10 +185,10 @@ for (const x of [...R.P3]) {
 
 mkdirSync(OUT, { recursive: true });
 const esc = (v) => `"${String(Array.isArray(v) ? v.join(" / ") : v ?? "").replace(/"/g, '""')}"`;
-const label = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の品目が要る候補" };
+const label = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の品目が要る候補", V: "V_本数・セット違いの別品目" };
 console.log(`事業所 ${FO.area} ${FO.bn} / FYGMST01 ${files.join(" / ")} / 使用中の TAIS ${[...byTais.values()].filter((rs) => rs.some((r) => !r.stop)).length}`);
 console.log(`控え ${snap.fetchedAt} / 事業所の行の valid_from ${VALID_FROM} / 影響を見る月 ${MONTH}${IS_CARESAPO ? " / 今の価格 = 中止=0 で ● の無い行 (複数なら ID 最大)" : " / 今の価格 = 中止=0 の行で 記号 ★ > ☆ > ◎◇▲ > 無印 (同じ記号なら ID 最大)"}\n`);
-for (const k of ["P1", "P2", "P3", "J", "G"]) {
+for (const k of ["P1", "P2", "P3", "J", "G", "V"]) {
   const xs = R[k];
   console.log(`  ${label[k].padEnd(28)} ${String(xs.length).padStart(5)}`);
   for (const x of k === "P2" ? [] : xs.slice(0, Number(process.env.SHOW ?? 3))) console.log(`      - ${JSON.stringify(x).slice(0, 240)}`);
