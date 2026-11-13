@@ -15,11 +15,14 @@
  * 決め方 (2026-11-14 ★福祉用具新ソフト 経由の user 決定):
  *   ① 今の価格 = 使用中 (中止=0) の行のうち 記号 ★ > ☆ > ◇ > ◎ (▲ も ◎ と同じ) > 無印、同じ記号なら ID が最大の行
  *      (ケアサポは 名前が「●」で始まらない行の ID 最大)。提供票の「新規で使われている行を優先」は使わない。
- *      記号で選んだ行と ID 最大の行が 違う価格のときは J (値上げの例があるので 安い方だけでは決めない)。
+ *      記号で選んだ行と ID 最大の行が 違う価格でも 記号の順で決める (2026-11-14 user 決定: ◎ の安い方が現役。無印の高い行はコピーで登録し直した古い価格)。
  *   ② 古い価格は 品目を分けず、その事業所の価格の履歴の行にする:
  *        適用開始 --valid-from = 古い価格 / 付け替えた月 = 今の価格
  *      付け替えた月 = 提供票で 古い価格の行を使った人が 今の価格の行に移った最初の月 (全員がその月より前に古い行を使い終えていること)。
- *      決まらない (古い行のまま借りている人がいる・古い行で新規がある・古い価格が 2 つ以上) → J
+ *      付け替えた月が決まらない (古い行のまま借りている人がいる 等) → --switch-unknown (既定 2026-12) の前月までは古い価格・その月から今の価格
+ *        (2026-11-14 user 決定: 過去の月は ほのぼのの請求と一致のまま・12 月から全員 今の価格)
+ *      古い行で新規がある・古い価格が 2 つ以上・本数が違う → J
+ *   ③' 用具マスタに品目はあるが 共通の価格が無い → その事業所の価格を事業所の行で入れる (2026-11-14 user 決定。ケアサポは作らない)
  *   ③ 価格の行は 用具マスタの親 (parent_product_code が空) だけ
  *   ④ 本数違い (1 本のサイドレール 等) は もう一方の事業所の FYGMST01 で 同じ略称・単位数の別 TAIS を候補にし、
  *      上限マスタ (equipment_price_ceilings) で その TAIS が実在し 商品名・型番に その本数 (「1本」「-1」等) があるときだけ
@@ -63,6 +66,8 @@ if (EXECUTE && !/^\d+,\d+$/.test(opt("--expect") ?? "")) { console.error("★ --
 const FO = resolveFukuyoguOffice(argv);
 const VALID_FROM = opt("--valid-from") ?? "2026-04-01";
 const MONTH = opt("--month") ?? new Date().toISOString().slice(0, 7);
+// ② 改定月が提供票で決まらないとき 今の価格に切り替える月 (2026-11-14 user 決定: 2026-11 までは古い価格・2026-12-01 から全員 今の価格)
+const SWITCH_UNKNOWN = opt("--switch-unknown") ?? "2026-12";
 const OUT = opt("--out") ?? join(tmpdir(), "office-prices-from-fygmst");
 const TENANT = "kt-group";
 const SOURCE_SYSTEM = "honobono-fukuyogu";
@@ -216,7 +221,6 @@ const allCodes = new Set((snap.equipment ?? []).map((e) => e.product_code));
 const knownCats = new Set((snap.equipment ?? []).map((e) => e.category).filter(Boolean));
 if (parentEquipment.length !== (snap.equipment ?? []).length) console.log(`(用具マスタの子 ${(snap.equipment ?? []).length - parentEquipment.length} 行は 価格の行を作る対象から外した)`);
 const vfYm = VALID_FROM.slice(0, 7);
-const MONTHS = months(vfYm, MONTH);
 
 const R = { P1: [], P2: [], P3: [], J: [], G: [], A: [], hist: [], symVsId: [], raise: [], unused: [] };
 const jOf = (tais, name, why, extra = {}) => R.J.push({ TAIS: tais, 名前: name, 理由: why, ...extra });
@@ -235,19 +239,22 @@ function place(tais, name, cat, timeline, note) {
     if (!knownCats.has(cat)) return jOf(tais, name, `種目「${cat}」が 用具マスタの種目に無い`, { 今の価格: cur });
     return R.P1.push({ TAIS: tais, 名前: name, 種目: cat, 価格: cur, 事業所の行: timeline.length > 1 ? timeline.map((t) => `${t.from}=${t.price}`).join(" → ") : "", 備考: note ?? "" });
   }
-  const cps = [...new Set(eqs.map((e) => MONTHS.map((m) => commonPrice(e, m)).join("|")))];
+  const MS = months(vfYm, [MONTH, timeline.at(-1).from].sort().at(-1)); // 履歴の最後の行 (例 2026-12) まで比べる
+  const cps = [...new Set(eqs.map((e) => MS.map((m) => commonPrice(e, m)).join("|")))];
   if (cps.length > 1) return jOf(tais, name, "用具マスタの同じ TAIS に 価格の違う品目が複数 (世代が分かれている)", { 品目: eqs.map((e) => `${e.product_code}=${commonPrice(e, MONTH)}`).join(" / "), 今の価格: cur });
-  const common = MONTHS.map((m) => commonPrice(eqs[0], m));
-  if (common.every((p) => p == null)) return jOf(tais, name, "共通の価格が無い", { 品目: eqs.map((e) => e.product_code).join(" / "), 今の価格: cur });
+  const common = MS.map((m) => commonPrice(eqs[0], m));
+  // ③ 共通の価格が無い → その事業所の価格を事業所の行として入れる (2026-11-14 user 決定)。ケアサポは作らない
+  const noCommon = common.every((p) => p == null);
+  if (noCommon && IS_CARESAPO) return jOf(tais, name, "共通の価格が無い (ケアサポは事業所の行を作らない)", { 品目: eqs.map((e) => e.product_code).join(" / "), 今の価格: cur });
   const existing = eqs.flatMap((e) => officeRowsOf(e.product_code));
   if (existing.length) {
     const same = eqs.every((e) => { const ex = officeRowsOf(e.product_code); return ex.length === timeline.length && timeline.every((t) => ex.some((x) => x.valid_from === `${t.from}-01` && x.rental_price === t.price)); });
     if (same) return R.P2.push({ TAIS: tais, 既に: "事業所の行あり" });
     return jOf(tais, name, `${FO.area} の事業所の行が既に別の内容である (${existing.map((x) => `${x.product_code} ${x.valid_from}=${x.rental_price}`).join(" / ")})`, { 今の価格: cur });
   }
-  if (MONTHS.every((m, i) => common[i] === priceAt(m))) return R.P2.push({ TAIS: tais });
+  if (!noCommon && MS.every((m, i) => common[i] === priceAt(m))) return R.P2.push({ TAIS: tais });
   if (IS_CARESAPO) return jOf(tais, name, "ケアサポは 事業所の行を作らない (共通の価格がケアサポの請求価格)。FYGMST01 と共通の価格が違う", { 品目: eqs.map((e) => e.product_code).join(" / "), 今の価格: cur });
-  R.P3.push({ TAIS: tais, 名前: name, 品目コード: eqs.map((e) => e.product_code), 共通の価格: `${common[0]}→${common.at(-1)}`, 事業所の行: timeline.map((t) => `${t.from}=${t.price}`).join(" → "), 差: cur - (common.at(-1) ?? common[0]), timeline, 備考: note ?? "" });
+  R.P3.push({ TAIS: tais, 名前: name, 品目コード: eqs.map((e) => e.product_code), 共通の価格: noCommon ? "無し" : `${common[0]}→${common.at(-1)}`, 事業所の行: timeline.map((t) => `${t.from}=${t.price}`).join(" → "), 差: noCommon ? null : cur - (common.at(-1) ?? common[0]), timeline, 備考: [noCommon ? "共通の価格が無い → 事業所の行で埋める" : "", note ?? ""].filter(Boolean).join(" / ") });
 }
 
 const aCands = []; // ④ 確かめた正しいコード → 後で place
@@ -282,7 +289,8 @@ for (const [tais, rows] of byTais) {
   const cur = IS_CARESAPO ? byId : poolBase.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
   const name = cur.abbr || cur.name;
   // ① 記号と ID が食い違い 価格も違う → J
-  if (cur !== byId && cur.units !== byId.units) { R.symVsId.push(tais); jOf(tais, name, "記号で選んだ行と ID 最大の行が 違う価格 (どちらが新しいか決まらない)", { 記号で選んだ行: label(cur), ID最大の行: label(byId) }); continue; }
+  // ① 記号と ID 最大が違う価格でも 記号の順で決める (2026-11-14 user 決定: ◎ の安い方が現役。無印の高い行は コピーで登録し直した古い価格)。数えるだけ
+  if (cur !== byId && cur.units !== byId.units) R.symVsId.push({ TAIS: tais, 記号で選んだ行: label(cur), ID最大の行: label(byId) });
   if (!IS_CARESAPO && actOk.some((r) => r.units < cur.units)) R.raise.push({ TAIS: tais, 今の行: label(cur), 安い行: actOk.filter((r) => r.units < cur.units).map(label).join(" ") });
   const unusedRows = IS_CARESAPO ? [] : actOk.filter((r) => r !== cur && r.units !== cur.units && usedOf(r) === 0);
   if (unusedRows.length) R.unused.push({ TAIS: tais, 行: unusedRows.map(label).join(" ") });
@@ -305,10 +313,15 @@ for (const [tais, rows] of byTais) {
   const switchers = [...oldUsers].filter(([n, sp]) => curUsers.has(n) && curUsers.get(n).min > sp.max);
   const stillOld = [...oldUsers].filter(([n]) => !switchers.some(([m]) => m === n));
   const fresh = otherRows.reduce((a, r) => a + freshOfRow(r), 0);
-  if (!switchers.length) { jOf(tais, name, `改定月が分からない: 古い価格から今の価格に移った人がいない (古い価格のまま ${stillOld.length} 名・最後 ${lastOld})`, base); continue; }
-  if (stillOld.length) { jOf(tais, name, `改定月が分からない: 移った人 ${switchers.length} 名・古い価格のまま ${stillOld.length} 名 (最後 ${lastOld})`, base); continue; }
+  const unknownSwitch = (why) => {
+    const nt = `改定月が分からない (${why}) → ${ymAdd(SWITCH_UNKNOWN, -1)} まで古い価格・${SWITCH_UNKNOWN} から今の価格 (2026-11-14 user 決定)`;
+    R.hist.push({ TAIS: tais, 名前: name, ...base, 付け替えた月: SWITCH_UNKNOWN, 移った人: switchers.length, 備考: nt });
+    place(tais, name, cur.cat, [{ from: vfYm, price: olds[0] * 10 }, { from: SWITCH_UNKNOWN, price: cur.units * 10 }], nt);
+  };
+  if (!switchers.length) { unknownSwitch(`移った人なし・古い価格のまま ${stillOld.length} 名・最後 ${lastOld}`); continue; }
+  if (stillOld.length) { unknownSwitch(`移った人 ${switchers.length} 名・古い価格のまま ${stillOld.length} 名・最後 ${lastOld}`); continue; }
   const sw = switchers.map(([n]) => curUsers.get(n).min).sort()[0];
-  if (lastOld >= sw) { jOf(tais, name, `改定月が分からない: 付け替え ${sw} より後 (${lastOld}) まで 古い価格を使った人がいる`, base); continue; }
+  if (lastOld >= sw) { unknownSwitch(`付け替え ${sw} より後 ${lastOld} まで古い価格の人がいる`); continue; }
   if (fresh > 0 && [...curUsers.values()].some((sp) => sp.min < sw)) { jOf(tais, name, `古い行で新規 ${fresh} 件・付け替え ${sw} より前に今の行の人もいる (別の品目の可能性)`, base); continue; }
   if (sw <= vfYm) { place(tais, name, cur.cat, [{ from: vfYm, price: cur.units * 10 }], `古い価格 ${olds[0] * 10} は ${sw} より前 (--valid-from 前) で終わり`); continue; }
   R.hist.push({ TAIS: tais, 名前: name, ...base, 付け替えた月: sw, 移った人: switchers.length });
@@ -367,7 +380,7 @@ if (!IS_CARESAPO) {
   const jWhy = {};
   for (const x of R.J) { const k = x.理由.replace(/\d+/g, "N").replace(/\(.*?\)/g, "").slice(0, 40); jWhy[k] = (jWhy[k] ?? 0) + 1; }
   console.log(`\n  J の理由: ${JSON.stringify(jWhy, null, 1)}`);
-  console.log(`  記号と ID が食い違い 価格も違う (J に入れた): ${R.symVsId.length}`);
+  console.log(`  記号と ID 最大が違う価格 (記号の順で決めた): ${R.symVsId.length}`);
   console.log(`  今の行より安い使用中の行がある (値上げ・記号と ID は一致): ${R.raise.length}`);
   for (const x of R.raise.slice(0, Number(process.env.SHOW_DIFF ?? 5))) console.log(`      - ${JSON.stringify(x)}`);
   console.log(`  提供票で使われていない 別価格の行がある TAIS: ${R.unused.length} (履歴にしない)`);
