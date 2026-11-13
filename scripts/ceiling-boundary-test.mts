@@ -14,7 +14,7 @@
  *   ハーネスの基準日 (rental_start_date ?? "1900-01-01") 由来で、
  *   基準日を変えると変わる。**数え方が違うだけで、どちらも間違いではない。**
  */
-import { indexCeilings, judgeCeiling, isCareRentalInMonth, findRentalOverruns, futureEffectiveDates, type CeilingRow } from "../lib/ceilingCheck";
+import { indexCeilings, judgeCeiling, isCareRentalInMonth, findRentalOverruns, futureEffectiveDates, countUnjudgeable, normalizeTais, type CeilingRow } from "../lib/ceilingCheck";
 
 let pass = 0;
 const fails: string[] = [];
@@ -99,6 +99,27 @@ eq("改定前日は旧世代で判定 (超過見込みは施行日で見るこ�
 eq("futureEffectiveDates: 基準日より後だけ・昇順",
   futureEffectiveDates(idx, "2025-04-01"), ["2026-04-01"]);
 eq("futureEffectiveDates: 施行日当日は含めない", futureEffectiveDates(idx, "2026-04-01"), []);
+
+// ── TAIS の正規化と 判定できない口の数え方 (2026-11-13: TAIS が空・化けた明細は 上限を超えても黙って素通りしていた) ──
+eq("normalizeTais: ? 化け → ハイフン", normalizeTais("00167?000197"), "00167-000197");
+eq("normalizeTais: 全角ハイフン・全角英数", normalizeTais("00122－Ｚ00017"), "00122-Z00017");
+eq("normalizeTais: 正しいものは そのまま", normalizeTais(" 00167-000197 "), "00167-000197");
+eq("normalizeTais: 7 桁は直さない", normalizeTais("00139-0000034"), "00139-0000034");
+{
+  const idx2 = indexCeilings([{ tais_code: "00167-000197", effective_from: "2024-04-01", ceiling_price: 9000 }]);
+  const D2 = "2026-11-01";
+  eq("★ ? 化けでも 正規化して上限を超過と判定する", findRentalOverruns([{ id: "q", taisCode: "00167?000197", price: 12000 }], D2, idx2).length, 1);
+  eq("★ 全角ハイフンでも 超過と判定する", findRentalOverruns([{ id: "w", taisCode: "00167－000197", price: 12000 }], D2, idx2).length, 1);
+  eq("★ countUnjudgeable: 空 → no_tais / 形が崩れている → bad_format / 正しい形で上限マスタに無い → not_listed",
+    countUnjudgeable([
+      { id: "空", taisCode: "", price: 12000 },
+      { id: "崩れ", taisCode: "00167~000197", price: 12000 },
+      { id: "対象外", taisCode: "00999-000001", price: 12000 },
+      { id: "判定できる", taisCode: "00167-000197", price: 12000 },
+      { id: "価格なし", taisCode: "", price: 0 },
+    ], D2, idx2),
+    { no_tais: ["空"], bad_format: ["崩れ"], not_listed: ["対象外"], no_generation: [] });
+}
 
 console.log(`\n上限価格 判定器の境界値テスト: ${pass} 件 PASS / ${fails.length} 件 FAIL`);
 for (const f of fails) console.log("  ✗ " + f);

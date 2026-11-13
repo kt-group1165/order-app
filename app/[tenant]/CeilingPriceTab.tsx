@@ -11,7 +11,7 @@ import {
   type CeilingImportRow,
   type CeilingRentalSource,
 } from "@/lib/ceilingPrices";
-import { indexCeilings, isCareRentalInMonth, findRentalOverruns, type CeilingRow } from "@/lib/ceilingCheck";
+import { indexCeilings, isCareRentalInMonth, findRentalOverruns, normalizeTais, type CeilingRow } from "@/lib/ceilingCheck";
 import { getPriceForMonth } from "@/lib/equipment";
 
 // 適用月ラベル: "YYYY-MM-DD" → "令和8年7月"
@@ -529,10 +529,10 @@ function computeCeilingImpact(
 ): CeilingImpact[] {
   if (!entry.ym || entry.rows.length === 0) return [];
   const eff = `${entry.ym}-01`;
-  const fileTais = new Set(entry.rows.map((r) => String(r.tais_code).trim()));
+  const fileTais = new Set(entry.rows.map((r) => normalizeTais(r.tais_code)));
   // 取込後の状態 = 既存 (同じ適用月・同じ TAIS は上書きされるので除く) + このファイル
   const merged: CeilingRow[] = [
-    ...existingRows.filter((r) => !(String(r.effective_from).slice(0, 10) === eff && fileTais.has(String(r.tais_code).trim()))),
+    ...existingRows.filter((r) => !(String(r.effective_from).slice(0, 10) === eff && fileTais.has(normalizeTais(r.tais_code)))),
     ...entry.rows.map((r) => ({ tais_code: r.tais_code, effective_from: eff, ceiling_price: r.ceiling_price })),
   ];
   const idx = indexCeilings(merged);
@@ -542,7 +542,7 @@ function computeCeilingImpact(
     if (!isCareRentalInMonth(it, it.paymentType, entry.ym)) continue;
     const e = eqByCode.get(it.product_code);
     // このファイルの TAIS だけ見る (それ以外の超過は check:ceiling-rental が見る)
-    if (!e?.tais_code || !fileTais.has(e.tais_code.trim())) continue;
+    if (!e?.tais_code || !fileTais.has(normalizeTais(e.tais_code))) continue;
     // 請求画面 (BillingTab getUnits) と同じ価格の取り方
     const price = getPriceForMonth(source.history, it.product_code, entry.ym, it.officeId) ?? e.rental_price ?? 0;
     lines.push({ id: it.id, taisCode: e.tais_code, price, quantity: it.quantity, productCode: it.product_code });

@@ -36,11 +36,25 @@ export type CeilingJudgement =
   /** 判定できない。reason は UI の出し分け用 */
   | { kind: "unknown"; reason: "no_tais" | "no_master" | "no_generation" | "no_price" };
 
-/** TAIS ごとに effective_from 昇順で束ねる (呼出側で 1 回だけ作る) */
+/** TAIS コードの正しい形 (企業 5 桁 - 商品 6 桁。商品の先頭は Z のこともある) */
+export const TAIS_FORMAT = /^\d{5}-[0-9A-Z]{6}$/;
+
+/**
+ * TAIS コードをそろえる (2026-11-13)。NFKC (全角英数・全角ハイフン) → 大文字 → 5 桁の後の 1 文字が
+ * 「?」やダッシュ系なら「-」に (用具マスタに「00167?000197」のような化けがあった)。
+ * ★ 既知の化け方しか直せない。直らないものは countUnjudgeable の bad_format で数えて警告する。
+ */
+export function normalizeTais(s: string | null | undefined): string {
+  const t = String(s ?? "").normalize("NFKC").trim().toUpperCase();
+  const m = t.match(/^(\d{5})[?\-‐―ー–—](.{6})$/);
+  return m ? `${m[1]}-${m[2]}` : t;
+}
+
+/** TAIS ごとに effective_from 昇順で束ねる (呼出側で 1 回だけ作る)。キーは normalizeTais でそろえる */
 export function indexCeilings(rows: CeilingRow[]): Map<string, CeilingRow[]> {
   const m = new Map<string, CeilingRow[]>();
   for (const r of rows) {
-    const k = String(r.tais_code ?? "").trim();
+    const k = normalizeTais(r.tais_code);
     if (!k) continue;
     const a = m.get(k);
     if (a) a.push(r);
@@ -64,7 +78,7 @@ export function judgeCeiling(
   onDate: string,
   index: Map<string, CeilingRow[]>,
 ): CeilingJudgement {
-  const t = String(taisCode ?? "").trim();
+  const t = normalizeTais(taisCode);
   if (!t) return { kind: "unknown", reason: "no_tais" };
   if (price == null || !Number.isFinite(price) || price <= 0) {
     return { kind: "unknown", reason: "no_price" };
@@ -169,6 +183,39 @@ export function findRentalOverruns(
       price: Number(l.price),
       quantity: Number(l.quantity ?? 1) || 1,
     });
+  }
+  return out;
+}
+
+/**
+ * ★ 上限を判定できなかった明細を 理由ごとに数える (2026-11-13 追加)。
+ *
+ * なぜ要るか: findRentalOverruns は "over" だけを返し、判定できない (unknown) 明細を捨てる。
+ *   TAIS が空・化けた (「00167?000197」等) 介護の明細は、上限を超えていても **黙って素通り**していた
+ *   (負のコントロールで確認: 上限 9,000 円に 12,000 円の明細 → TAIS 空・? 化け・全角ハイフン のどれも超過 0 件)。
+ *   TAIS の正規化 (normalizeTais) は 既知の化け方しか直せないので、**判定できない口を数えて見せる**のが本筋。
+ * ★ 渡すのは 介護保険で請求する明細だけにすること (自費は上限の対象外。混ぜると 常に点灯して読まれなくなる)。
+ * 返す区分:
+ *   no_tais    TAIS が空                                     → ★ 警告する (上限を超えても検出できない)
+ *   bad_format TAIS が「5桁-6桁」の形でない (化け・全角 等) → ★ 警告する (上限マスタに当たらず素通りする)
+ *   not_listed 形は正しいが 上限マスタに無い                → 警告しない。上限は月平均 100 件以上貸与される商品にしか
+ *                                                            設定されないので、正しい TAIS でも載っていない商品は普通にある (数えるだけ)
+ *   no_generation その TAIS の上限が まだ施行前              → 警告しない (数えるだけ)
+ * 価格 0 / 無し (no_price) は 上限と比べる意味が無いので数えない。
+ */
+export function countUnjudgeable(
+  lines: CeilingRentalLine[],
+  onDate: string,
+  index: Map<string, CeilingRow[]>,
+): { no_tais: string[]; bad_format: string[]; not_listed: string[]; no_generation: string[] } {
+  const out = { no_tais: [] as string[], bad_format: [] as string[], not_listed: [] as string[], no_generation: [] as string[] };
+  for (const l of lines) {
+    if (l.price == null || !Number.isFinite(l.price) || l.price <= 0) continue; // 価格 0 / 無し は 上限と比べる意味が無い
+    const j = judgeCeiling(l.taisCode, l.price, onDate, index);
+    if (j.kind !== "unknown" || j.reason === "no_price") continue;
+    if (j.reason === "no_master") {
+      (TAIS_FORMAT.test(normalizeTais(l.taisCode)) ? out.not_listed : out.bad_format).push(l.id);
+    } else out[j.reason].push(l.id);
   }
   return out;
 }

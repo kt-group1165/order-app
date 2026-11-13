@@ -43,7 +43,7 @@ import { BILLING_CLIENT_COLS, type BillingClient } from "@/lib/billing-client-co
 import { BILLING_CERT_SELECT, type BillingCertRow } from "@/lib/insurance/billing-cert-cols";
 import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/benefit-certs";
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
-import { findRentalOverruns, indexCeilings, type CeilingRentalLine } from "@/lib/ceilingCheck";
+import { findRentalOverruns, indexCeilings, countUnjudgeable, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
@@ -1122,6 +1122,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     if (kohiModesNotice) preWarnings.push(kohiModesNotice);
     if (pausesNotice) preWarnings.push(pausesNotice);
     if (prorationNotice) preWarnings.push(prorationNotice);
+    // ★ 上限を判定できなかった 介護の明細 (TAIS が空 / TAIS の形が崩れている)。超過していないのではなく「確認できていない」ので 別に数えて警告する
+    const ceilingUnjudged = { no_tais: [] as string[], bad_format: [] as string[] };
     for (const { client, items } of billingGroups) {
       const details: FukuyoguDetailLine[] = [];
       // 明細と同じ並びの貸与期間 (月途中の公費の判定・明細の公費対象に使う)
@@ -1181,6 +1183,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
             `${client.name}: ${l?.name ?? ""} の月額 ${o.price.toLocaleString()}円 が上限価格 ${o.ceiling.toLocaleString()}円 (${o.effectiveFrom} 施行) を ${o.excess.toLocaleString()}円 超えています — 上限超過の貸与は月額全体が保険給付の対象外です (返戻になります)。価格を見直してください`,
           );
         }
+        const un = countUnjudgeable(ceilingLines, `${billingMonth}-01`, ceilingIndex);
+        for (const id of un.no_tais) ceilingUnjudged.no_tais.push(`${client.name}: ${ceilingLines.find((x) => x.id === id)?.name ?? id}`);
+        for (const id of un.bad_format) { const l = ceilingLines.find((x) => x.id === id); ceilingUnjudged.bad_format.push(`${client.name}: ${l?.name ?? id} (TAIS「${l?.taisCode ?? ""}」)`); }
       }
       // 給付率 (benefit_rate は 90/80/70 の給付率で保存済み)、福祉用具は単価 10 円固定
       // 2026-08-31 監査: 未設定を**無警告で 90 (1割負担)** にしていた。
@@ -1268,6 +1273,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           billingMonth),
       });
     }
+
+    // 0 のときは何も出さない。「超過なし」と同じ扱いにしない
+    if (ceilingUnjudged.no_tais.length) preWarnings.push(`★ 上限価格を確認できていない介護の貸与 ${ceilingUnjudged.no_tais.length} 口 (用具マスタに TAIS コードが無い) — 上限を超えていても検出できません。用具マスタの TAIS を入れてください: ${ceilingUnjudged.no_tais.slice(0, 10).join("・")}${ceilingUnjudged.no_tais.length > 10 ? " ほか" : ""}`);
+    if (ceilingUnjudged.bad_format.length) preWarnings.push(`★ 上限価格を確認できていない介護の貸与 ${ceilingUnjudged.bad_format.length} 口 (用具マスタの TAIS コードの形が崩れている。「?」への化け 等) — 上限を超えていても検出できません。用具マスタの TAIS を直してください: ${ceilingUnjudged.bad_format.slice(0, 10).join("・")}${ceilingUnjudged.bad_format.length > 10 ? " ほか" : ""}`);
 
     if (rows.length === 0) {
       alert("対象月に国保連請求対象の福祉用具貸与がありません。");

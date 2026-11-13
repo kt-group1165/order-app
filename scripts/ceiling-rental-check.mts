@@ -44,11 +44,12 @@ const BASELINE = join(__dirname, "ceiling-rental-baseline.json");
 const UPDATE = process.argv.includes("--update");
 
 type BaselineEntry = { id: string; label: string; price: number; ceiling: number; effectiveFrom: string };
-type Baseline = { _readme: string[]; asOf: string; over: BaselineEntry[] };
+// unjudged: 介護の明細なのに上限を判定できない口数 (2026-11-13 追加)。no_tais = TAIS が空 / bad_format = TAIS の形が崩れている
+type Baseline = { _readme: string[]; asOf: string; over: BaselineEntry[]; unjudged?: { no_tais: number; bad_format: number } };
 
 async function main() {
   const { createClient } = await import("@supabase/supabase-js");
-  const { indexCeilings, isCareRentalInMonth, findRentalOverruns, futureEffectiveDates } = await import("../lib/ceilingCheck");
+  const { indexCeilings, isCareRentalInMonth, findRentalOverruns, futureEffectiveDates, countUnjudgeable, normalizeTais } = await import("../lib/ceilingCheck");
   const { getPriceForMonth } = await import("../lib/equipment");
 
   const env: Record<string, string> = {};
@@ -128,6 +129,7 @@ async function main() {
   if (futures.length === 0) console.log("   (未施行の上限世代は取込まれていない → 見込みの判定は無し)");
 
   let negativeControlOk = true;
+  const unjudgedAll = { no_tais: new Map<string, string>(), bad_format: new Map<string, string>() };
   for (const t of targets) {
     const lines = [];
     let unknownTais = 0;
@@ -138,7 +140,7 @@ async function main() {
       const e = emByCode.get(i.product_code);
       // BillingTab getUnits と同じ価格の取り方 (月初時点の改定履歴 → 用具マスタ)
       const price = getPriceForMonth(hist, i.product_code, t.ym) ?? e?.rental_price ?? 0;
-      if (!e?.tais_code || !idx.has(e.tais_code.trim())) unknownTais++;
+      if (!e?.tais_code || !idx.has(normalizeTais(e.tais_code))) unknownTais++;
       lines.push({ id: i.id, taisCode: e?.tais_code, price, quantity: i.quantity });
     }
     const overs = findRentalOverruns(lines, t.onDate, idx);
@@ -147,6 +149,17 @@ async function main() {
     const monthExcess = overs.reduce((s, ov) => s + ov.excess * ov.quantity, 0);
     console.log(`\n■ ${t.label}`);
     console.log(`   請求対象の貸与 ${lines.length} 口 (上限マスタで判定できない ${unknownTais} 口) → ★ 超過 ${overs.length} 口`);
+    // ★ 判定できない口の内訳。no_tais / bad_format は「上限を超えていても検出できない」ので 基準値で見張る (原因と直す先まで出す)
+    const un = countUnjudgeable(lines, t.onDate, idx);
+    console.log(`   判定できない内訳: TAIS が空 ${un.no_tais.length} / TAIS の形が崩れている ${un.bad_format.length} / 上限マスタに無い (上限の対象外) ${un.not_listed.length} / 上限が施行前 ${un.no_generation.length}`);
+    for (const [k, ids] of [["no_tais", un.no_tais], ["bad_format", un.bad_format]] as const) {
+      for (const id of ids) {
+        const it = items.find((x) => x.id === id)!;
+        const e = emByCode.get(it.product_code);
+        unjudgedAll[k].set(id, `${e?.name ?? it.product_code} (${it.product_code}) TAIS「${e?.tais_code ?? ""}」`);
+        console.log(`     ★ ${k === "no_tais" ? "TAIS が空 → 用具マスタに TAIS を入れる" : "TAIS の形が崩れている → 用具マスタの TAIS を直す"}: ${unjudgedAll[k].get(id)}`);
+      }
+    }
     if (overs.length) console.log(`   給付対象外になりうる月額 ¥${monthTotal.toLocaleString()} (うち上限を超えた分 ¥${monthExcess.toLocaleString()})`);
     for (const ov of overs) {
       const it = items.find((x) => x.id === ov.id)!;
@@ -159,9 +172,9 @@ async function main() {
     }
 
     // 負のコントロール: 実在の上限に +1 円の架空明細を足すと必ず鳴るはず
-    const probe = lines.find((l) => l.taisCode && idx.has(String(l.taisCode).trim()));
+    const probe = lines.find((l) => l.taisCode && idx.has(normalizeTais(l.taisCode)));
     if (probe) {
-      const gens = idx.get(String(probe.taisCode).trim())!.filter((g) => g.effective_from.slice(0, 10) <= t.onDate);
+      const gens = idx.get(normalizeTais(probe.taisCode))!.filter((g) => g.effective_from.slice(0, 10) <= t.onDate);
       if (gens.length) {
         const c = gens[gens.length - 1].ceiling_price;
         const hit = findRentalOverruns([{ id: "__probe__", taisCode: probe.taisCode, price: c + 1 }], t.onDate, idx);
@@ -170,7 +183,18 @@ async function main() {
     }
   }
 
-  console.log(`\n負のコントロール (上限 + 1 円の架空明細): ${negativeControlOk ? "検出できた" : "★ 検出できなかった"}`);
+  // 負のコントロール 2: TAIS が空・化けた 介護の明細は「判定できない」に数えられるはず (2026-11-13 に 黙って素通りしていたのを確認)
+  {
+    const probeTais = [...idx.keys()][0];
+    const neg = probeTais ? countUnjudgeable([
+      { id: "空", taisCode: "", price: 99999 },
+      { id: "化け", taisCode: probeTais.replace("-", "~"), price: 99999 },
+      { id: "全角", taisCode: probeTais.replace("-", "－"), price: 99999 },
+    ], todayIso, idx) : null;
+    // 全角ハイフンは normalizeTais で直り 上限マスタに当たる (= 判定できる) → 数えられないのが正しい
+    if (!neg || neg.no_tais.length !== 1 || neg.bad_format.length !== 1 || neg.bad_format[0] !== "化け") negativeControlOk = false;
+  }
+  console.log(`\n負のコントロール (上限 + 1 円の架空明細 / TAIS 空・化けの架空明細): ${negativeControlOk ? "検出できた" : "★ 検出できなかった"}`);
   if (!negativeControlOk) {
     console.log("★ FAIL — 判定が効いていない");
     process.exitCode = 1;
@@ -193,6 +217,7 @@ async function main() {
       ],
       asOf: todayIso,
       over: current,
+      unjudged: { no_tais: unjudgedAll.no_tais.size, bad_format: unjudgedAll.bad_format.size },
     };
     writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n", "utf8");
     console.log(`\n--update: 基準値を書きました (${current.length} 口)`);
@@ -205,8 +230,16 @@ async function main() {
   const removed = baseline.over.filter((b) => !curIds.has(b.id));
   console.log(`\n基準値 (${baseline.asOf}): ${baseline.over.length} 口 / 今回: ${current.length} 口`);
   for (const r of removed) console.log(`   ○ 解消 (基準値から外してよい): ${r.label}`);
+  // ★ 判定できない介護の口 (TAIS 空・形が崩れている) が 基準値より増えたら FAIL
+  const ub = baseline.unjudged ?? { no_tais: 0, bad_format: 0 };
+  const uFail = unjudgedAll.no_tais.size > ub.no_tais || unjudgedAll.bad_format.size > ub.bad_format;
+  console.log(`判定できない介護の口: TAIS が空 ${unjudgedAll.no_tais.size} (基準値 ${ub.no_tais}) / TAIS の形が崩れている ${unjudgedAll.bad_format.size} (基準値 ${ub.bad_format})`);
+  if (uFail) {
+    console.log("★ FAIL — 上限を判定できない介護の貸与が増えた (上限を超えていても検出できない)。上の ★ の行の用具マスタの TAIS を直す");
+    process.exitCode = 1;
+  }
   if (added.length === 0) {
-    console.log("✓ PASS (基準値に無い超過は無い)");
+    if (!uFail) console.log("✓ PASS (基準値に無い超過は無い・判定できない介護の口も増えていない)");
     return;
   }
   console.log(`★ FAIL — 基準値に無い超過が ${added.length} 口:`);
