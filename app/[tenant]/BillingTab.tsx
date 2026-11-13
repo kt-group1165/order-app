@@ -25,7 +25,7 @@ import { getTenantById } from "@/lib/tenants";
 import { getOffices, type Office } from "@/lib/offices";
 import {
   getLateFlags, setLateFlag, removeLateFlag,
-  getUnitOverrides, setUnitOverride, removeUnitOverride,
+  getUnitOverrides,
   getRebillFlags, setRebillFlag, removeRebillFlag,
   type BillingLateFlag, type BillingRebillFlag,
 } from "@/lib/billing";
@@ -896,22 +896,6 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, ym,
       [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)],
       prorationModeOf(prorations, item.id, ym));
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentional placeholder / future use
-  const handleUnitOverride = async (clientId: string, item: OrderItem, value: string) => {
-    const n = parseInt(value, 10);
-    const eq = equipment.find((e) => e.product_code === item.product_code);
-    // 自動の単位 (按分前の月額) は getUnits と同じく当月の改定価格 → マスタ価格 (2026-11-13 寄せ)
-    const autoPrice = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
-    const autoUnits = autoPrice ? Math.round(autoPrice / 10) : 0;
-    if (!value || isNaN(n) || n === autoUnits) {
-      await removeUnitOverride(tenantId, clientId, billingMonth, item.id);
-      setUnitOverridesState((prev) => { const m = new Map(prev); m.delete(item.id); return m; });
-    } else {
-      await setUnitOverride(tenantId, clientId, billingMonth, item.id, n);
-      setUnitOverridesState((prev) => new Map(prev).set(item.id, n));
-    }
   };
 
   const toggleRebillFlag = (clientId: string, month: string, type: "返戻" | "過誤") => {

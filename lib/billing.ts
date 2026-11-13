@@ -69,45 +69,6 @@ export async function getUnitOverrides(tenantId: string, month: string): Promise
   return data ?? [];
 }
 
-export async function setUnitOverride(
-  tenantId: string,
-  clientId: string,
-  month: string,
-  orderItemId: string,
-  unitsOverride: number
-): Promise<void> {
-  const { error } = await supabase
-    .from("billing_unit_overrides")
-    .upsert(
-      {
-        tenant_id: tenantId,
-        client_id: clientId,
-        month,
-        order_item_id: orderItemId,
-        units_override: unitsOverride,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "tenant_id,client_id,month,order_item_id" }
-    );
-  if (error) throw error;
-}
-
-export async function removeUnitOverride(
-  tenantId: string,
-  clientId: string,
-  month: string,
-  orderItemId: string
-): Promise<void> {
-  const { error } = await supabase
-    .from("billing_unit_overrides")
-    .delete()
-    .eq("tenant_id", tenantId)
-    .eq("client_id", clientId)
-    .eq("month", month)
-    .eq("order_item_id", orderItemId);
-  if (error) throw error;
-}
-
 // ── 返戻・取り下げフラグ ──────────────────────────────────────────────────────
 
 export async function getRebillFlags(tenantId: string): Promise<BillingRebillFlag[]> {
