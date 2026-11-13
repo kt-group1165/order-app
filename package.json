@@ -38,7 +38,8 @@
     "check:exec-lock": "tsx scripts/exec-lock-test.mts",
     "check:proration": "tsx scripts/proration-teikyohyo-check.mts",
     "check:cert-status": "tsx scripts/cert-status-rule-check.mts",
-    "check:month-ready": "tsx scripts/month-ready-check.mts"
+    "check:month-ready": "tsx scripts/month-ready-check.mts",
+    "check:kk-honobono": "tsx scripts/fukuyogu-kk-honobono-check.mts"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.3.0",
