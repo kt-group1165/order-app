@@ -557,6 +557,41 @@ async function main() {
         }
       }
     }
+    // ★ 2026-11-14 (誉田): 後ろの月 → 前の月 への引き継ぎ。手元の請求 (KDS0031) が 処理R8-09〜10 しか無い事業所では、
+    //   9 月に請求の TAIS で決まった台でも 5〜8 月の行が「その人・その月の請求が無い」ため決まらず、
+    //   9/1 開始の別の台に割れていた (開始日が実際より遅くなり 5〜8 月が抜ける)。
+    //   翌月の同じ用具名の行で TAIS が決まり、当月の末日 → 翌月の 1 日に続く (同じ台) なら 同じ商品とみなす。
+    //   条件は前月引き継ぎと同じ (事業所・支払区分・満額の単位数が同じ)。その人・その月の請求に TAIS が出ていれば引き継がない
+    //   (請求で決められなかった = 請求と食い違う可能性があるため)。月を後ろから回して 何か月でも遡れる。
+    if (DISAMBIGUATE_BY_BILLING) {
+      const nextYm = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; };
+      const linkBack = (n, r) => n.item === r.item && n.tais && r.cands.includes(n.tais)
+        && r.days[r.nd - 1] === 1 && n.days[0] === 1
+        && n.src === r.src && payTypeOf(n) === payTypeOf(r) && r.full != null && n.full === r.full;
+      const yms = [...new Set(rows.map((r) => r.ym))].sort().reverse();
+      for (const ym of yms) {
+        for (const [k, grp] of byUserYm) {
+          if (!k.endsWith(`|${ym}`)) continue;
+          const open = grp.filter((r) => !r.tais && (r.how === "複数" || r.how === "類似が複数") && r.cands?.length);
+          if (!open.length) continue;
+          const userNo = k.split("|")[0];
+          const billedHere = billed.get(`${nfkc(grp[0].name).replace(/\s/g, "")}|${ym}`);
+          const next = byUserYm.get(`${userNo}|${nextYm(ym)}`) ?? [];
+          for (const r of open) {
+            if (billedHere && r.cands.some((t) => billedHere.has(t))) continue;
+            const used = grp.filter((x) => x.tais).map((x) => x.tais);
+            const pool = next.filter((n) => linkBack(n, r)).map((n) => n.tais);
+            for (const t of used) { const i = pool.indexOf(t); if (i >= 0) pool.splice(i, 1); }
+            const opts = [...new Set(pool)];
+            const sameOpen = open.filter((o) => o.item === r.item && !o.tais).length;
+            if (opts.length === 1 || (opts.length > 1 && pool.length === sameOpen)) {
+              const t = [...pool].sort()[0];
+              r.tais = t; r.how = `${r.how} → 翌月の同じ用具の TAIS を引き継ぎ (請求の出力で特定した台の続き)`; r.mrow = masterRowOf2(t);
+            }
+          }
+        }
+      }
+    }
   }
   // 請求でも前月引き継ぎでも 最終的に決まらなかった行だけを警告に出す
   if (DISAMBIGUATE_BY_BILLING) for (const r of rows) {
