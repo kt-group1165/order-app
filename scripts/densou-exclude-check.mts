@@ -1,0 +1,68 @@
+/**
+ * check:densou-exclude — 福祉用具の伝送で「外す人・止める理由」の判定 (lib/kokuho-densou/densou-exclude.ts) を確かめる (DB 不要・2026-11-14 群1)
+ *
+ *   npm run check:densou-exclude
+ *
+ * 検査:
+ *   ・正常な行 (1 割・2 割・3 割・公費あり・公費単独・CM 頭打ち) → 1 人も外れない   ★ 逆向きの対照 (判定が広すぎて全員外す実装でも PASS しないように)
+ *   ・理由ごとに わざと壊した行 → その理由 1 つで外れる                             ★ 負のコントロール
+ *   ・computeFukuyoguAmounts の benefitRateDefaulted が 未設定・読めない給付率で true / 正しい給付率と公費単独で false
+ *   ・価格改定履歴の状態 loading / failed → 止める / ok → 止めない
+ * ⚠ 「外した人が 7111 から抜ける」は buildFukuyoguDensou に組み込んだあとに ここへ足す (組み込みは 着手前の人数測定のあと)。
+ */
+import { densouExcludeReasons, densouLoadBlockers, type DensouExcludeInput } from "../lib/kokuho-densou/densou-exclude";
+import { computeFukuyoguAmounts } from "../lib/kokuho-densou/fukuyogu-amounts";
+
+let pass = 0;
+const fails: string[] = [];
+const eq = (label: string, got: unknown, want: unknown) => {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g === w) { pass++; console.log(`  OK  ${label}`); } else { fails.push(`${label}\n      期待 ${w}\n      実際 ${g}`); console.log(`  NG  ${label}`); }
+};
+
+console.log("══ computeFukuyoguAmounts の benefitRateDefaulted ══");
+const amt = (raw: string | null, insured = "0000123456") => computeFukuyoguAmounts({ benefitRateRaw: raw, insuredNumber: insured, totalUnits: 1000, kohi: null, cmUnits: null });
+eq("給付率 90 → false", amt("90").benefitRateDefaulted, false);
+eq("給付率 80 → false", amt("80").benefitRateDefaulted, false);
+eq("給付率 70 → false", amt("70").benefitRateDefaulted, false);
+eq("★ 給付率 未設定 → true (1 割で計算)", [amt(null).benefitRateDefaulted, amt(null).benefitRate], [true, 90]);
+eq("★ 給付率 空文字 → true", amt("").benefitRateDefaulted, true);
+eq("★ 給付率 読めない (\"二割\") → true", amt("二割").benefitRateDefaulted, true);
+eq("★ 給付率 0 → true (0 は読めない扱いで 90 になる)", amt("0").benefitRateDefaulted, true);
+eq("公費単独 (H) は 給付率が空でも false (給付率を使わない)", amt(null, "H123456789").benefitRateDefaulted, false);
+
+console.log("══ densouExcludeReasons — 正常な行は 1 人も外れない (逆向きの対照) ══");
+const ok: Record<string, DensouExcludeInput> = {
+  "1 割・公費なし": { totalUnits: 1000, limitTargetUnits: 1000, benefitRateDefaulted: false },
+  "limitTargetUnits 省略": { totalUnits: 1000, benefitRateDefaulted: false },
+  "CM 頭打ち (実績 1200 → 請求 1000)": { totalUnits: 1000, limitTargetUnits: 1200, benefitRateDefaulted: false },
+  "公費 (生保) 月全体": { totalUnits: 1000, limitTargetUnits: 1000, kohiHobetsu: "12", kohiUnits: 1000, benefitRateDefaulted: false },
+  "公費 月途中 (公費 400 / 保険 1000)": { totalUnits: 1000, limitTargetUnits: 1000, kohiHobetsu: "12", kohiUnits: 400, benefitRateDefaulted: false },
+  "公費単独 (H)・給付率なし": { totalUnits: 1000, kohiTandoku: true, kohiHobetsu: "12", kohiUnits: 1000, benefitRateDefaulted: true },
+  "公費なしで kohiUnits が大きい値でも (公費が無ければ見ない)": { totalUnits: 1000, kohiUnits: 5000, benefitRateDefaulted: false },
+};
+for (const [k, r] of Object.entries(ok)) eq(`外れない: ${k}`, densouExcludeReasons(r), []);
+// 実際の金額計算の結果からも 外れないこと (正しい給付率)
+for (const raw of ["90", "80", "70"]) {
+  const a = amt(raw);
+  eq(`外れない: computeFukuyoguAmounts(給付率 ${raw}) の結果そのまま`, densouExcludeReasons({ totalUnits: a.billedUnits, limitTargetUnits: a.actualUnits, kohiTandoku: a.kohiTandoku, kohiHobetsu: a.kohiHobetsu, kohiUnits: a.kohiUnits, benefitRateDefaulted: a.benefitRateDefaulted }), []);
+}
+
+console.log("══ densouExcludeReasons — わざと壊した行は その理由で外れる (負のコントロール) ══");
+{
+  const a = amt(null);
+  eq("★ ① 給付率 未設定 (computeFukuyoguAmounts の結果) → benefit_rate_defaulted", densouExcludeReasons({ totalUnits: a.billedUnits, limitTargetUnits: a.actualUnits, kohiTandoku: a.kohiTandoku, kohiHobetsu: a.kohiHobetsu, kohiUnits: a.kohiUnits, benefitRateDefaulted: a.benefitRateDefaulted }), ["benefit_rate_defaulted"]);
+}
+eq("★ ③ 公費対象 1200 > 保険 1000 → kohi_units_over", densouExcludeReasons({ totalUnits: 1000, limitTargetUnits: 1000, kohiHobetsu: "12", kohiUnits: 1200, benefitRateDefaulted: false }), ["kohi_units_over"]);
+eq("★ ③ 公費単独でも 公費対象 > 保険 → kohi_units_over", densouExcludeReasons({ totalUnits: 1000, kohiTandoku: true, kohiUnits: 1001, benefitRateDefaulted: false }), ["kohi_units_over"]);
+eq("★ ④ 請求 1000 > 実績 900 → billed_over_actual", densouExcludeReasons({ totalUnits: 1000, limitTargetUnits: 900, benefitRateDefaulted: false }), ["billed_over_actual"]);
+eq("★ 境界: 請求 = 実績 は外れない / 1 単位超で外れる", [densouExcludeReasons({ totalUnits: 900, limitTargetUnits: 900, benefitRateDefaulted: false }), densouExcludeReasons({ totalUnits: 901, limitTargetUnits: 900, benefitRateDefaulted: false })], [[], ["billed_over_actual"]]);
+eq("★ 理由が重なれば 全部出す", densouExcludeReasons({ totalUnits: 1000, limitTargetUnits: 900, kohiHobetsu: "12", kohiUnits: 1100, benefitRateDefaulted: true }), ["benefit_rate_defaulted", "kohi_units_over", "billed_over_actual"]);
+
+console.log("══ densouLoadBlockers (価格改定の履歴) ══");
+eq("ok → 止めない", densouLoadBlockers({ priceHistory: "ok" }).length, 0);
+eq("★ loading → 止める (読み終わる前の出力)", densouLoadBlockers({ priceHistory: "loading" }).length, 1);
+eq("★ failed → 止める (読込失敗)", densouLoadBlockers({ priceHistory: "failed" }).length, 1);
+
+console.log(`\n${fails.length ? "✗" : "✓"} check:densou-exclude ${fails.length ? "FAIL" : "PASS"} (OK ${pass} / NG ${fails.length})`);
+if (fails.length) { for (const f of fails) console.error(`  ✗ ${f}`); process.exit(1); }

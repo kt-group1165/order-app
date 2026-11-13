@@ -173,6 +173,12 @@ export interface FukuyoguAmounts {
    * null = 月途中でない (明細は 公費対象日数 = 貸与日数 / 公費対象単位 = その行の単位 で出す)
    */
   kohiPieces: KohiPiece[][] | null;
+  /**
+   * 給付率が未設定・読めないため 既定の 90 (1 割負担) で計算した (公費単独は false)。
+   * ★ 2026-11-14 群1: 伝送では この人を外す (lib/kokuho-densou/densou-exclude.ts)。2・3 割の人を 1 割で請求しても
+   *   返戻にならず差額が入らないだけ = 気づけないため
+   */
+  benefitRateDefaulted: boolean;
   /** 利用者名を付けずに返す注意書き (呼出側で前置する) */
   warnings: string[];
 }
@@ -364,6 +370,7 @@ export function computeFukuyoguAmounts(input: FukuyoguAmountInput): FukuyoguAmou
       kohiAmount: totalCost - honnin,
       kohiHobetsu: input.kohi?.hobetsu ?? "12",
       kohiTandoku: true,
+      benefitRateDefaulted: false,
       kohiUnits: cap.billedUnits,
       kohiTargetCost: totalCost,
       kohiHonninFutan: honnin,
@@ -386,7 +393,7 @@ export function computeFukuyoguAmounts(input: FukuyoguAmountInput): FukuyoguAmou
   const copayRate = Math.max(0, 100 - benefitRate) / 100;
   const insuranceAmount = Math.floor((totalCost * benefitRate) / 100);
   const rawUserAmount = totalCost - insuranceAmount;
-  const base = { benefitRate, copayRate, ...unitsPart, totalCost, insuranceAmount, kohiTandoku: false };
+  const base = { benefitRate, copayRate, ...unitsPart, totalCost, insuranceAmount, kohiTandoku: false, benefitRateDefaulted: !(Number.isFinite(parsed) && parsed > 0) };
   const noKohiResult = (partial: boolean, mode: KohiMonthMode | null, defaulted: boolean): FukuyoguAmounts => ({
     ...base,
     userAmount: rawUserAmount,
