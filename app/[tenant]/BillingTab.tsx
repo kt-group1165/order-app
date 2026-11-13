@@ -1691,6 +1691,60 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     ? allRows.filter((r) => r.type === "rebill" || !(autoLateClients.has(r.client.id) || lateFlags.has(r.client.id)))
     : allRows;
 
+  // ★ 2026-11-13 高速化: 介護請求の一覧 (約 1,150 行) は 行を React.memo の部品 (BillingClientRow) にし、
+  //   データが届くたびに全行を描き直さない。行ごとの値はここで 1 回だけ作る (旧: 描画のたびに行ごとに 認定の選択・単位の合計)。
+  //   操作は 1 つの安定したオブジェクト (rowActions) で渡す。中身は描画のあとに最新の関数へ差し替える (rowActionsImpl)
+  const unitsByClient = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const { client, items } of clientGroups) out.set(client.id, items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0));
+    return out;
+    // getUnits は毎回作り直す関数なので、中で読む state を並べる
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientGroups, unitOverrides, equipmentByCode, priceHistoryAll, billingMonth, hospByClient, pauses, prorations]);
+  const rowCertInfo = useMemo(() => {
+    const out = new Map<string, { isApplying: boolean; careOfficeName: string }>();
+    const monthStart = `${billingMonth}-01`;
+    const monthEnd = monthEndYmd(y, m);
+    for (const { client } of clientGroups) {
+      // 認定の選び方は 月遅れ自動判定・伝送と同じ (被保番が一致する認定を優先)
+      const insRec = pickCertForMonth((insByClient.get(client.id) ?? []), monthStart, monthEnd,
+        { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
+      const careOfficeId = client.care_office_id ?? insRec?.care_office_id ?? null;
+      out.set(client.id, {
+        isApplying: insRec?.certification_status === "申請中",
+        careOfficeName: careOfficeId ? careOfficeById.get(careOfficeId)?.name ?? "" : client.care_manager_org ?? "",
+      });
+    }
+    return out;
+  }, [clientGroups, insByClient, careOfficeById, billingMonth, y, m]);
+  const rowActionsImpl = useRef<BillingRowActions | null>(null);
+  useEffect(() => {
+    rowActionsImpl.current = {
+      toggleDetail: (client, items) => setDetailClient((cur) => (cur?.client.id === client.id ? null : { client, items })),
+      toggleSelect: (clientId) => setSelectedClientIds((prev) => { const s = new Set(prev); if (s.has(clientId)) s.delete(clientId); else s.add(clientId); return s; }),
+      openExceptionGrant,
+      kohiModeChange: (clientId, value) => { void handleKohiModeChange(clientId, value); },
+      openRentalGrid: (client, items) => setRentalGridClient({ client, items }),
+      openInvoice: (client) => setInvoiceClient(client),
+      cmCommit: (clientId, value) => { void handleCmUnitsCommit(clientId, value); },
+      toggleLate: toggleLateFlag,
+      setRebill: (clientId, value) => setRebillLocal(clientId, billingMonth, value),
+      toggleKago: (clientId) => toggleRebillFlag(clientId, billingMonth, "過誤"),
+    };
+  });
+  const rowActions = useMemo<BillingRowActions>(() => ({
+    toggleDetail: (c, i) => rowActionsImpl.current?.toggleDetail(c, i),
+    toggleSelect: (id) => rowActionsImpl.current?.toggleSelect(id),
+    openExceptionGrant: (id, g) => rowActionsImpl.current?.openExceptionGrant(id, g),
+    kohiModeChange: (id, v) => rowActionsImpl.current?.kohiModeChange(id, v),
+    openRentalGrid: (c, i) => rowActionsImpl.current?.openRentalGrid(c, i),
+    openInvoice: (c) => rowActionsImpl.current?.openInvoice(c),
+    cmCommit: (id, v) => rowActionsImpl.current?.cmCommit(id, v),
+    toggleLate: (id) => rowActionsImpl.current?.toggleLate(id),
+    setRebill: (id, v) => rowActionsImpl.current?.setRebill(id, v),
+    toggleKago: (id) => rowActionsImpl.current?.toggleKago(id),
+  }), []);
+
   if (subTab === "sales") {
     return (
       <div className="flex flex-col h-full bg-white text-sm">
@@ -1951,167 +2005,38 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                   );
                 }
                 const { client, items } = row;
-                const isAutoLate = autoLateClients.has(client.id);
-                const lateFlag = lateFlags.get(client.id);
-                const isLate = isAutoLate || !!lateFlag;
-                const flag = rebillFlags.get(`${client.id}-${billingMonth}`);
-                const isSelected = selectedClientIds.has(client.id);
-                const isDetail = detailClient?.client.id === client.id;
-                // 申請中バッジ
-                const monthStart = `${billingMonth}-01`;
-                const monthEnd = monthEndYmd(y, m);
-                // 認定の選び方は 月遅れ自動判定・伝送と同じ (被保番が一致する認定を優先)
-                const insRec = pickCertForMonth((insByClient.get(client.id) ?? []), monthStart, monthEnd,
-                  { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
-                const isApplying = insRec?.certification_status === "申請中";
-                const isNoCareLevel = noCareLevelClients.has(client.id);
-                // サービス事業所名 (居宅介護支援事業所)
-                const careOfficeId = client.care_office_id ?? insRec?.care_office_id ?? null;
-                const careOfficeName = careOfficeId
-                  ? careOfficeById.get(careOfficeId)?.name ?? ""
-                  : client.care_manager_org ?? "";
-                // 提出月 = lateFlag.month があればそれ、無ければ billingMonth
-                const submitMonth = lateFlag?.month ?? billingMonth;
-                const [sy, sm] = submitMonth.split("-").map(Number);
+                const ci = rowCertInfo.get(client.id);
+                const kp = kohiPartialByClient.get(client.id);
                 return (
-                  <div
+                  <BillingClientRow
                     key={client.id}
-                    onClick={() => setDetailClient(isDetail ? null : { client, items })}
-                    className={`grid min-w-max grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
-                      isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : idx % 2 === 0 ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
-                    }`}
-                  >
-                    <div className="px-1 py-2 flex items-center justify-center" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => setSelectedClientIds(prev => {
-                          const s = new Set(prev); if (s.has(client.id)) s.delete(client.id); else s.add(client.id); return s;
-                        })}
-                        className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
-                          isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
-                        }`}
-                      >
-                        {isSelected && <span className="text-white text-[8px] font-bold leading-none">✓</span>}
-                      </button>
-                    </div>
-                    <div className="px-1 py-2 border-l border-gray-100 text-center">
-                      {isApplying && (
-                        <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">申請中</span>
-                      )}
-                      {isNoCareLevel && !isApplying && (
-                        <span
-                          className="inline-block bg-red-100 text-red-800 border border-red-300 font-semibold text-[10px] px-1 py-0.5 rounded leading-tight"
-                          title="当月に有効な認定が無い等で要介護度をコードにできないため、伝送から外して月遅れ扱いにしています (そのまま出すと確実に返戻)。利用者タブで認定を登録してください"
-                        >要介護度なし</span>
-                      )}
-                    </div>
-                    <div className="px-2 py-2 border-l border-gray-100">
-                      {!isLate && <span className="text-red-600 font-semibold">国保対象</span>}
-                    </div>
-                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{sy-2018}/{sm}</div>
-                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{y-2018}/{m}</div>
-                    <div className="px-2 py-2 border-l border-gray-100 text-gray-700 truncate" title={careOfficeName}>{careOfficeName || "—"}</div>
-                    <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-700">{client.user_number ?? "—"}</div>
-                    <div className="px-2 py-2 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-1.5 min-w-0">
-                      <span className="flex-1 truncate">{client.name}</span>
-                      {(() => {
-                        const ex = exceptionByClient.get(client.id);
-                        if (!ex) return null;
-                        // 押したら 赤 (記録なし/切れ) の区分を優先して開く
-                        const target = ex.items.find((i) => i.level === "danger") ?? ex.items[0];
-                        return (
-                          <button
-                            onClick={e => { e.stopPropagation(); openExceptionGrant(client.id, target.group); }}
-                            title={`${ex.items.map(describeJudgement).join("\n")}\n\n押すと利用者タブの例外給付 (${target.group}) の入力を開きます`}
-                            className={`shrink-0 text-[10px] border rounded px-1.5 py-0.5 font-semibold transition-colors ${ex.level === "danger" ? "border-red-400 text-red-700 bg-red-50 hover:bg-red-100" : "border-orange-400 text-orange-700 bg-orange-50 hover:bg-orange-100"}`}
-                          >例外給付{ex.level === "danger" ? (ex.items.some((i) => i.kind === "missing") ? "なし" : "切れ") : "期限"}</button>
-                        );
-                      })()}
-                      {(() => {
-                        // ★ 月途中の公費 (生保): ケアマネの方針で 全部利用者負担 / 日割り / 半月 を選ぶ。未選択 = 既定 (赤)
-                        const kp = kohiPartialByClient.get(client.id);
-                        if (!kp) return null;
-                        const mode = kohiModes.get(client.id) ?? null;
-                        const range = `${kp.firstDay ?? "?"}〜${kp.lastDay ?? "?"}`;
-                        return (
-                          <select
-                            value={mode ?? ""}
-                            disabled={!kohiModesAvailable || kohiModeSavingId === client.id}
-                            onClick={e => e.stopPropagation()}
-                            onChange={e => handleKohiModeChange(client.id, e.target.value)}
-                            title={!kohiModesAvailable
-                              ? (kohiModesNotice ?? "")
-                              : `公費 (法別${kp.kohi.hobetsu}) の期間が月の一部です (${range})。ケアマネの方針で選んでください。\n未選択のときは「${KOHI_MONTH_MODE_LABEL[KOHI_MONTH_MODE_DEFAULT]}」で請求します`}
-                            className={`shrink-0 text-[10px] border rounded px-1 py-0.5 font-semibold bg-white disabled:bg-gray-100 ${mode ? "border-sky-400 text-sky-700" : "border-red-400 text-red-700 bg-red-50"}`}
-                          >
-                            <option value="">公費 月途中: 未選択</option>
-                            {KOHI_MONTH_MODES.map((md) => <option key={md} value={md}>公費 {KOHI_MONTH_MODE_LABEL[md]}</option>)}
-                          </select>
-                        );
-                      })()}
-                      <button
-                        onClick={e => { e.stopPropagation(); setRentalGridClient({ client, items }); }}
-                        className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-                      >提供表</button>
-                      <button
-                        onClick={e => { e.stopPropagation(); setInvoiceClient(client); }}
-                        className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
-                      >請求書</button>
-                    </div>
-                    <div className="px-1 py-1 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
-                      {(() => {
-                        const cm = cmUnits.get(client.id);
-                        const actual = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
-                        const over = cm != null && cm < actual ? actual - cm : 0;
-                        return (
-                          <>
-                            <input
-                              key={`${client.id}-${billingMonth}-${cm ?? ""}`}
-                              type="text"
-                              inputMode="numeric"
-                              defaultValue={cm != null ? String(cm) : ""}
-                              disabled={!cmUnitsAvailable || cmSavingId === client.id}
-                              placeholder={cmUnitsAvailable ? "" : "未適用"}
-                              onBlur={e => handleCmUnitsCommit(client.id, e.currentTarget.value)}
-                              onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                              title={!cmUnitsAvailable ? (cmUnitsNotice ?? "") : over > 0 ? `CM 指示単位数で頭打ち: 実績 ${actual} 単位 → 保険請求 ${cm} 単位 / 超過 ${over} 単位 (${(over * 10).toLocaleString()}円) は保険外 (全額自己負担)` : "空欄 = 月次情報 (給付管理) 未着 → 伝送から外す (月遅れ扱い)。その月に 1 名も入力が無いときは実績で請求"}
-                              className={`w-full text-[11px] text-right font-mono border rounded px-1 py-0.5 bg-white disabled:bg-gray-100 ${over > 0 ? "border-orange-400 text-orange-700 font-semibold" : "border-gray-300 text-gray-700"}`}
-                            />
-                            {over > 0 && <div className="text-[9px] text-orange-700 leading-tight mt-0.5">頭打ち −{over.toLocaleString()}</div>}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
-                      <select
-                        value={isLate ? "月遅" : ""}
-                        disabled={isAutoLate}
-                        onChange={() => toggleLateFlag(client.id)}
-                        title={isAutoLate ? "保険証が申請中のため自動で月遅れ扱い(解除不可)" : "月遅れ"}
-                        className={`w-full text-[11px] border rounded px-0.5 py-0.5 bg-white disabled:bg-yellow-50 disabled:text-yellow-700 disabled:border-yellow-300 ${isLate ? "border-yellow-400 text-yellow-700 font-semibold" : "border-gray-300 text-gray-500"}`}
-                      >
-                        <option value=""></option>
-                        <option value="月遅">月遅</option>
-                      </select>
-                    </div>
-                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
-                      <select
-                        value={flag?.flag_type === "返戻" ? "返戻" : ""}
-                        onChange={e => setRebillLocal(client.id, billingMonth, e.target.value === "返戻" ? "返戻" : null)}
-                        className={`w-full text-[11px] border rounded px-1 py-0.5 bg-white ${flag?.flag_type === "返戻" ? "border-red-400 text-red-600 font-semibold" : "border-gray-300 text-gray-500"}`}
-                      >
-                        <option value=""></option>
-                        <option value="返戻">返戻</option>
-                      </select>
-                    </div>
-                    <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); toggleRebillFlag(client.id, billingMonth, "過誤"); }}>
-                      <span
-                        className={`inline-flex w-5 h-5 rounded-full border-2 items-center justify-center text-[10px] font-bold cursor-pointer transition-colors ${
-                          flag?.flag_type === "過誤" ? "border-red-500 bg-red-500 text-white" : "border-gray-300 text-transparent hover:border-red-300"
-                        }`}
-                        title="過誤"
-                      >○</span>
-                    </div>
-                  </div>
+                    client={client}
+                    items={items}
+                    even={idx % 2 === 0}
+                    y={y}
+                    m={m}
+                    billingMonth={billingMonth}
+                    isAutoLate={autoLateClients.has(client.id)}
+                    lateFlagMonth={lateFlags.get(client.id)?.month ?? null}
+                    hasLateFlag={lateFlags.has(client.id)}
+                    rebillFlagType={rebillFlags.get(`${client.id}-${billingMonth}`)?.flag_type ?? null}
+                    isSelected={selectedClientIds.has(client.id)}
+                    isDetail={detailClient?.client.id === client.id}
+                    isApplying={ci?.isApplying ?? false}
+                    isNoCareLevel={noCareLevelClients.has(client.id)}
+                    careOfficeName={ci?.careOfficeName ?? ""}
+                    exception={exceptionByClient.get(client.id) ?? null}
+                    kohiPartial={kp ?? null}
+                    kohiMode={kp ? kohiModes.get(client.id) ?? null : null}
+                    kohiModeDisabled={!kohiModesAvailable || kohiModeSavingId === client.id}
+                    kohiModesNotice={kohiModesAvailable ? null : (kohiModesNotice ?? "")}
+                    cmUnits={cmUnits.get(client.id) ?? null}
+                    actualUnits={unitsByClient.get(client.id) ?? 0}
+                    cmDisabled={!cmUnitsAvailable || cmSavingId === client.id}
+                    cmUnitsAvailable={cmUnitsAvailable}
+                    cmUnitsNotice={cmUnitsAvailable ? null : cmUnitsNotice}
+                    actions={rowActions}
+                  />
                 );
               })}
             </div>
@@ -2125,11 +2050,9 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               ]);
               const billingGroupsForTotal = clientGroups.filter(g => !lateClientIds.has(g.client.id));
               const totalCount = clientGroups.length;
-              const totalUnits = clientGroups.reduce((s, { client, items }) =>
-                s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
+              const totalUnits = clientGroups.reduce((s, { client }) => s + (unitsByClient.get(client.id) ?? 0), 0);
               const kokuhoCount = billingGroupsForTotal.length;
-              const kokuhoUnits = billingGroupsForTotal.reduce((s, { client, items }) =>
-                s + items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0), 0);
+              const kokuhoUnits = billingGroupsForTotal.reduce((s, { client }) => s + (unitsByClient.get(client.id) ?? 0), 0);
               // 単位単価は地域加算で違うが、概算 10 円/単位 (国保連伝送と同じ)
               const UNIT_PRICE = 10;
               const insuranceUnitAmount = kokuhoUnits * UNIT_PRICE;
@@ -2138,8 +2061,8 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
               let copayClaim = 0;
               let outsideTotal = 0;
               let cappedCount = 0;
-              for (const { client, items } of billingGroupsForTotal) {
-                const actualUnits = items.reduce((ss, item) => ss + getUnits(item, client.id) * item.quantity, 0);
+              for (const { client } of billingGroupsForTotal) {
+                const actualUnits = unitsByClient.get(client.id) ?? 0;
                 // ★ CM 指示単位数で頭打ち (超過分は保険外)
                 const cap = capFukuyoguUnits(actualUnits, cmUnits.get(client.id) ?? null);
                 const subUnits = cap.billedUnits;
@@ -2961,6 +2884,171 @@ type RentalGridCalc = {
   kind: "full" | "half" | "daily" | "none";
   label: string;
 };
+
+// ─── BillingClientRow (介護請求の一覧の 1 行。React.memo) ─────────────────────────────
+// 2026-11-13: 元は一覧の map の中に直接書いていた JSX。中身は変えず、親で作った値を props で受ける形にした。
+type BillingRowActions = {
+  toggleDetail: (client: BillingClient, items: OrderItem[]) => void;
+  toggleSelect: (clientId: string) => void;
+  openExceptionGrant: (clientId: string, group: string) => void;
+  kohiModeChange: (clientId: string, value: string) => void;
+  openRentalGrid: (client: BillingClient, items: OrderItem[]) => void;
+  openInvoice: (client: BillingClient) => void;
+  cmCommit: (clientId: string, value: string) => void;
+  toggleLate: (clientId: string) => void;
+  setRebill: (clientId: string, value: "返戻" | null) => void;
+  toggleKago: (clientId: string) => void;
+};
+
+const BillingClientRow = memo(function BillingClientRow({
+  client, items, even, y, m, billingMonth,
+  isAutoLate, lateFlagMonth, hasLateFlag, rebillFlagType, isSelected, isDetail, isApplying, isNoCareLevel, careOfficeName,
+  exception, kohiPartial, kohiMode, kohiModeDisabled, kohiModesNotice,
+  cmUnits: cm, actualUnits: actual, cmDisabled, cmUnitsAvailable, cmUnitsNotice, actions,
+}: {
+  client: BillingClient; items: OrderItem[]; even: boolean; y: number; m: number; billingMonth: string;
+  isAutoLate: boolean; lateFlagMonth: string | null; hasLateFlag: boolean; rebillFlagType: string | null;
+  isSelected: boolean; isDetail: boolean; isApplying: boolean; isNoCareLevel: boolean; careOfficeName: string;
+  exception: { level: ExceptionAlertLevel; items: ExceptionJudgement[] } | null;
+  kohiPartial: { kohi: FukuyoguKohi; firstDay: string | null; lastDay: string | null } | null;
+  kohiMode: KohiMonthMode | null; kohiModeDisabled: boolean; kohiModesNotice: string | null;
+  cmUnits: number | null; actualUnits: number; cmDisabled: boolean; cmUnitsAvailable: boolean; cmUnitsNotice: string | null;
+  actions: BillingRowActions;
+}) {
+  const isLate = isAutoLate || hasLateFlag;
+  // 提出月 = lateFlag.month があればそれ、無ければ billingMonth
+  const submitMonth = lateFlagMonth ?? billingMonth;
+  const [sy, sm] = submitMonth.split("-").map(Number);
+  const over = cm != null && cm < actual ? actual - cm : 0;
+  return (
+    <div
+      onClick={() => actions.toggleDetail(client, items)}
+      className={`grid min-w-max grid-cols-[32px_64px_72px_60px_60px_180px_104px_minmax(160px,360px)_84px_64px_72px_44px] border-b border-gray-100 text-xs cursor-pointer transition-colors ${
+        isDetail ? "bg-blue-100" : isLate ? "bg-yellow-50" : isSelected ? "bg-indigo-50" : even ? "bg-white hover:bg-gray-50" : "bg-gray-50/50 hover:bg-gray-100"
+      }`}
+    >
+      <div className="px-1 py-2 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={() => actions.toggleSelect(client.id)}
+          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+            isSelected ? "border-indigo-500 bg-indigo-500" : "border-gray-400 bg-white"
+          }`}
+        >
+          {isSelected && <span className="text-white text-[8px] font-bold leading-none">✓</span>}
+        </button>
+      </div>
+      <div className="px-1 py-2 border-l border-gray-100 text-center">
+        {isApplying && (
+          <span className="inline-block bg-yellow-200 text-yellow-900 font-semibold text-[10px] px-1.5 py-0.5 rounded">申請中</span>
+        )}
+        {isNoCareLevel && !isApplying && (
+          <span
+            className="inline-block bg-red-100 text-red-800 border border-red-300 font-semibold text-[10px] px-1 py-0.5 rounded leading-tight"
+            title="当月に有効な認定が無い等で要介護度をコードにできないため、伝送から外して月遅れ扱いにしています (そのまま出すと確実に返戻)。利用者タブで認定を登録してください"
+          >要介護度なし</span>
+        )}
+      </div>
+      <div className="px-2 py-2 border-l border-gray-100">
+        {!isLate && <span className="text-red-600 font-semibold">国保対象</span>}
+      </div>
+      <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{sy-2018}/{sm}</div>
+      <div className="px-2 py-2 border-l border-gray-100 text-gray-700">R{y-2018}/{m}</div>
+      <div className="px-2 py-2 border-l border-gray-100 text-gray-700 truncate" title={careOfficeName}>{careOfficeName || "—"}</div>
+      <div className="px-2 py-2 border-l border-gray-100 font-mono text-gray-700">{client.user_number ?? "—"}</div>
+      <div className="px-2 py-2 border-l border-gray-100 font-medium text-gray-800 flex items-center gap-1.5 min-w-0">
+        <span className="flex-1 truncate">{client.name}</span>
+        {(() => {
+          const ex = exception;
+          if (!ex) return null;
+          // 押したら 赤 (記録なし/切れ) の区分を優先して開く
+          const target = ex.items.find((i) => i.level === "danger") ?? ex.items[0];
+          return (
+            <button
+              onClick={e => { e.stopPropagation(); actions.openExceptionGrant(client.id, target.group); }}
+              title={`${ex.items.map(describeJudgement).join("\n")}\n\n押すと利用者タブの例外給付 (${target.group}) の入力を開きます`}
+              className={`shrink-0 text-[10px] border rounded px-1.5 py-0.5 font-semibold transition-colors ${ex.level === "danger" ? "border-red-400 text-red-700 bg-red-50 hover:bg-red-100" : "border-orange-400 text-orange-700 bg-orange-50 hover:bg-orange-100"}`}
+            >例外給付{ex.level === "danger" ? (ex.items.some((i) => i.kind === "missing") ? "なし" : "切れ") : "期限"}</button>
+          );
+        })()}
+        {(() => {
+          // ★ 月途中の公費 (生保): ケアマネの方針で 全部利用者負担 / 日割り / 半月 を選ぶ。未選択 = 既定 (赤)
+          const kp = kohiPartial;
+          if (!kp) return null;
+          const mode = kohiMode;
+          const range = `${kp.firstDay ?? "?"}〜${kp.lastDay ?? "?"}`;
+          return (
+            <select
+              value={mode ?? ""}
+              disabled={kohiModeDisabled}
+              onClick={e => e.stopPropagation()}
+              onChange={e => actions.kohiModeChange(client.id, e.target.value)}
+              title={kohiModesNotice != null
+                ? kohiModesNotice
+                : `公費 (法別${kp.kohi.hobetsu}) の期間が月の一部です (${range})。ケアマネの方針で選んでください。\n未選択のときは「${KOHI_MONTH_MODE_LABEL[KOHI_MONTH_MODE_DEFAULT]}」で請求します`}
+              className={`shrink-0 text-[10px] border rounded px-1 py-0.5 font-semibold bg-white disabled:bg-gray-100 ${mode ? "border-sky-400 text-sky-700" : "border-red-400 text-red-700 bg-red-50"}`}
+            >
+              <option value="">公費 月途中: 未選択</option>
+              {KOHI_MONTH_MODES.map((md) => <option key={md} value={md}>公費 {KOHI_MONTH_MODE_LABEL[md]}</option>)}
+            </select>
+          );
+        })()}
+        <button
+          onClick={e => { e.stopPropagation(); actions.openRentalGrid(client, items); }}
+          className="shrink-0 text-[10px] border border-gray-300 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+        >提供表</button>
+        <button
+          onClick={e => { e.stopPropagation(); actions.openInvoice(client); }}
+          className="shrink-0 text-[10px] border border-emerald-400 rounded px-1.5 py-0.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+        >請求書</button>
+      </div>
+      <div className="px-1 py-1 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+        <input
+          key={`${client.id}-${billingMonth}-${cm ?? ""}`}
+          type="text"
+          inputMode="numeric"
+          defaultValue={cm != null ? String(cm) : ""}
+          disabled={cmDisabled}
+          placeholder={cmUnitsAvailable ? "" : "未適用"}
+          onBlur={e => actions.cmCommit(client.id, e.currentTarget.value)}
+          onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+          title={!cmUnitsAvailable ? (cmUnitsNotice ?? "") : over > 0 ? `CM 指示単位数で頭打ち: 実績 ${actual} 単位 → 保険請求 ${cm} 単位 / 超過 ${over} 単位 (${(over * 10).toLocaleString()}円) は保険外 (全額自己負担)` : "空欄 = 月次情報 (給付管理) 未着 → 伝送から外す (月遅れ扱い)。その月に 1 名も入力が無いときは実績で請求"}
+          className={`w-full text-[11px] text-right font-mono border rounded px-1 py-0.5 bg-white disabled:bg-gray-100 ${over > 0 ? "border-orange-400 text-orange-700 font-semibold" : "border-gray-300 text-gray-700"}`}
+        />
+        {over > 0 && <div className="text-[9px] text-orange-700 leading-tight mt-0.5">頭打ち −{over.toLocaleString()}</div>}
+      </div>
+      <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+        <select
+          value={isLate ? "月遅" : ""}
+          disabled={isAutoLate}
+          onChange={() => actions.toggleLate(client.id)}
+          title={isAutoLate ? "保険証が申請中のため自動で月遅れ扱い(解除不可)" : "月遅れ"}
+          className={`w-full text-[11px] border rounded px-0.5 py-0.5 bg-white disabled:bg-yellow-50 disabled:text-yellow-700 disabled:border-yellow-300 ${isLate ? "border-yellow-400 text-yellow-700 font-semibold" : "border-gray-300 text-gray-500"}`}
+        >
+          <option value=""></option>
+          <option value="月遅">月遅</option>
+        </select>
+      </div>
+      <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+        <select
+          value={rebillFlagType === "返戻" ? "返戻" : ""}
+          onChange={e => actions.setRebill(client.id, e.target.value === "返戻" ? "返戻" : null)}
+          className={`w-full text-[11px] border rounded px-1 py-0.5 bg-white ${rebillFlagType === "返戻" ? "border-red-400 text-red-600 font-semibold" : "border-gray-300 text-gray-500"}`}
+        >
+          <option value=""></option>
+          <option value="返戻">返戻</option>
+        </select>
+      </div>
+      <div className="px-1 py-2 border-l border-gray-100 text-center" onClick={e => { e.stopPropagation(); actions.toggleKago(client.id); }}>
+        <span
+          className={`inline-flex w-5 h-5 rounded-full border-2 items-center justify-center text-[10px] font-bold cursor-pointer transition-colors ${
+            rebillFlagType === "過誤" ? "border-red-500 bg-red-500 text-white" : "border-gray-300 text-transparent hover:border-red-300"
+          }`}
+          title="過誤"
+        >○</span>
+      </div>
+    </div>
+  );
+});
 
 // ─── RentalGridModal ──────────────────────────────────────────────────────────
 
