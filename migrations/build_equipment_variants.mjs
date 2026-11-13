@@ -12,7 +12,7 @@
  *   B まとめる … 価格が違うが、発注明細がある行は全部同じ価格 (= 価格が違う行は 1 度も使われていない)。子の価格は使わなくなる
  *   M 判断が要る (書かない) … 発注明細がある行どうしで価格が違う / 種目が違う (徘徊感知機器 の表記違いは同じとみなす)
  *   ★ A・B とも 既存の発注明細の請求額は変わらない (使われている行の価格 = 親の価格)。
- * 書くのは 子の parent_product_code と variant_label だけ (親・価格・TAIS は触らない)。
+ * 書くのは 子の parent_product_code と variant_label だけ (親・価格は触らない)。TAIS のハイフンが化けた子 (「00167?000197」) だけは tais_code を親の値に直す。
  *   書く前に 子の今の値を migrations/_backup_equipment_variants_<時刻>.json に退避。1 行ずつ update して件数 1 を確かめる。
  *   戻す: 退避ファイルの行を parent_product_code = NULL, variant_label = 元の値 に戻す (--revert <退避ファイル>)
  */
@@ -87,7 +87,7 @@ function plan(snap) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(e);
   }
-  const fmt = (r) => ({ id: r.id, product_code: r.product_code, 名前: r.name, 種目: r.category, 単位数: r.rental_price,
+  const fmt = (r) => ({ id: r.id, product_code: r.product_code, 元TAIS: r.tais_code ?? null, 名前: r.name, 種目: r.category, 単位数: r.rental_price,
     価格履歴: (hist.get(r.product_code) ?? []).map(([v, p]) => `${v}:${p}`).join(" "), 発注明細: used.get(r.product_code) ?? 0 });
   const out = { A: [], B: [], M: [], garbledParent: [], groups: groups.size, skip };
   for (const [k, rows] of groups) {
@@ -157,7 +157,7 @@ if (REVERT) {
   const lock = await execLockStart(sb, { script: SCRIPT_REL, argv });
   await execLockRun(sb, lock, { tenant_id: "kt-group", source_system: "order-app", source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "revert", notes: `${REVERT} を戻す (${bk.rows.length} 行)` }, async () => {
     for (const r of bk.rows) {
-      const { data, error } = await sb.from("equipment_master").update({ parent_product_code: null, variant_label: r.variant_label }).eq("id", r.id).select("id");
+      const { data, error } = await sb.from("equipment_master").update({ parent_product_code: null, variant_label: r.variant_label, ...(r.fixTais ? { tais_code: r.tais_code } : {}) }).eq("id", r.id).select("id");
       if (error || data?.length !== 1) throw new Error(`${r.product_code}: ${error?.message ?? `更新 ${data?.length} 件`}`);
     }
   });
@@ -177,7 +177,9 @@ report(p, snap.fetchedAt, snap.equipment?.length ?? 0);
 if (opt("--csv-dir")) writeCsv(p, opt("--csv-dir"));
 
 if (EXECUTE) {
-  const rows = [...p.A, ...p.B].flatMap((g) => g.children.map((c) => ({ id: c.id, product_code: c.product_code, parent: g.parent.product_code, variant_label: c.元のvariant_label, label: c.variant_label })));
+  const rows = [...p.A, ...p.B].flatMap((g) => g.children.map((c) => ({ id: c.id, product_code: c.product_code, parent: g.parent.product_code, variant_label: c.元のvariant_label, label: c.variant_label,
+    // TAIS が化けた子は 親の TAIS に書き直す (どこから引いても 正しい TAIS になるように)。退避には元の値を残す
+    tais_code: c.元TAIS, fixTais: c.TAIS化け ? g.parent.元TAIS : null })));
   const expect = Number(opt("--expect"));
   if (!Number.isFinite(expect) || expect !== rows.length) {
     console.error(`★ 止めた: 子にする行 ${rows.length} が --expect ${opt("--expect")} と違う (DRY RUN の後に DB が変わった)。DRY RUN からやり直す`);
@@ -189,7 +191,7 @@ if (EXECUTE) {
   await execLockRun(sb, lock, { tenant_id: "kt-group", source_system: "order-app", source_files: [], script: SCRIPT_REL, args: argv.join(" "), step: "build-variants", notes: `同じ TAIS の重複 ${rows.length} 行を子 (サイズ・型) にする` }, async () => {
     let n = 0;
     for (const r of rows) {
-      const { data, error } = await sb.from("equipment_master").update({ parent_product_code: r.parent, variant_label: r.label }).eq("id", r.id).is("parent_product_code", null).select("id");
+      const { data, error } = await sb.from("equipment_master").update({ parent_product_code: r.parent, variant_label: r.label, ...(r.fixTais ? { tais_code: r.fixTais } : {}) }).eq("id", r.id).is("parent_product_code", null).select("id");
       if (error || data?.length !== 1) throw new Error(`${r.product_code}: ${error?.message ?? `更新 ${data?.length} 件`} (ここまで ${n} 行。--revert ${bkFile} で戻せる)`);
       n++;
     }
