@@ -3,6 +3,14 @@
  *
  *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk <KK261004.CSV> [--month 2026-09]
  *        [--db-cache <json>] [--refresh] [--out <json>] [--benefit-from-csv] [--pauses-from-notes | --no-pauses]
+ *   npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kds <KDS0031_明細書明細付.CSV> [--month 2026-10] …
+ *
+ *   ★ --kds (2026-11-13): KK がまだ出せない月 (ほのぼので未確定) は 明細書明細付 KDS0031 を答えにする。
+ *   KDS の行から 7131/7132 のレセプト (01 基本 + 02 明細) を組み、KK と同じ比較の口に乗せる。
+ *   KDS に無い項目 (10 集計・7111・明細の 単位数/公費 2-3 等) は 両側とも空にして比べない (= 投影)。
+ *   比べる項目: 01 = 保険者/被保番/公費1 負担者・受給者/生年月日/性別/要介護度/認定期間/計画作成区分/居宅事業所/
+ *   開始・中止年月日/保険給付率/公費1給付率/保険単位数・請求額・利用者負担/公費1 単位数・請求額・本人負担、
+ *   02 = 種類・項目/日数/公費1日数/サービス単位数/公費1単位数/摘要(TAIS)。提供年月 = 当月の行だけ (月遅れ行は外す)。
  *
  *   休止 (2026-11-09 FY-PZ): 貸与の休止期間 order_item_pauses (migrations/order_item_pauses.sql) を読み、
  *   BillingTab と同じく 明細 項10 日数 と 半月按分の判定 から休止日を除く。表が未作成なら警告して休止なし。
@@ -41,7 +49,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  PROVIDER_BN, TENANT, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, type ItemRow,
+  PROVIDER_BN, TENANT, loadSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, readKds0031, C, type ItemRow,
 } from "./_honobono-sync-core.mjs";
 import {
   buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
@@ -57,8 +65,9 @@ function arg(name: string): string | null {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : null;
 }
 const KK = arg("--kk");
-if (!KK) {
-  console.error("usage: npx tsx scripts/fukuyogu-densou-honobono-diff.mts --kk <KK261004.CSV> [--month YYYY-MM]");
+const KDS = arg("--kds");
+if (!KK === !KDS) {
+  console.error("usage: npx tsx scripts/fukuyogu-densou-honobono-diff.mts (--kk <KK261004.CSV> | --kds <KDS0031.CSV>) [--month YYYY-MM]");
   process.exit(1);
 }
 
@@ -87,6 +96,72 @@ function receipts(recs: Rec[]): { r7111: Rec[]; byKey: Map<string, Receipt> } {
     else throw new Error(`★ 01 の無い ${r.v[1]} レコード: ${key}`);
   }
   return { r7111, byKey };
+}
+
+// ── KDS0031 (明細書明細付) → KK と同じ形のレセプト ─────────────────────────
+//   v の位置は KK の「項1 = 交換情報識別番号」から (項番 - 1)。KDS に無い項目は空。
+const KEEP01 = [0, 1, 4, 5, 6, 7, 12, 13, 14, 16, 17, 18, 19, 20, 21, 28, 29, 32, 33, 34, 38, 39, 40];
+const KEEP02 = [0, 1, 4, 5, 6, 7, 9, 10, 13, 14, 17];
+const LEN01 = 41, LEN02 = 18;
+const mkRec = (len: number, set: Record<number, string>): Rec => {
+  const v = Array.from({ length: len }, (_, i) => set[i] ?? "");
+  return { raw: v, v };
+};
+/** KK のレコードを KDS にある項目だけに絞る (無い項目は空)。書式差は見ない (raw = 値) */
+const proj = (r: Rec, keep: number[], len: number): Rec => mkRec(len, Object.fromEntries(keep.map((i) => [i, r.v[i] ?? ""])));
+function projectReceipts(rs: ReturnType<typeof receipts>): ReturnType<typeof receipts> {
+  const byKey = new Map<string, Receipt>();
+  for (const [k, r] of rs.byKey) byKey.set(k, { key: k, form: r.form, h: proj(r.h, KEEP01, LEN01), d: r.d.map((d) => proj(d, KEEP02, LEN02)), s: null });
+  return { r7111: [], byKey };
+}
+const kdsDate = (s: string) => { const m = (s ?? "").trim().match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/); return m ? `${m[1]}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}` : ""; };
+const kdsCare = (s: string) => {
+  const t = (s ?? "").normalize("NFKC").trim();
+  let m = t.match(/^要介護度?(\d)$/); if (m) return `2${m[1]}`;
+  m = t.match(/^要支援度?(\d)$/); if (m) return `1${Number(m[1]) + 1}`;
+  if (t) throw new Error(`★ KDS 要介護状態区分 を読めない: ${t}`);
+  return "";
+};
+const KDS_PLAN: Record<string, string> = { "指定居宅介護支援事業所作成": "1", "自己作成": "2", "介護予防支援事業所・地域包括支援センター作成": "3" };
+const KDS_FORM: Record<string, string> = { "様式2": "7131", "様式2-2": "7132" };
+function kdsReceipts(rows: string[][], month: string): { r: ReturnType<typeof receipts>; dupKeys: string[]; nameByKey: Map<string, string> } {
+  const byKey = new Map<string, Receipt>();
+  const noByKey = new Map<string, string>();
+  const nameByKey = new Map<string, string>();
+  const dup = new Set<string>();
+  for (const r of rows) {
+    if (ymOf(r[C.SVC_MONTH]) !== month) continue;
+    const form = KDS_FORM[r[C.FORM].trim()];
+    if (!form) throw new Error(`★ KDS 様式 を読めない: ${r[C.FORM]}`);
+    const ins8 = r[C.INSURER].replace(/\D/g, "").padStart(8, "0");
+    const insured = r[C.INSURED].trim();
+    const key = `${form}|${ins8}|${insured}`;
+    const no = r[C.RECEIPT_NO];
+    let rc = byKey.get(key);
+    if (!rc) {
+      const plan = r[C.PLAN_KUBUN].trim();
+      if (plan && !KDS_PLAN[plan]) throw new Error(`★ KDS 計画作成区分 を読めない: ${plan}`);
+      const g = r[C.GENDER].trim();
+      rc = {
+        key, form, d: [], s: null,
+        h: mkRec(LEN01, {
+          0: form, 1: "01", 4: ins8, 5: insured, 6: r[C.FUTAN1].trim(), 7: r[C.JUKYU1].trim(),
+          12: kdsDate(r[C.BIRTH]), 13: g.startsWith("男") ? "1" : g.startsWith("女") ? "2" : g,
+          14: kdsCare(r[C.CARE_LEVEL]), 16: kdsDate(r[C.CERT_START]), 17: kdsDate(r[C.CERT_END]),
+          18: KDS_PLAN[plan] ?? "", 19: r[C.CARE_OFFICE].trim(), 20: kdsDate(r[25]), 21: kdsDate(r[26]),
+          28: r[C.BENEFIT].trim(), 29: r[C.KOHI1_RATE].trim(),
+          32: r[C.TOT_UNITS].trim(), 33: r[C.TOT_INS].trim(), 34: r[C.TOT_USER].trim(),
+          38: r[C.K1_UNITS].trim(), 39: r[C.K1_CLAIM].trim(), 40: r[C.K1_SELF].trim(),
+        }),
+      };
+      byKey.set(key, rc); noByKey.set(key, no); nameByKey.set(key, r[C.NAME]);
+    } else if (noByKey.get(key) !== no) { dup.add(key); continue; } // 同じキーで別のレセプト番号 = 2 本目は比べない (別掲)
+    rc.d.push(mkRec(LEN02, {
+      0: form, 1: "02", 4: ins8, 5: insured, 6: r[C.SVC_KIND].split(".")[0].trim(), 7: r[C.SVC_ITEM].trim(),
+      9: r[C.DAYS].trim(), 10: r[66].trim(), 13: r[C.SVC_UNITS].trim(), 14: r[70].trim(), 17: r[C.TAIS].trim(),
+    }));
+  }
+  return { r: { r7111: [], byKey }, dupKeys: [...dup], nameByKey };
 }
 
 // 項番 → 名前 (表示用)
@@ -228,11 +303,14 @@ async function loadPauses(): Promise<Map<string, { from: string; to: string | nu
 
 async function main() {
   const libs = await loadLibs();
-  const kkText = readFileSync(KK!, "latin1"); // ASCII のみ (漢字を含まない)
-  const hk = parseKk(kkText);
-  const MONTH = arg("--month") ?? ymOf(`${hk.recs[0].v[1].slice(0, 4)}-${hk.recs[0].v[1].slice(4, 6)}`);
+  const hk = KK ? parseKk(readFileSync(KK, "latin1")) : null; // KK は ASCII のみ (漢字を含まない)
+  const kds = KDS ? readKds0031(KDS) : null;
+  const MONTH = arg("--month") ?? (hk
+    ? ymOf(`${hk.recs[0].v[1].slice(0, 4)}-${hk.recs[0].v[1].slice(4, 6)}`)
+    : [...kds!.monthCount].sort((a, b) => b[1] - a[1])[0][0]);
   const CACHE = arg("--db-cache") ?? join(tmpdir(), `fukuyogu-densou-db-${MONTH}.json`);
-  console.log(`ほのぼの: ${KK}\n  提供年月 ${MONTH} / データ ${hk.recs.length} レコード / コントロール ${hk.control.join(",")}`);
+  if (hk) console.log(`ほのぼの: ${KK}\n  提供年月 ${MONTH} / データ ${hk.recs.length} レコード / コントロール ${hk.control.join(",")}`);
+  else console.log(`ほのぼの (明細書明細付): ${KDS}\n  ${kds!.rows.length} 行 / 提供年月 ${[...kds!.monthCount].map(([k, v]) => `${k}:${v}`).join(" ")} → 比べるのは ${MONTH} の行だけ (月遅れ行は外す)\n  ★ KDS にある項目だけを比べる (10 集計・7111 は比べない。冒頭の注記)`);
   const snap = await loadSnapshot(MONTH, CACHE, process.argv.includes("--refresh"));
   const office = snap.offices.find((o) => (o.business_number ?? "").replace(/-/g, "") === PROVIDER_BN);
   if (!office) throw new Error(`offices に business_number=${PROVIDER_BN} が無い`);
@@ -360,19 +438,44 @@ async function main() {
   const mk = parseKk(built.content);
   console.log(`新システム: 対象 ${rows.length} 名 (月遅れで除外 ${lateCount} 名) / データ ${mk.recs.length} レコード / 警告 ${built.warnings.length} 件`);
 
-  const hono = receipts(hk.recs), mine = receipts(mk.recs);
-  const nameOf = (key: string) => nameByKey.get(key) ?? "(DB に無い)";
+  const P = (rs: ReturnType<typeof receipts>) => (kds ? projectReceipts(rs) : rs);
+  const kr = kds ? kdsReceipts(kds.rows, MONTH) : null;
+  const hono = kr ? kr.r : receipts(hk!.recs), mine = P(receipts(mk.recs));
+  const nameOf = (key: string) => nameByKey.get(key) ?? kr?.nameByKey.get(key) ?? "(DB に無い)";
   const { B, stat } = compare(hono, mine, nameOf);
 
-  console.log("\n══ コントロールレコード ══");
-  const cDiff = hk.control.map((x, i) => (x === mk.control[i] ? null : `項${i + 1} ほ=${x} 新=${mk.control[i]}`)).filter(Boolean);
-  console.log(cDiff.length ? `  差: ${cDiff.join(" / ")}` : "  一致");
+  if (hk) {
+    console.log("\n══ コントロールレコード ══");
+    const cDiff = hk.control.map((x, i) => (x === mk.control[i] ? null : `項${i + 1} ほ=${x} 新=${mk.control[i]}`)).filter(Boolean);
+    console.log(cDiff.length ? `  差: ${cDiff.join(" / ")}` : "  一致");
+  }
+  if (kr?.dupKeys.length) console.log(`\n  ⚠ KDS: 同じ (様式, 保険者, 被保番) に別のレセプト番号 ${kr.dupKeys.length} 件 (2 本目以降は比べない): ${kr.dupKeys.slice(0, 5).join(" / ")}`);
+
+  // ── レセプト単位の金額一致 (KK 版・KDS 版で同じ物差し。給付率・保険単位/請求/負担・公費1 単位/請求/本人負担 + 明細の (コード,TAIS,日数,単位) 多重集合) ──
+  {
+    const AMT = [28, 32, 33, 34, 38, 39, 40];
+    const z = (x: string | undefined) => (x ?? "") === "0" ? "" : (x ?? "");
+    const det = (r: Receipt) => r.d.map((d) => `${d.v[6]}${d.v[7]}|${d.v[17]}|${z(d.v[9])}|${z(d.v[13])}`).sort().join(";");
+    let both = 0, same = 0;
+    const ng: string[] = [];
+    for (const [key, h] of hono.byKey) {
+      const m = mine.byKey.get(key);
+      if (!m) continue;
+      both++;
+      const amt = AMT.filter((i) => z(h.h.v[i]) !== z(m.h.v[i]));
+      if (amt.length === 0 && det(h) === det(m)) { same++; continue; }
+      ng.push(`${nameOf(key)} ${key} ${amt.map((i) => `項${i + 1}${N01[i + 1] ?? ""} ほ${h.h.v[i]}/新${m.h.v[i]}`).join(" ")}${det(h) === det(m) ? "" : " 明細が違う"}`);
+    }
+    console.log(`\n══ レセプト単位 金額+明細の一致 ══\n  一致 ${same} / 両方にある ${both} (ほのぼの ${hono.byKey.size} / 新 ${mine.byKey.size})`);
+    for (const x of ng.slice(0, Number(process.env.DIFF_SHOW ?? 10))) console.log(`    - ${x}`);
+  }
 
   console.log("\n══ レコード種別ごとの一致 (ほのぼの側の件数が分母。書式差は無視して値で比較) ══");
   const cnt = (rs: ReturnType<typeof receipts>, f: string, t: string) =>
     t === "02" ? [...rs.byKey.values()].filter((r) => r.form === f).reduce((s, r) => s + r.d.length, 0) : [...rs.byKey.values()].filter((r) => r.form === f).length;
   for (const [k, [ok, all]] of Object.entries(stat)) {
     const [f, t] = k.split("-");
+    if (kds && (t === "10" || f === "7111")) { console.log(`  ${k.padEnd(8)} (KDS に無い項目なので比べない)`); continue; }
     const mineN = f === "7111" ? mine.r7111.length : cnt(mine, f, t);
     const hoN = f === "7111" ? hono.r7111.length : cnt(hono, f, t);
     console.log(`  ${k.padEnd(8)} 一致 ${String(ok).padStart(5)} / ${String(all).padStart(5)} (${all ? ((ok / all) * 100).toFixed(1) : "-"}%)   件数 ほ=${hoN} 新=${mineN}`);
@@ -420,7 +523,8 @@ async function main() {
     if (h.h.v[32] === m.h.v[32] && h.h.v[33] === m.h.v[33] && h.h.v[34] === m.h.v[34]) continue;
     const ex = { key, 氏名: nameOf(key), ほ: `${h.h.v[32]}単位/${h.h.v[33]}/${h.h.v[34]}`, 新: `${m.h.v[32]}単位/${m.h.v[33]}/${m.h.v[34]}` };
     const hSum = h.d.reduce((s, d) => s + Number(d.v[13]), 0), mSum = m.d.reduce((s, d) => s + Number(d.v[13]), 0);
-    if (h.s && h.s.v[8] !== h.s.v[9]) why.add("金額差: ほのぼのは 計画単位数 (給付管理) で頭打ち。超過分は保険外 (請求画面の CM 指示単位数が未入力 or 値違い)", { ...ex, 計画: h.s.v[8], 実績: h.s.v[9] });
+    // 頭打ち: KK は 10 集計の 計画単位数 ≠ 限度額管理対象。KDS は 10 が無いので 明細合計 > 保険単位数 で見る
+    if (h.s ? h.s.v[8] !== h.s.v[9] : hSum > Number(h.h.v[32])) why.add("金額差: ほのぼのは 計画単位数 (給付管理) で頭打ち。超過分は保険外 (請求画面の CM 指示単位数が未入力 or 値違い)", { ...ex, 計画: h.s ? h.s.v[8] : h.h.v[32], 実績: h.s ? h.s.v[9] : hSum });
     else if (hSum !== mSum) why.add("金額差: 明細の単位数合計が違う (用具・単位数の差)", { ...ex, 明細合計: `ほ${hSum}/新${mSum}` });
     else if (h.h.v[28] !== m.h.v[28]) why.add(benefitBy ? "金額差: 保険給付率が違う (負担割合証 → 認定行)" : "金額差: 保険給付率が違う (clients.benefit_rate)", { ...ex, 給付率: `ほ${h.h.v[28]}/新${m.h.v[28]}` });
     else if (h.h.v[6] !== m.h.v[6]) why.add("金額差: 公費の有無が違う", { ...ex, 公費: `ほ${h.h.v[6]}/新${m.h.v[6]}` });
@@ -445,10 +549,10 @@ async function main() {
   const firstHead = broken.recs.find((r) => r.v[1] === "01" && r.v[0] !== "7111");
   let ncOk = true;
   if (firstDetail && firstHead) {
-    const before = compare(hono, receipts(mk.recs), nameOf);
+    const before = compare(hono, P(receipts(mk.recs)), nameOf);
     firstDetail.v[13] = String(Number(firstDetail.v[13]) + 1);
     firstHead.v[14] = firstHead.v[14] === "21" ? "22" : "21";
-    const after = compare(hono, receipts(broken.recs), nameOf);
+    const after = compare(hono, P(receipts(broken.recs)), nameOf);
     const d02 = [...after.B.f02.m.values()].reduce((s, v) => s + v.length, 0) - [...before.B.f02.m.values()].reduce((s, v) => s + v.length, 0);
     const d01 = after.B.f01.count(`${firstHead.v[0]}-01 項15 要介護度`) - before.B.f01.count(`${firstHead.v[0]}-01 項15 要介護度`);
     ncOk = d02 >= 1 && d01 === 1;
@@ -460,7 +564,9 @@ async function main() {
     writeFileSync(out, JSON.stringify({ month: MONTH, stat, warnings: built.warnings, rec: B.rec, f7111: B.f7111, f01: B.f01, f02: B.f02, f10: B.f10, fmt: B.fmt }, null, 1));
     console.log(`\n→ ${out}`);
   }
-  console.log(`\n⚠ 月遅れ分 (KK261001〜003 = 提供 2026-06〜08) は範囲外 (DB は 2026-09 提供分に合わせただけ)。`);
+  console.log(kds
+    ? `\n⚠ KDS の月遅れ行 (提供 ${MONTH} 以外) は範囲外。10 集計・7111 は KDS に無いので比べていない。`
+    : `\n⚠ 月遅れ分 (KK261001〜003 = 提供 2026-06〜08) は範囲外 (DB は 2026-09 提供分に合わせただけ)。`);
   if (!ncOk) process.exit(1);
 }
 main().catch((e) => { console.error(e); process.exit(1); });
