@@ -263,7 +263,12 @@ async function main() {
     pagesOut = [...prev.pages.filter((x) => !mine.has(x.page)), ...out].sort((a, b) => a.page - b.page);
     console.log(`  (--pages: 前回の claude.json の ${prev.pages.length - out.filter((x) => prev.pages.some((y) => y.page === x.page)).length} ページはそのまま残した)`);
   }
-  writeFileSync(prevPath, JSON.stringify({ pdf: S1.pdf, summary, pages: pagesOut }, null, 1));
+  // 合計の費用は 残したページも含めた全ページの cost から出し直す (今回の分は summary.this_run に)
+  const allUsd = pagesOut.reduce((s, p) => s + (p.cost ?? []).reduce((a, x) => a + x.usd, 0), 0);
+  const allSent = pagesOut.filter((p) => (p.cost ?? []).length).length;
+  const summaryAll = { ...summary, sent: allSent, usd: Math.round(allUsd * 1e6) / 1e6, jpy: Math.round(allUsd * USD_JPY * 100) / 100,
+    per_page_usd: allSent ? Math.round((allUsd / allSent) * 1e6) / 1e6 : 0, this_run: { sent, usd: summary.usd } };
+  writeFileSync(prevPath, JSON.stringify({ pdf: S1.pdf, summary: summaryAll, pages: pagesOut }, null, 1));
   console.log(`\n══ 費用 ══\n  送ったページ ${sent} / 合計 $${summary.usd} (約 ${summary.jpy} 円・${USD_JPY}円/$ 換算) / 1 ページ平均 $${summary.per_page_usd}`);
   console.log(`  → 月 1,000 ページなら 約 ${Math.round(perPage * 1000 * USD_JPY)} 円の見込み\n→ ${join(resolve(OUT), "claude.json")}`);
 }

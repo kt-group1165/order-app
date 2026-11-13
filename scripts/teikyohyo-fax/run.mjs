@@ -2,6 +2,10 @@
  * 居宅から届く 提供票 (第6表) / 別表 (第7表) の FAX スキャン PDF を読む — 1 段目 (ローカル OCR・API なし・DB なし)
  *
  *   node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf> [--out <dir>] [--pages 1-10] [--workers 3]
+ *   node scripts/teikyohyo-fax/run.mjs --pdf <FAX.pdf|写真.jpg> --all [--refresh-db] [--snapshot <json>]   ★ 運用の入口
+ *       1 段目 (この script) → 2 段目 claude.mjs (Claude で読む) → DB の控え snapshot.mjs → 照合 match.mjs → 一覧 (CSV / HTML)
+ *       DB の控えは 12 時間以内のものがあれば使い回す (--refresh-db で取り直す。★ 全件読みを含むので 並行セッションに一報してから)
+ *       精度測定 (正解データがあるとき): node scripts/teikyohyo-fax/eval.mjs <out>/claude.json --gt <gt.json> --snapshot <json>
  *
  *   PDF → ページ分類 (提供票 / 別表 / 実績表 (裏紙) / 白紙 / 不明) → 向き・傾きの補正 → 罫線からセル → 欄ごとの OCR → JSON
  *   出力: <out>/result.json (ページごとの読取結果) と 標準出力の集計。
@@ -19,7 +23,7 @@
  * 要介護度 (丸印の位置) はまだ読まない (1 段目では「未対応」と出す)。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -284,5 +288,21 @@ async function main() {
   };
   writeFileSync(join(OUT, "result.json"), JSON.stringify({ pdf: PDF, summary, pages: results }, null, 1));
   console.log("\n══ 集計 ══\n" + JSON.stringify(summary, null, 1) + `\n→ ${join(OUT, "result.json")}`);
+  if (argv.includes("--all")) pipeline();
+}
+
+/** --all: 2 段目 → DB の控え → 照合 → 一覧。途中で失敗したら止める (リトライしない) */
+function pipeline() {
+  const node = (script, args) => {
+    console.log(`\n▶ ${script} ${args.join(" ")}`);
+    const r = spawnSync(process.execPath, [join(HERE, script), ...args], { stdio: "inherit" });
+    if (r.status !== 0) { console.error(`✗ ${script} が失敗 (exit ${r.status})。ここで止める`); process.exit(r.status ?? 1); }
+  };
+  node("claude.mjs", ["--out", OUT, ...(PAGES ? ["--pages", opt("--pages")] : [])]);
+  const SNAP = resolve(opt("--snapshot") ?? join(tmpdir(), "teikyohyo-fax", "snapshot.json"));
+  const fresh = existsSync(SNAP) && Date.now() - statSync(SNAP).mtimeMs < 12 * 3600 * 1000;
+  if (fresh && !argv.includes("--refresh-db")) console.log(`\nDB の控え: ${SNAP} を使い回す (${Math.round((Date.now() - statSync(SNAP).mtimeMs) / 60000)} 分前。取り直すなら --refresh-db)`);
+  else node("snapshot.mjs", ["--out", SNAP]);
+  node("match.mjs", [join(OUT, "claude.json"), "--snapshot", SNAP, "--out", join(OUT, "match_result.json")]);
 }
 main().catch((e) => { console.error(e); process.exit(1); });
