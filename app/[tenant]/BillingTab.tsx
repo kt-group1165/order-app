@@ -45,6 +45,7 @@ import { loadBenefitCertificates, type BenefitCertsLoad } from "@/lib/insurance/
 import { loadPerOfficeOfficeIds, isPerOffice, rowsForOffice } from "@/lib/insurance/office-scope";
 import { findRentalOverruns, indexCeilings, countUnjudgeable, type CeilingRentalLine } from "@/lib/ceilingCheck";
 import { planDensouOffice } from "@/lib/kokuho-densou/densou-office";
+import { densouLoadBlockers, type PriceHistoryLoadState } from "@/lib/kokuho-densou/densou-exclude";
 import { getCeilingPrices } from "@/lib/ceilingPrices";
 import { selectAllPagedParallel } from "@/lib/pagedParallel";
 import { buildFukuyoguJissekiCsv, type FukuyoguJissekiUser } from "@/lib/careplan-v4/build-jisseki";
@@ -403,6 +404,12 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         insurerNumber: client.insurer_number, insuredNumber: client.insured_number ?? null, careOfficeId: client.care_office_id };
   const [hospitalizations, setHospitalizations] = useState<ClientHospitalization[]>([]);
   const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
+  // ★ 2026-11-14: 価格改定の履歴を どの (テナント|事業所) で読み終えたか・読めたか。誉田などの事業所価格は履歴にしか無いので、
+  //   読み終わる前 / 読めなかったときに伝送を作ると 用具マスタの価格で請求してしまう (以前は console.warn だけで そのまま出せた)
+  const [priceHistLoaded, setPriceHistLoaded] = useState<{ key: string; ok: boolean } | null>(null);
+  const priceHistKey = `${tenantId}|${currentOfficeId ?? ""}`;
+  const priceHistoryState: PriceHistoryLoadState =
+    priceHistLoaded?.key !== priceHistKey ? "loading" : priceHistLoaded.ok ? "ok" : "failed";
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   // ★ 2026-11-13 高速化: 引き当ての索引。描画・useMemo のたびに orders.find / clients.find / equipment.find /
@@ -480,12 +487,16 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       setCareOffices(coffs as CareOffice[]);
       // 価格履歴は全 product_code 分を取得（請求書／領収書モーダルで使用）
       const codes = new Set(items.map((i: OrderItem) => i.product_code));
+      const loadedKey = `${tenantId}|${currentOfficeId ?? ""}`;
       if (codes.size > 0) {
         void priceHistAllP.then((all) => {
-          if (!all) return;
+          if (!all) { setPriceHistLoaded({ key: loadedKey, ok: false }); return; }
           setPriceHistoryAll(all.filter((h) => codes.has(h.product_code))
             .sort((a, b) => a.valid_from.localeCompare(b.valid_from) || String(a.id).localeCompare(String(b.id))));
+          setPriceHistLoaded({ key: loadedKey, ok: true });
         });
+      } else {
+        setPriceHistLoaded({ key: loadedKey, ok: true }); // 明細が無い = 引く価格が無い
       }
     }).catch(console.error).finally(() => setDataLoading(false));
   }, [tenantId, currentOfficeId]);
@@ -1048,11 +1059,19 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
    */
   const densouKey = `${billingMonth}|${currentOfficeId ?? ""}`;
   const densouInputsReady = !dataLoading && benefitCerts !== null && benefitCertsOfficeKey === (currentOfficeId ?? "") && cmLoadedKey === densouKey && kohiModesLoadedKey === densouKey
-    && pauses !== null && (prorations !== null || prorationError !== null);
-  const densouNotReadyAlert = () => alert("伝送に使うデータ (負担割合証・CM 指示・公費の扱い・休止・日割り設定) をまだ読み込んでいます。少し待ってからもう一度押してください");
+    && pauses !== null && (prorations !== null || prorationError !== null)
+    && priceHistoryState !== "loading"; // ★ 2026-11-14: 価格改定の履歴 (読めなかった failed は 押したときに理由を出して止める)
+  const densouNotReadyAlert = () => alert("伝送に使うデータ (負担割合証・CM 指示・公費の扱い・休止・日割り設定・価格改定の履歴) をまだ読み込んでいます。少し待ってからもう一度押してください");
+  /** 価格改定の履歴を読めなかった / 読込中なら 理由を出して true (= 止める)。月次・返戻・ケアプラン連携の 3 経路で使う */
+  const priceHistoryBlocked = () => {
+    const b = densouLoadBlockers({ priceHistory: priceHistoryState });
+    if (b.length) alert(b.join(" / "));
+    return b.length > 0;
+  };
 
   const generateTransferData = async () => {
     if (!densouInputsReady) { densouNotReadyAlert(); return; }
+    if (priceHistoryBlocked()) return;
     const [y, m] = billingMonth.split("-").map(Number);
     // ★ 2026-11-13: 請求の事業所番号 = 実際に貸した事業所 (orders.office_id) の番号。
     //   以前は 事業所未選択 (全事業所) のとき テナントの番号 (空) で 全事業所の明細を 1 本にまとめて出していた。
@@ -1318,6 +1337,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   // ケアプランデータ連携 V4.1: 第6表実績 (UPJSK) を送信先の居宅介護支援事業所ごとに 1 ファイル出力
   const generateCareplanJissekiCsv = () => {
+    if (priceHistoryBlocked()) return; // 実績の単位数も 価格改定の履歴から引く
     const [y, m] = billingMonth.split("-").map(Number);
     const currentOffice = offices.find(o => o.id === currentOfficeId);
     // ★ 2026-11-13: 送信元 = 実際に貸した事業所 (lib/kokuho-densou/densou-office.ts。伝送と同じ決め方)
@@ -1481,6 +1501,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const generateRebillTransferData = async () => {
     // 返戻過誤も 負担割合証 (benefitRawForMonth) を使う。CM 指示・公費の扱いは月ごとに読み直すが 足並みを揃えて同じ条件で待つ
     if (!densouInputsReady) { densouNotReadyAlert(); return; }
+    if (priceHistoryBlocked()) return;
     // ★ 2026-11-13: 通常の伝送と同じく 実際に貸した事業所の番号で出す (lib/kokuho-densou/densou-office.ts)。
     //   以前は rebillByMonth が 事業所で絞っておらず、選んだ事業所の番号で その利用者の全事業所の明細を出していた
     const officePlan = planDensouOffice(
