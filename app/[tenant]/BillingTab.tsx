@@ -1824,14 +1824,13 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           className={`border rounded px-2.5 py-1 font-medium transition-colors ${showRentalGridView ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}
         >提供表</button>
         <div className="w-px h-5 bg-gray-300 mx-1" />
-        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">明細書</button>
-        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">請求書</button>
+        {/* 2026-11-13: 押しても何も起きなかった「明細書」「請求書」「管理帳票」のボタンを外した (処理が無い見た目だけのボタン)。
+            利用者ごとの請求書は 各行の「請求書」、伝送は「CSV出力」から */}
         <button
           onClick={() => setKokuhoOnly(v => !v)}
           title="国保連提出対象のみ表示 (自動の月遅れ = 申請中 等を除く。手で月遅にした行は 月遅の印付きで残す・金額には入らない) ⇔ 全件表示 を切替"
           className={`border rounded px-2.5 py-1 font-semibold transition-colors ${kokuhoOnly ? "border-blue-500 bg-blue-100 text-blue-800" : "border-gray-400 bg-white text-gray-700 hover:bg-gray-50"}`}
         >{kokuhoOnly ? "国保対象のみ" : "全件表示"}</button>
-        <button className="border border-gray-400 rounded bg-white px-2.5 py-1 text-gray-700 hover:bg-gray-50">管理帳票</button>
         {selectedClientIds.size > 0 && (
           <>
             <div className="w-px h-5 bg-gray-300 mx-1" />
