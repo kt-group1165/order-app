@@ -12,6 +12,7 @@ import { itemMonthUnits, hasBrokenRentalDates, isKeidoRestricted, RESTRICTION_GR
 import { getExceptionGrants, hasActiveGrant, isTableMissingError, getAllExceptionGrants, getExceptionInsurerRules, type FukuyoguExceptionGrant } from "@/lib/fukuyoguExceptions";
 import { judgeClientExceptions, findInsurerRule, describeJudgement, type ExceptionInsurerRule, type ExceptionJudgement, type ExceptionAlertLevel } from "@/lib/fukuyoguExceptionRules";
 import { rentalMonthUnits, hospitalizationRanges, rentalDayMask, halfMonthFlags, type DateRange } from "@/lib/half-month-units";
+import { firstBy, groupBy } from "@/lib/index-by";
 import { useRentalCalcContext, excludedOf, modeOf } from "@/lib/rentalCalcContext";
 import { loadProrations, prorationModeOf, type ProrationLoad } from "@/lib/orderItemProration";
 import { loadOrderItemPauses, type PausesLoad } from "@/lib/fukuyoguPauses";
@@ -168,18 +169,32 @@ function MonthlyInfoTab({
     );
   };
 
+  // ★ 2026-11-13 高速化: 引き当ての索引 (旧: 利用者ごとに orderItems 8,000 件を全部なめ、明細ごとに orders.find / equipment.find)。
+  //   firstBy = arr.find と同じ (最初の 1 件) / groupBy = arr.filter と同じ (元の並び順)。lib/index-by.ts
+  const mOrdersById = useMemo(() => firstBy(orders, (o) => o.id), [orders]);
+  const mEquipmentByCode = useMemo(() => firstBy(equipment, (e) => e.product_code), [equipment]);
+  const mHospByClient = useMemo(() => groupBy(hospitalizations, (h) => h.client_id), [hospitalizations]);
+  const mItemsByClient = useMemo(() => {
+    const m = new Map<string, OrderItem[]>();
+    for (const it of orderItems) {
+      const cid = mOrdersById.get(it.order_id)?.client_id;
+      if (!cid) continue;
+      const a = m.get(cid);
+      if (a) a.push(it); else m.set(cid, [it]);
+    }
+    return m;
+  }, [orderItems, mOrdersById]);
+
   // 当月の単位数集計 (簡易版: 入院半月判定を含む)
   const computeMonthlyUnits = (clientId: string): number => {
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
-    const clientOrderIds = new Set(orders.filter((o) => o.client_id === clientId).map((o) => o.id));
-    const hospRanges = hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId));
+    const hospRanges = hospitalizationRanges((mHospByClient.get(clientId) ?? []));
 
     let total = 0;
-    for (const item of orderItems) {
-      if (!clientOrderIds.has(item.order_id)) continue;
-      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+    for (const item of mItemsByClient.get(clientId) ?? []) {
+      const pt = item.payment_type ?? mOrdersById.get(item.order_id)?.payment_type ?? "介護";
       if (pt !== "介護") continue;
       if (!item.rental_start_date) continue;
       const start = parseLocalDate(item.rental_start_date);
@@ -195,7 +210,7 @@ function MonthlyInfoTab({
       if (unitOverrides.has(item.id)) {
         units = unitOverrides.get(item.id)!;
       } else {
-        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const eq = mEquipmentByCode.get(item.product_code);
         // ⚠ 価格改定があれば当月時点の価格を使う (equipment.rental_price は現在価格なので
         //   過去月を見ているときは食い違いうる)。InvoiceReceiptModal と同じ経路。
         const price = getPriceForMonth(priceHistory, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
@@ -216,7 +231,7 @@ function MonthlyInfoTab({
     const parseLocalDate = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
     const clientIdsWithActive = new Set<string>();
     for (const item of orderItems) {
-      const order = orders.find((o) => o.id === item.order_id);
+      const order = mOrdersById.get(item.order_id);
       if (!order?.client_id) continue;
       if (currentOfficeId && order.office_id && order.office_id !== currentOfficeId) continue;
       const pt = item.payment_type ?? order.payment_type ?? "介護";
@@ -243,7 +258,7 @@ function MonthlyInfoTab({
   // computeMonthlyUnits / getActiveInsuranceRecord は毎回作り直す関数なので deps には入れず、中で読む state を並べる
   //   (2026-11-13: priceHistory・prorations が漏れていて、価格改定の履歴・日割り設定が後から届いても単位が古いままだった)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clients, orderItems, orders, billingMonth, unitOverrides, currentOfficeId, careOffices, insuranceRecords, hospitalizations, equipment, pausesByItem, priceHistory, prorations]);
+  }, [clients, orderItems, orders, billingMonth, unitOverrides, currentOfficeId, careOffices, insuranceRecords, hospitalizations, equipment, pausesByItem, priceHistory, prorations, mOrdersById, mItemsByClient, mHospByClient, mEquipmentByCode]);
 
   // かな行フィルター
   const filteredRows = useMemo(() => {
@@ -385,6 +400,15 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const [priceHistoryAll, setPriceHistoryAll] = useState<EquipmentPriceHistory[]>([]);
   const [careOffices, setCareOffices] = useState<CareOffice[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  // ★ 2026-11-13 高速化: 引き当ての索引。描画・useMemo のたびに orders.find / clients.find / equipment.find /
+  //   insuranceRecords.filter / careOffices.find を 数千回回していた (実データで 1 回の描画 約 330ms → 約 10ms・node 計測)。
+  //   firstBy = arr.find と同じ (最初の 1 件) / groupBy = arr.filter と同じ (元の並び順)。lib/index-by.ts
+  const ordersById = useMemo(() => firstBy(orders, (o) => o.id), [orders]);
+  const clientsById = useMemo(() => firstBy(clients, (c) => c.id), [clients]);
+  const equipmentByCode = useMemo(() => firstBy(equipment, (e) => e.product_code), [equipment]);
+  const insByClient = useMemo(() => groupBy(insuranceRecords, (r) => r.client_id), [insuranceRecords]);
+  const hospByClient = useMemo(() => groupBy(hospitalizations, (h) => h.client_id), [hospitalizations]);
+  const careOfficeById = useMemo(() => firstBy(careOffices, (co) => co.id), [careOffices]);
   const [invoiceClient, setInvoiceClient] = useState<BillingClient | null>(null);
 
   // 会社情報（請求書／領収書モーダル用）
@@ -538,7 +562,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
   const benefitRawForMonth = (client: BillingClient, monthStart: string, monthEnd: string, onWarn: (w: string) => void, noCert: string[]): string | null => {
     if (!benefitCerts?.available) return client.benefit_rate;
     const r = resolveBenefitForMonth(
-      insuranceRecords.filter((x) => x.client_id === client.id),
+      (insByClient.get(client.id) ?? []),
       rowsForOffice(benefitCerts.byClient.get(client.id) ?? [], currentOfficeId, perOfficeIds),
       monthStart, monthEnd,
     );
@@ -654,7 +678,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const monthStart = new Date(y, m - 1, 1);
     const monthEnd = new Date(y, m, 0, 23, 59, 59);
     return orderItems.filter((item) => {
-      const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+      const pt = item.payment_type ?? ordersById.get(item.order_id)?.payment_type ?? "介護";
       if (pt !== "介護") return false; // 介護保険のみ請求
       if (!item.rental_start_date) return false;
       const pld2 = (s: string) => { const [py, pm, pd] = s.split("-").map(Number); return new Date(py, pm - 1, pd); };
@@ -667,17 +691,17 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (item.status !== "rental_started" && item.status !== "terminated") return false;
       return true;
     });
-  }, [billingMonth, orderItems, orders]);
+  }, [billingMonth, orderItems, ordersById]);
 
   // 利用者ごとにグループ化（事業所フィルタ付き）
   const clientGroups = useMemo(() => {
     const map = new Map<string, { client: BillingClient; items: OrderItem[] }>();
     for (const item of activeRentals) {
-      const order = orders.find((o) => o.id === item.order_id);
+      const order = ordersById.get(item.order_id);
       // 事業所が選択されている場合、その事業所の注文のみ
       if (currentOfficeId && order?.office_id && order.office_id !== currentOfficeId) continue;
       if (!order?.client_id) continue;
-      const client = clients.find((c) => c.id === order.client_id);
+      const client = clientsById.get(order.client_id);
       if (!client) continue;
       if (!map.has(client.id)) map.set(client.id, { client, items: [] });
       map.get(client.id)!.items.push(item);
@@ -689,7 +713,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       if (fa !== fb) return fa - fb;
       return (a.client.furigana ?? a.client.name).localeCompare(b.client.furigana ?? b.client.name, "ja");
     });
-  }, [activeRentals, orders, clients, currentOfficeId]);
+  }, [activeRentals, ordersById, clientsById, currentOfficeId]);
 
   // 例外給付の判定 (利用者ごと)。ok の利用者は入れない
   const exceptionByClient = useMemo(() => {
@@ -908,7 +932,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
    * (単位上書き・当月の改定価格・入院・休止・日割り設定を反映)、区分は同じ材料で halfMonthFlags (2026-11-13 寄せ)
    */
   const rentalGridCalcOf = (clientId: string) => (item: OrderItem): RentalGridCalc => {
-    const excluded = [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)];
+    const excluded = [...hospitalizationRanges((hospByClient.get(clientId) ?? [])), ...pausesOf(item.id)];
     const mode = prorationModeOf(prorations, item.id, billingMonth);
     const mask = item.rental_start_date ? rentalDayMask(item.rental_start_date, item.rental_end_date, billingMonth, excluded) : [];
     const billedDays = mask.filter(Boolean).length;
@@ -924,7 +948,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
 
   const getUnits = (item: OrderItem, clientId: string) => {
     if (unitOverrides.has(item.id)) return unitOverrides.get(item.id)!;
-    const eq = equipment.find((e) => e.product_code === item.product_code);
+    const eq = equipmentByCode.get(item.product_code);
     // ⚠ 価格改定があれば当月時点の価格を使う (2026-09-04 是正: 以前は equipment.rental_price
     //   = 現在価格を直参照しており、価格改定後に過去月ぶんを組むと現在価格で計算されていた)。
     const price = getPriceForMonth(priceHistoryAll, item.product_code, billingMonth) ?? eq?.rental_price ?? 0;
@@ -932,20 +956,20 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     if (!item.rental_start_date) return base;
     // 半月按分 (既定) / 日割り: 入院・休止の日を除いた貸与日で判定 (lib/half-month-units.ts rentalMonthUnits)
     return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, billingMonth,
-      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)],
+      [...hospitalizationRanges((hospByClient.get(clientId) ?? [])), ...pausesOf(item.id)],
       prorationModeOf(prorations, item.id, billingMonth));
   };
 
   // 指定年月(ym="YYYY-MM")での単位数計算 (返戻・過誤の過去月伝送用)。
   // getUnits の billingMonth 依存を外した版。過去月は単位上書きを読まない(未ロードのため)。
   const computeUnitsForMonth = (item: OrderItem, clientId: string, ym: string): number => {
-    const eq = equipment.find((e) => e.product_code === item.product_code);
+    const eq = equipmentByCode.get(item.product_code);
     // ⚠ 過去月 (返戻・過誤の再伝送) を組むので、当時の価格改定を必ず反映する。
     const price = getPriceForMonth(priceHistoryAll, item.product_code, ym) ?? eq?.rental_price ?? 0;
     const base = price ? Math.round(price / 10) : 0;
     if (!item.rental_start_date) return base;
     return rentalMonthUnits(base, item.rental_start_date, item.rental_end_date, ym,
-      [...hospitalizationRanges(hospitalizations.filter((h) => h.client_id === clientId)), ...pausesOf(item.id)],
+      [...hospitalizationRanges((hospByClient.get(clientId) ?? [])), ...pausesOf(item.id)],
       prorationModeOf(prorations, item.id, ym));
   };
 
@@ -1097,7 +1121,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       const ceilingLines: (CeilingRentalLine & { name: string })[] = [];
       let totalUnits = 0;
       for (const item of items) {
-        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const eq = equipmentByCode.get(item.product_code);
         const unitPer = getUnits(item, client.id);
         const count = item.quantity;
         const units = unitPer * count;
@@ -1185,10 +1209,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })))) preWarnings.push(w);
       if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
       const { copayRate, totalCost, insuranceAmount, userAmount, kohiAmount } = amt;
-      const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+      const dc = densouCertOf(client, pickCertForMonth((insByClient.get(client.id) ?? []), monthStart, monthEnd,
         { insurerNumber: client.insurer_number, insuredNumber: client.insured_number }));
       const careOffice = dc.careOfficeId
-        ? careOffices.find((co) => co.id === dc.careOfficeId) ?? null
+        ? careOfficeById.get(dc.careOfficeId) ?? null
         : null;
       rows.push({
         userName: client.name,
@@ -1229,7 +1253,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         //   中止年月日 (項22) は ほのぼのと食い違う行がまだあるので渡さない (lib/kokuho-densou/fukuyogu-period.ts)
         serviceStartDate: fukuyoguServiceStartDate(
           orderItems.filter((it) => {
-            const o = orders.find((oo) => oo.id === it.order_id);
+            const o = ordersById.get(it.order_id);
             return o?.client_id === client.id && (it.status === "rental_started" || it.status === "terminated")
               && (it.payment_type ?? o?.payment_type ?? "介護") === "介護";
           }).map((it) => ({ rentalStart: it.rental_start_date, rentalEnd: it.rental_end_date })),
@@ -1286,7 +1310,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const preWarnings: string[] = [];
     for (const { client, items } of clientGroups) {
       const careOffice = client.care_office_id
-        ? careOffices.find((co) => co.id === client.care_office_id) ?? null
+        ? careOfficeById.get(client.care_office_id) ?? null
         : null;
       if (!careOffice) {
         preWarnings.push(`${client.name}: 居宅介護支援事業所がマスタ未紐付けのためスキップしました`);
@@ -1299,7 +1323,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       }
       const jissekiItems: FukuyoguJissekiUser["items"] = [];
       for (const item of items) {
-        const eq = equipment.find((e) => e.product_code === item.product_code);
+        const eq = equipmentByCode.get(item.product_code);
         const code = fukuyoguServiceCode(eq?.category);
         if (!code) {
           preWarnings.push(`${client.name}: 種目「${eq?.category ?? "未設定"}」(${eq?.name ?? item.product_code}) の福祉用具貸与サービスコードが不明です`);
@@ -1397,15 +1421,15 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
     const result = new Map<string, Array<{ client: BillingClient; items: OrderItem[]; flag: BillingRebillFlag }>>();
     for (const flag of rebillFlags.values()) {
       if (flag.month === billingMonth) continue;
-      const client = clients.find((c) => c.id === flag.client_id);
+      const client = clientsById.get(flag.client_id);
       if (!client) continue;
       const [y, m] = flag.month.split("-").map(Number);
       const monthStart = new Date(y, m - 1, 1);
       const monthEnd = new Date(y, m, 0, 23, 59, 59);
       const items = orderItems.filter((item) => {
-        const order = orders.find((o) => o.id === item.order_id);
+        const order = ordersById.get(item.order_id);
         if (order?.client_id !== client.id) return false;
-        const pt = item.payment_type ?? orders.find((o) => o.id === item.order_id)?.payment_type ?? "介護";
+        const pt = item.payment_type ?? ordersById.get(item.order_id)?.payment_type ?? "介護";
         if (pt !== "介護") return false;
         if (!item.rental_start_date) return false;
         const start = new Date(item.rental_start_date);
@@ -1421,7 +1445,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
       result.get(flag.month)!.push({ client, items, flag });
     }
     return Array.from(result.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [rebillFlags, billingMonth, orderItems, orders, clients]);
+  }, [rebillFlags, billingMonth, orderItems, ordersById, clientsById]);
 
   // 返戻・過誤の過去月別 伝送ファイル生成 (サービス提供年月ごとに 1 ファイル)。
   // 返戻=補正して再請求 / 過誤=取下げ後の再請求。いずれも当該月の通常請求として出力する
@@ -1485,7 +1509,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
         const lineDates: { rentalStart: string | null; rentalEnd: string | null; pauses: DateRange[] }[] = [];
         let totalUnits = 0;
         for (const item of items) {
-          const eq = equipment.find((e) => e.product_code === item.product_code);
+          const eq = equipmentByCode.get(item.product_code);
           const unitPer = computeUnitsForMonth(item, client.id, ym);
           const count = item.quantity;
           const units = unitPer * count;
@@ -1543,10 +1567,10 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
           details.map((d, i) => ({ unitPer: d.unitPer, count: d.count, units: d.units, ...lineDates[i] })))) allWarnings.push(`[${ym}] ${w}`);
         if (amt.kohiPieces) amt.kohiPieces.forEach((ps, i) => { details[i].kohiPieces = ps; });
         const { copayRate, totalCost, insuranceAmount } = amt;
-        const dc = densouCertOf(client, pickCertForMonth(insuranceRecords.filter((r) => r.client_id === client.id), monthStart, monthEnd,
+        const dc = densouCertOf(client, pickCertForMonth((insByClient.get(client.id) ?? []), monthStart, monthEnd,
           { insurerNumber: client.insurer_number, insuredNumber: client.insured_number }));
         const careOffice = dc.careOfficeId
-          ? careOffices.find((co) => co.id === dc.careOfficeId) ?? null
+          ? careOfficeById.get(dc.careOfficeId) ?? null
           : null;
         rows.push({
           userName: client.name,
@@ -1937,14 +1961,14 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                 const monthStart = `${billingMonth}-01`;
                 const monthEnd = monthEndYmd(y, m);
                 // 認定の選び方は 月遅れ自動判定・伝送と同じ (被保番が一致する認定を優先)
-                const insRec = pickCertForMonth(insuranceRecords.filter(r => r.client_id === client.id), monthStart, monthEnd,
+                const insRec = pickCertForMonth((insByClient.get(client.id) ?? []), monthStart, monthEnd,
                   { insurerNumber: client.insurer_number, insuredNumber: client.insured_number });
                 const isApplying = insRec?.certification_status === "申請中";
                 const isNoCareLevel = noCareLevelClients.has(client.id);
                 // サービス事業所名 (居宅介護支援事業所)
                 const careOfficeId = client.care_office_id ?? insRec?.care_office_id ?? null;
                 const careOfficeName = careOfficeId
-                  ? careOffices.find(co => co.id === careOfficeId)?.name ?? ""
+                  ? careOfficeById.get(careOfficeId)?.name ?? ""
                   : client.care_manager_org ?? "";
                 // 提出月 = lateFlag.month があればそれ、無ければ billingMonth
                 const submitMonth = lateFlag?.month ?? billingMonth;
@@ -2197,7 +2221,7 @@ export default function BillingTab({ tenantId, currentOfficeId, onOpenExceptionG
                     </thead>
                     <tbody>
                       {detailClient.items.map((item, i) => {
-                        const eq = equipment.find(e => e.product_code === item.product_code);
+                        const eq = equipmentByCode.get(item.product_code);
                         const unitPrice = getUnits(item, detailClient.client.id);
                         const units = unitPrice * item.quantity;
                         const taisCode = eq?.tais_code ?? "";
