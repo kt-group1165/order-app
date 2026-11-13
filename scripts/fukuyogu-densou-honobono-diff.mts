@@ -53,9 +53,10 @@ import {
   PROVIDER_BN, TENANT, loadSnapshot, rebaseSnapshot, loadLibs, buildBillingModel, ymOf, readEnv, readKds0031, C, type ItemRow,
 } from "./_honobono-sync-core.mjs";
 import {
-  buildFukuyoguDensou, fukuyoguRentalDaysInMonth,
+  buildFukuyoguDensou, fukuyoguRentalDaysInMonth, careLevelCodeForDensou,
   type FukuyoguSeikyuRow, type FukuyoguDetailLine,
 } from "../lib/kokuho-densou/build";
+import { densouExcludeReasons, DENSOU_EXCLUDE_LABEL, type DensouExcludeReason } from "../lib/kokuho-densou/densou-exclude";
 import { certFieldsForDensou } from "../lib/kokuho-densou/cert-for-month";
 import { fukuyoguServiceStartDate, fukuyoguServiceStopDate } from "../lib/kokuho-densou/fukuyogu-period";
 import { resolveBenefitForMonth, type BenefitCertRow } from "../lib/insurance/cert-month";
@@ -388,8 +389,8 @@ async function main() {
   const rows: FukuyoguSeikyuRow[] = [];
   const nameByKey = new Map<string, string>();
   let lateCount = 0;
-  // 群1 の除外見込み (2026-11-14・READ ONLY の数え上げ。出力・判定は変えない): ① 給付率を既定の 1 割にした人
-  const benefitDefaulted: string[] = [];
+  // 伝送の除外見込み (2026-11-14 群1+群2・READ ONLY の数え上げ。出力・判定は変えない): 行ごとの benefitRateDefaulted
+  const defaultedByRow = new Map<FukuyoguSeikyuRow, boolean>();
   const periodByKey = new Map<string, { startDate: string | null; stopDate: string | null }>();
   for (const [cid, lines] of dbLines) {
     if (isLate(cid)) { lateCount++; continue; }
@@ -421,7 +422,6 @@ async function main() {
           insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
       : { ...certFieldsForDensou(c, rec), insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null, careOfficeId: c.care_office_id };
     const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: benefitRaw, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
-    if (!amt.kohiTandoku && amt.warnings.some((w) => w.includes("1 割 (90) で計算"))) benefitDefaulted.push(c.name);
     periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, { startDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH), stopDate: fukuyoguServiceStopDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH) });
     rows.push({
       userName: c.name, insurerNumber: dc.insurerNumber, insuredNumber: dc.insuredNumber,
@@ -441,6 +441,7 @@ async function main() {
       // 開始年月日は BillingTab と同じく 貸与履歴から (lib/kokuho-densou/fukuyogu-period.ts)。中止は渡さない
       serviceStartDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH),
     });
+    defaultedByRow.set(rows[rows.length - 1], amt.benefitRateDefaulted);
     const ins8 = (c.insurer_number ?? "").trim().padStart(8, "0");
     for (const f of ["7131", "7132"]) nameByKey.set(`${f}|${ins8}|${(c.insured_number ?? "").trim()}`, `${c.name}`);
   }
@@ -448,10 +449,21 @@ async function main() {
   const built = buildFukuyoguDensou(rows, { officeNumber: PROVIDER_BN, year: Y, month: M });
   const mk = parseKk(built.content);
   {
-    const kohiOver = built.warnings.filter((w) => w.includes("公費対象単位数 (") && w.includes("保険の単位数"));
-    const overActual = built.warnings.filter((w) => w.includes("保険請求の単位数 (") && w.includes("実績 ("));
-    console.log(`群1 の除外見込み: ① 給付率を既定 1 割 ${benefitDefaulted.length} 名${benefitDefaulted.length ? ` (${benefitDefaulted.join("・")})` : ""} / ③ 公費単位 > 保険単位 ${kohiOver.length} 名 / ④ 請求単位 > 実績 ${overActual.length} 名`);
-    for (const w of [...kohiOver, ...overActual]) console.log(`  ${w}`);
+    // build の既存の除外 4 種 (保険者・被保番 / 要介護度 / CM 0 / CM 未入力) を通った人だけを数える (= 新しく外れる人)
+    const reach = rows.filter((r) => (r.insurerNumber ?? "").trim() && (r.insuredNumber ?? "").trim() && careLevelCodeForDensou(r.careLevel)
+      && (r.kohiTandoku || r.planUnits !== 0) && (r.kohiTandoku || !r.cmMissing));
+    const byReason = new Map<DensouExcludeReason, string[]>();
+    let n = 0;
+    for (const r of reach) {
+      const rs = densouExcludeReasons({ ...r, benefitRateDefaulted: defaultedByRow.get(r) ?? false });
+      if (rs.length) n++;
+      for (const x of rs) { if (!byReason.has(x)) byReason.set(x, []); byReason.get(x)!.push(`${r.userName} ${r.totalCost.toLocaleString()}円`); }
+    }
+    console.log(`伝送の除外見込み (群1+群2): 既存の除外を通った ${reach.length} 名のうち ${n} 名`);
+    for (const x of Object.keys(DENSOU_EXCLUDE_LABEL) as DensouExcludeReason[]) {
+      const ns = byReason.get(x) ?? [];
+      console.log(`  ${x} (${DENSOU_EXCLUDE_LABEL[x]}): ${ns.length} 名${ns.length ? ` — ${ns.slice(0, 20).join(" / ")}${ns.length > 20 ? " …" : ""}` : ""}`);
+    }
   }
   console.log(`新システム: 対象 ${rows.length} 名 (月遅れで除外 ${lateCount} 名) / データ ${mk.recs.length} レコード / 警告 ${built.warnings.length} 件`);
 
