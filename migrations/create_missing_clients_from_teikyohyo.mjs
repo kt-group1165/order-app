@@ -59,6 +59,7 @@ import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { resolveFukuyoguOffice, latestTeikyoDir, describeFukuyoguOffice, teikyoKindOfOffice } from "./_fukuyogu_office.mjs";
 import { resolveUserMasterDirs } from "./_user_master_dir.mjs";
+import { decideByBirth, FAKE_BIRTH_FROM } from "./_name_birth_match.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -99,7 +100,7 @@ const OFFICE_SOURCE = "import_record";
 /** 利用者ではない行 (提供票の利用者名)。施設・役所への貸与 */
 const NOT_A_PERSON = /施設|老人保健|役場|市役所|町役場|病院|クリニック|株式会社|有限会社|\(株\)|（株）|法人|センター|ホーム|[^\s]園[・\s]|園$/;
 /** これ以降の生年月日は ほのぼのの仮の値 (自費だけの人の登録日が入っている) */
-const FAKE_BIRTH_FROM = "2020-01-01";
+// FAKE_BIRTH_FROM (仮の生年月日 = 2020 年以降) は _name_birth_match.mjs (rebuild と同じ値)
 
 // ── 小道具 ────────────────────────────────────────────────────────────────
 const nf = (s) => nfkc(s).replace(/[\s　]+/g, "");
@@ -367,14 +368,20 @@ async function main() {
     // rebuild が引ける人 (利用者マスタ「有」の保険者+被保番 / 番号+氏名 / 氏名) は対象外
     const viaUm = [...(umKeys.get(userNo) ?? [])].some((k) => byKey.has(k));
     const viaNo = [...(byNo.get(userNo) ?? []), ...(byNo.get(`HN-${userNo}`) ?? [])].some((c) => !c.deleted_at && fold(c.name) === fold(tName));
-    const viaName = (byFold.get(fold(tName)) ?? []).some((c) => !c.deleted_at);
-    if (viaUm || viaNo || viaName) continue;
+    // ★ 2026-11-13: 氏名だけの一致は 生年月日で決める (rebuild と同じ _name_birth_match.mjs)。
+    //   一致が 1 人 → rebuild が引く (対象外) / 生年月日が違う → 新規として作る (★同じ人の疑いありの印) / 決められない → 止めて判断待ち
+    const nameCands = (byFold.get(fold(tName)) ?? []).filter((c) => !c.deleted_at);
+    const umBirths = [...new Set((umByNo.get(userNo) ?? []).map((p) => p.birth).filter(Boolean))];
+    const nameD = nameCands.length ? decideByBirth(nameCands, umBirths.length === 1 ? umBirths[0] : null) : null;
+    if (viaUm || viaNo || nameD?.verdict === "pick") continue;
 
     const months = [...new Set(rs.map((r) => r.ym))].sort();
     const kinds = [...new Set(rs.map((r) => teikyoKindOfOffice(r.office)))].sort();
     const R = { 利用者番号: userNo, 氏名: tName, 行: rs.length, 月: `${months[0]}〜${months[months.length - 1]}`, 制度: kinds.join("+"), 用具: [...new Set(rs.map((r) => r.svc))], 分類: null, 材料: null, 状態: "計画", 判定: [], 注意: [] };
     results.push(R);
     const stop = (why) => { R.状態 = "★ 止めた"; R.判定.push(why); };
+    if (nameD?.verdict === "judge") { R.分類 = "a"; cls.a.push(R); stop(`★ 判断が要る (氏名は既存 client に当たるが 生年月日で決められない: ${nameD.reason}): ${nameCands.map((c) => desc(c)).join(" / ")}`); continue; }
+    if (nameD?.verdict === "new") R.注意.push(`★ 同じ人の疑いあり (氏名が同じ・${nameD.reason}) → 別人として作る: ${nameCands.map((c) => desc(c)).join(" / ")}`);
 
     // (d) 利用者ではない行
     if (NOT_A_PERSON.test(tName)) { R.分類 = "d"; cls.d.push(R); stop("利用者ではない行 (施設・役場 等) → 作らない"); continue; }
@@ -396,14 +403,18 @@ async function main() {
     const hits = [];
     for (const c of certs) for (const id of byKey.get(`${c.insurer}|${c.insured}`) ?? []) hits.push(`保険者+被保番 → ${desc(clientById.get(id))}`);
     for (const c of [...(byNo.get(userNo) ?? []), ...(byNo.get(`HN-${userNo}`) ?? [])]) if (fold(c.name) === fold(tName)) hits.push(`利用者番号+氏名 → ${desc(c)}`);
-    for (const c of byFold.get(fold(tName)) ?? []) hits.push(`氏名 → ${desc(c)}`);
+    // 氏名だけの一致は 上の生年月日の判定で「別人 (new)」と決めたので ここでは数えない (削除済みの client は従来どおり数える)
+    for (const c of byFold.get(fold(tName)) ?? []) if (!(nameD?.verdict === "new" && !c.deleted_at)) hits.push(`氏名 → ${desc(c)}`);
+    // ★ 2026-11-13: 生年月日+(姓|名|カナ) だけの一致 (氏名は違う) は 別人として作り、★同じ人の疑いありの印を残す (user 方針 a)
+    const weak = [];
     if (birth) for (const c of db.clients) {
       if (c.birth_date !== birth) continue;
       const fc = fold(c.name), ft = fold(tName);
-      if (fc.slice(0, 2) === ft.slice(0, 2) || fc.slice(-2) === ft.slice(-2) || (c.furigana && P?.kana && nKana(c.furigana) === nKana(P.kana))) hits.push(`生年月日+(姓|名|カナ) → ${desc(c)}`);
+      if (fc.slice(0, 2) === ft.slice(0, 2) || fc.slice(-2) === ft.slice(-2) || (c.furigana && P?.kana && nKana(c.furigana) === nKana(P.kana))) weak.push(`生年月日+(姓|名|カナ) → ${desc(c)}`);
     }
     if (birth) for (const c of byNameBirth.get(`${fold(tName)}|${birth}`) ?? []) hits.push(`氏名+生年月日 → ${desc(c)}`);
-    if (hits.length) { R.分類 = "a"; cls.a.push(R); stop(`既存 client に当たる (同一人物の疑い・新規にしない): ${[...new Set(hits)].join(" / ")}`); continue; }
+    if (hits.length) { R.分類 = "a"; cls.a.push(R); stop(`既存 client に当たる (同一人物の疑い・新規にしない): ${[...new Set([...hits, ...weak])].join(" / ")}`); continue; }
+    if (weak.length) R.注意.push(`★ 同じ人の疑いあり (生年月日と 姓・名・カナのどれかが同じ・氏名は違う) → 別人として作る: ${[...new Set(weak)].join(" / ")}`);
     if (R.分類 === "b") cls.b.push(R); else cls.c.push(R);
 
     // ── clients ───────────────────────────────────────────────────────
@@ -571,6 +582,8 @@ async function main() {
   console.log(`\n══ 合計 ══ 書込み ${ops.length} 件 ${JSON.stringify(countBy(ops, (o) => `${o.table} ${o.action}`))}`);
   console.log(`insert のキー集合 (表ごとの種類数。1 であること): ${JSON.stringify(Object.fromEntries(Object.entries(keySets).map(([t, v]) => [t, v.size])))}`);
   console.log(`作る利用者: ${results.filter((r) => r.状態 === "計画").length} 名 / 止めた: ${results.filter((r) => r.状態 !== "計画").map((r) => `${r.利用者番号} ${r.氏名}`).join(", ") || "なし"}`);
+  const doubt = results.filter((r) => r.状態 === "計画" && r.注意.some((x) => x.startsWith("★ 同じ人の疑いあり")));
+  console.log(`★ 同じ人の疑いあり (別人として作る) ${doubt.length} 名: ${doubt.map((r) => `${r.利用者番号} ${r.氏名}`).join(", ") || "なし"}`);
   console.log("trigger: client_insurance_records の追加で care_plan_elements 等が作られる → 実行時に「書込み → 掃除」(参照先がこの batch の行のものだけ消して記録)");
   console.log(`\n== 答え合わせ (KDS0031 = 請求の出力。★ 作る値には使っていない) 対象 ${kdsCheck.length} 名 / 一致 ${kdsCheck.filter((x) => x.一致).length} / 差あり ${kdsCheck.filter((x) => !x.一致).length}`);
   for (const x of kdsCheck.filter((y) => !y.一致)) { console.log(`   ${x.利用者番号} ${x.氏名} (KDS ${x.KDS月.join(",")})`); for (const d of x.差) console.log(`       ${d}`); }

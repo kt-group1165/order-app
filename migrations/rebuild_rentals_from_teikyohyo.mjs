@@ -41,6 +41,8 @@
  *   ・最後の月 (10 月) の末日まで印がある台 → 継続中 (rental_end_date=null・rental_started)。それ以外は terminated + 終了日
  *   ・同じ月に同じ用具が 2 行以上ある組 (台数 2 以上) の対応付け: 下の「月またぎ・同月の連結」
  *   ・利用者の引き当て: 利用者マスタ CSV の (保険者, 被保番) → DB の clients / 認定 → 利用者番号+氏名 → 氏名 (ケアサポ所属で一意)。
+ *     ★ 2026-11-13: 氏名だけで引くとき・候補が複数のときは 生年月日 (利用者マスタ 基本情報 ↔ clients.birth_date) の一致を必須に
+ *     (_name_birth_match.mjs。違えば新規の候補、どちらかが無い・仮なら判断待ち。どちらも引かない)
  *     引けない利用者は ★ 何もしない (clients 等の共有表は作らない・触らない)
  *   ・order_items は福祉用具専用なので、共有の利用者でも置き換えてよい。clients / 認定 / 公費 / 入院記録 は触らない
  *
@@ -90,7 +92,8 @@ if (!process.env.HONOBONO_SYNC_UNDER_TSX) {
   process.exit(r.status ?? 1);
 }
 const core = await import("../scripts/_honobono-sync-core.mjs");
-const { C, TENANT, readKds0031, readEnv, parseCsvLine, nfkc, nInsurer, nInsured, daysIn } = core;
+const { C, TENANT, readKds0031, readEnv, parseCsvLine, nfkc, nInsurer, nInsured, nDate, daysIn } = core;
+const { decideByBirth } = await import("./_name_birth_match.mjs");
 const { halfMonthUnits } = await import("../lib/half-month-units");
 const { getPriceForMonth } = await import("../lib/equipment");
 
@@ -116,6 +119,8 @@ const FUKUYOGU = FO.dir;
 const TEIKYO_DIR = resolve(opt("--teikyo-dir") ?? latestTeikyoDir(FUKUYOGU) ?? join(FUKUYOGU, "用具貸与期間_(未着)"));
 const MASTER_DIR = resolve(opt("--master-dir") ?? join(FUKUYOGU, "マスタ"));
 const UM_DIR = resolve(opt("--user-master-dir") ?? resolveUserMasterDirs(FUKUYOGU, [], { log: false }).on ?? join(FUKUYOGU, "利用者マスタ_(未着)"));
+// 登録無 (元利用者) の利用者マスタ。氏名だけで引くときの生年月日に使う (★ 2026-11-13)
+const UM_DIR_OFF = opt("--user-master-dir-off") ? resolve(opt("--user-master-dir-off")) : resolveUserMasterDirs(FUKUYOGU, [], { log: false }).off;
 const OUT_DIR = resolve(opt("--out-dir") ?? join(tmpdir(), "teikyo-rebuild"));
 const REPO_ROOT = resolve(HERE, "../../..");
 const SCRIPT_REL = "apps/order-app/migrations/rebuild_rentals_from_teikyohyo.mjs";
@@ -281,7 +286,7 @@ async function selectIn(sb, table, select, col, ids, extra = (q) => q) {
 async function loadDb(sb) {
   const t = (q) => q.eq("tenant_id", TENANT);
   const db = {
-    clients: await selectAll(sb, "clients", "id,user_number,name,office_id,deleted_at,insurer_number,insured_number", t),
+    clients: await selectAll(sb, "clients", "id,user_number,name,birth_date,office_id,deleted_at,insurer_number,insured_number", t),
     ins: await selectAll(sb, "client_insurance_records", "id,client_id,insurer_number,insured_number", t),
     orders: await selectAll(sb, "orders", "id,client_id,office_id,payment_type,status,ordered_at", t),
     items: await selectAll(sb, "order_items", "*", t),
@@ -344,6 +349,7 @@ async function main() {
   //   ★ 2026-11-13: 新しく受け入れる事業所 (誉田) で 利用者マスタがまだ届いていないときは、DRY RUN に限り
   //   (保険者, 被保番) の引き当て無しで続ける (提供票の読み方を先に確かめるため)。--execute は止める
   const keysOf = new Map();
+  const birthOf = new Map(); // 利用者番号 → 生年月日 (利用者マスタ 基本情報。食い違えば null)
   if (!existsSync(UM_DIR)) {
     if (EXECUTE) throw new Error(`★ 利用者マスタが無い (${UM_DIR})。--execute は 利用者マスタを置いてから`);
     console.log(`⚠ 利用者マスタが無い (${relPath(UM_DIR)}) — DRY RUN なので (保険者, 被保番) の引き当て無し (利用者番号・氏名だけ) で続ける。結果は参考`);
@@ -354,6 +360,21 @@ async function main() {
   sourceFiles.push({ path: relPath(UK.path), sha256: sha256(UK.path), rows: UK.rows.length, kind: "利用者管理 介護保険" });
   { const a = colOf(UK, "利用者番号"), b = colOf(UK, "保険者番号"), c = colOf(UK, "被保険者番号");
     for (const r of UK.rows) { const k = `${nInsurer(r[b])}|${nInsured(r[c])}`; if (k.startsWith("|") || k.endsWith("|")) continue; const no = nfkc(r[a]); if (!keysOf.has(no)) keysOf.set(no, new Set()); keysOf.get(no).add(k); } }
+  // ★ 2026-11-13: 利用者番号 → 生年月日 (基本情報。登録有 + 登録無)。氏名だけで引くとき・候補が複数のときに 生年月日の一致を必須にする (_name_birth_match.mjs)
+  //   同じ番号に違う生年月日が 2 つ以上あれば 使わない (null)
+  for (const dir of [UM_DIR, UM_DIR_OFF]) {
+    if (!dir || !existsSync(dir)) continue;
+    const ubF = readdirSync(dir).find((f) => f.startsWith("基本情報_") && /\.csv$/i.test(f));
+    if (!ubF) continue;
+    const UB = readSjis(join(dir, ubF));
+    sourceFiles.push({ path: relPath(UB.path), sha256: sha256(UB.path), rows: UB.rows.length, kind: "利用者管理 基本情報 (生年月日)" });
+    const a = colOf(UB, "利用者番号"), b = colOf(UB, "生年月日");
+    for (const r of UB.rows) {
+      const no = nfkc(r[a]), bd = nDate(r[b]);
+      if (!no || !bd) continue;
+      birthOf.set(no, birthOf.has(no) && birthOf.get(no) !== bd ? null : bd);
+    }
+  }
   }
 
   // DB
@@ -364,6 +385,8 @@ async function main() {
   let db;
   if (!EXECUTE && CACHE && !argv.includes("--refresh") && existsSync(CACHE)) {
     db = JSON.parse(readFileSync(CACHE, "utf8")); db.refs = Object.fromEntries(Object.entries(db.refs).map(([k, v]) => [k, new Set(v)]));
+    // ★ 2026-11-13: 生年月日で引き当てを決めるので、birth_date の無い古い控えは使えない
+    if (db.clients.length && !("birth_date" in db.clients[0])) throw new Error(`★ 控え ${CACHE} の clients に birth_date が無い (2026-11-13 より前の控え)。--refresh で取り直す`);
     console.log(`DB: 控えを使う ${CACHE} (取得 ${db.fetchedAt})。最新は --refresh`);
   } else {
     db = await loadDb(sb);
@@ -406,6 +429,16 @@ async function main() {
     if (cs.length === 0) { cs = (byFold.get(fold(name)) ?? []).filter((c) => c.office_id === OFFICE); how = "氏名 (ケアサポ所属で一意)"; }
     if (cs.length === 0) { cs = (byFold.get(fold(name)) ?? []).filter((c) => ksOrders.some((o) => o.client_id === c.id)); how = "氏名 (ケアサポの注文がある人で一意)"; }
     if (cs.length === 0) { cs = byFold.get(fold(name)) ?? []; how = "氏名 (全利用者で一意・★ 利用登録の無い元利用者。要確認)"; }
+    // ★ 2026-11-13: 氏名だけで引いた人・候補が複数の人は 生年月日で決める (一致が 1 人だけなら その人。違えば新規の候補、そろわなければ判断待ち)
+    if (cs.length > 1 || (cs.length === 1 && how.startsWith("氏名"))) {
+      const d = decideByBirth(cs, birthOf.get(userNo));
+      if (d.verdict === "pick") { cs = [d.client]; how += " + 生年月日一致"; }
+      else {
+        R.users.add(d.verdict === "new" ? "★ 新規の候補 (氏名は当たるが生年月日が違う) → この利用者は何もしない" : "★ 判断が要る (生年月日で決められない) → この利用者は何もしない",
+          { 利用者番号: userNo, 氏名: name, 行: rs.length, 引き方: how, 候補: cs.map((c) => `${c.name}/${c.user_number}/${c.birth_date ?? "-"}`).join(" "), 理由: d.reason });
+        continue;
+      }
+    }
     if (cs.length === 1) {
       clientOfUser.set(userNo, cs[0]);
       R.users.add(how + (fold(cs[0].name) === fold(name) ? "" : " ★氏名の表記違い") + (cs[0].office_id === OFFICE ? "" : " ★clients.office_id がケアサポでない"), { 利用者番号: userNo, 氏名: name, DB: cs[0].name });
