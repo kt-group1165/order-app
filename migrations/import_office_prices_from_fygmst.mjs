@@ -78,6 +78,7 @@ for (const f of files) for (const r of readMaster(join(mdir, f))) { if (!byTais.
 //   提供票の実績行の「(略称)」と 月額の単位数 (全額 = 概算単位・半額 = ×2) で FYGMST01 の行に当てる
 //   use = 実績行の数 / fresh = 新しく始まった (利用者, 行) の数 (提供票の最初の月より後に初めて出たもの)
 const useOf = new Map(), freshOf = new Map();
+const spanOf = new Map(); // 利用者|略称|単位 → { min, max } (提供年月)
 const TDIR = latestTeikyoDir(FO.dir);
 if (TDIR) {
   const firstSeen = new Map();
@@ -96,6 +97,7 @@ if (TDIR) {
       useOf.set(k, (useOf.get(k) ?? 0) + 1);
       const pk = `${nf(r[c.利用者番号])}|${k}`, ym = nf(r[c.提供年月]);
       if (!firstSeen.has(pk) || firstSeen.get(pk) > ym) firstSeen.set(pk, ym);
+      const sp = spanOf.get(pk); if (!sp) spanOf.set(pk, { min: ym, max: ym }); else { if (ym < sp.min) sp.min = ym; if (ym > sp.max) sp.max = ym; }
     }
   }
   const minYm = [...firstSeen.values()].sort()[0];
@@ -103,6 +105,21 @@ if (TDIR) {
 }
 const usedOf = (r) => useOf.get(`${r.abbr}|${r.units}`) ?? 0;
 const freshOfRow = (r) => freshOf.get(`${r.abbr}|${r.units}`) ?? 0;
+/** その行 (略称|単位) を使った利用者 → 期間 */
+const usersOfRow = (r) => { const k = `${r.abbr}|${r.units}`, out = new Map(); for (const [pk, sp] of spanOf) if (pk.slice(pk.indexOf("|") + 1) === k) out.set(pk.slice(0, pk.indexOf("|")), sp); return out; };
+
+// ★ 2026-11-13 user 判断: 1 TAIS = 1 品目。本数違い (KS-161Q 1本) は 別の届出コード (00170-Z00019) が正しい。
+//   正しいコードは もう一方の事業所の FYGMST01 で 同じ略称 (記号・予 を除く)・同じ単位数 の行の TAIS から引く (ケアサポのマスタは 1 本を Z コードで持っていた)
+const coreAbbr = (a) => nf(a).replace(/^[予★☆◎◇▲●]+/, "").replace(/[\s　]/g, "");
+const otherCode = new Map(); // coreAbbr|単位 → Set<TAIS>
+const OTHER_AREA = IS_CARESAPO ? "誉田" : "ケアサポ";
+{
+  const odir = join(resolveFukuyoguOffice(["--area", OTHER_AREA]).dir, "マスタ");
+  if (existsSync(odir)) for (const f of readdirSync(odir).filter((x) => /^FYGMST.*\.csv$/i.test(x) && !/自費/.test(x))) {
+    for (const r of readMaster(join(odir, f))) { const k = `${coreAbbr(r.abbr || r.name)}|${r.units}`; if (!otherCode.has(k)) otherCode.set(k, new Set()); otherCode.get(k).add(r.tais); }
+  }
+}
+const qtyOf = (r) => { const m = (r.abbr || r.name).match(/(\d+)\s*(本|枚|セット|個|組|台)/); return m ? `${m[1]}${m[2]}` : null; };
 
 const snap = JSON.parse(readFileSync(CACHE, "utf8"));
 const hist = snap.priceHist ?? [];
@@ -114,15 +131,23 @@ const eqByTais = new Map();
 for (const e of snap.equipment ?? []) for (const t of new Set([nTais(e.tais_code), nTais(e.product_code)])) { if (!isTais(t)) continue; if (!eqByTais.has(t)) eqByTais.set(t, []); if (!eqByTais.get(t).includes(e)) eqByTais.get(t).push(e); }
 const vfYm = VALID_FROM.slice(0, 7);
 
-const R = { P1: [], P2: [], P3: [], J: [], G: [], V: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
+const R = { P1: [], P2: [], P3: [], J: [], G: [], A: [], B: [], C: [], diffFromIdMax: [], diffFromSym: [], unused: [] };
 /** 誉田の世代の記号 (略称 → 商品名称 の先頭)。★ = 最新・最安 / ☆ = その前 / ◎◇▲ = ☆ より前 / 無印 = 古いか 世代の分かれていない品目 */
 const genMark = (r) => ((r.abbr || r.name).match(/^[★☆◎◇▲●]/) ?? r.name.match(/^[★☆◎◇▲●]/) ?? [""])[0];
 const genRank = (r) => ({ "★": 4, "☆": 3, "◎": 2, "◇": 2, "▲": 2 })[genMark(r)] ?? 1;
 for (const [tais, rows] of byTais) {
   const act = rows.filter((r) => !r.stop);
   if (!act.length) continue; // 中止だけの品目は作らない
-  const curCands = IS_CARESAPO ? act.filter((r) => !r.name.startsWith("●")) : act;
-  const poolBase = curCands.length ? curCands : act;
+  // (a) 本数違いで 別の届出コードが正しい行 (もう一方の事業所のマスタで 同じ略称・単位が 別の TAIS) → この TAIS の価格から外す
+  const wrongCode = new Map();
+  for (const r of act) {
+    if (!qtyOf(r)) continue;
+    const cands = [...(otherCode.get(`${coreAbbr(r.abbr || r.name)}|${r.units}`) ?? [])].filter((t) => t !== tais);
+    if (cands.length === 1) wrongCode.set(r, cands[0]);
+  }
+  const actOk = act.filter((r) => !wrongCode.has(r));
+  const curCands = IS_CARESAPO ? actOk.filter((r) => !r.name.startsWith("●")) : actOk;
+  const poolBase = curCands.length ? curCands : actOk.length ? actOk : act;
   const pick = (rs) => rs.reduce((a, b) => (genRank(b) > genRank(a) || (genRank(b) === genRank(a) && b.id > a.id) ? b : a));
   const byId = poolBase.reduce((a, b) => (b.id > a.id ? b : a));
   // ケアサポ: ● の無い行の ID 最大 / それ以外 (誉田): 提供票で 新しく使われている行 → 使われている行 → 全部 の順に絞り、その中で 記号の優先・同じ記号なら ID 最大
@@ -133,23 +158,29 @@ for (const [tais, rows] of byTais) {
   if (!IS_CARESAPO && cur !== byId) R.diffFromIdMax.push({ TAIS: tais, 記号で選んだ行: `${cur.id} ${cur.abbr || cur.name} ${cur.units * 10}円`, ID最大の行: `${byId.id} ${byId.abbr || byId.name} ${byId.units * 10}円`, 価格が違う: cur.units !== byId.units });
   if (!IS_CARESAPO && cur !== curSym) R.diffFromSym.push({ TAIS: tais, 提供票で選んだ行: `${cur.id} ${cur.abbr || cur.name} ${cur.units * 10}円 (新規 ${freshOfRow(cur)}・実績 ${usedOf(cur)})`, 記号だけで選んだ行: `${curSym.id} ${curSym.abbr || curSym.name} ${curSym.units * 10}円 (新規 ${freshOfRow(curSym)}・実績 ${usedOf(curSym)})`, 価格が違う: cur.units !== curSym.units });
   const price = cur.units * 10;
-  // 古い世代の候補 (G) は 提供票で使われている行の価格だけ。使われていない行は「使われていない行」に数える (品目は P1 で足すが 価格の行は作らない)
-  const unusedRows = IS_CARESAPO ? [] : act.filter((r) => r !== cur && usedOf(r) === 0);
+  // (a) 本数違い → 正しいコード
+  for (const [r, t] of wrongCode) R.A.push({ TAIS: tais, 行: `${r.id}:${r.abbr || r.name}:${r.units * 10}円 (実績 ${usedOf(r)})`, 正しいコード: t, 根拠: `${OTHER_AREA} の FYGMST01 で 同じ略称・単位数が ${t}` });
+  // 使われていない行は数えるだけ (品目は P1 で足すが 価格は作らない)
+  const unusedRows = IS_CARESAPO ? [] : actOk.filter((r) => r !== cur && usedOf(r) === 0);
   if (unusedRows.length) R.unused.push({ TAIS: tais, 行: unusedRows.map((r) => `${r.id}:${r.abbr || r.name}:${r.units * 10}円`).join(" ") });
-  const others = [...new Set(act.filter((r) => !unusedRows.includes(r)).map((r) => r.units))].filter((u) => u !== cur.units);
-  // ★ 2026-11-13: 略称に 本数・枚数・セット の違い (KS-161Q(1本) 30 単位 / (2本) 50 単位) がある行は 世代違いではなく 別品目 (同じ TAIS)。
-  //   古い世代の候補 (G) にせず V に出す (product_code を分けて 両方とも現役にする。品目の分け方は別の手順)
-  const qtyOf = (r) => { const m = (r.abbr || r.name).match(/(\d+)\s*(本|枚|セット|個|組|台)/); return m ? `${m[1]}${m[2]}` : null; };
-  //   提供票で使われていない行も見る (KS-161QT(1本) 50 / (2本) 100 は どちらも提供票に出ないが 同じ型)
-  const usedQty = new Map();
-  if (!IS_CARESAPO) for (const r of act) { const q = qtyOf(r); if (q) { if (!usedQty.has(q)) usedQty.set(q, new Set()); usedQty.get(q).add(r.units); } }
-  if (usedQty.size >= 2 && new Set([...usedQty.values()].flatMap((s) => [...s])).size >= 2) {
-    R.V.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 本数ごとの価格: [...usedQty].map(([q, us]) => `${q}=${[...us].map((u) => u * 10).join("/")}円`).join(" / "),
-      提供票で使われている: act.some((r) => usedOf(r) > 0 && qtyOf(r)) ? "あり" : "なし",
-      行: act.map((r) => `${r.id}:${r.abbr}:${r.units * 10}円(実${usedOf(r)})`).join(" ") });
-  } else if (others.length) R.G.push({ TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行ID: cur.id, ほかの使用中の価格: others.map((u) => u * 10).join(" / "), 行: act.map((r) => `${r.id}:${r.units}${r.name.startsWith("●") ? "●" : ""}${IS_CARESAPO ? "" : `(新${freshOfRow(r)}/実${usedOf(r)})`}`).join(" ") });
-  // 本数・セット違い (V) の TAIS は 品目 (product_code) を分けるまで 価格の行も品目も作らない (どちらの価格を 1 つの品目に付けるか決まらない)
-  if (R.V.length && R.V[R.V.length - 1].TAIS === tais) continue;
+  // 今の価格と違う 使われている行 → (b) 古い価格 (履歴) か (c) user 確認
+  const otherRows = (IS_CARESAPO ? actOk.filter((r) => r.units !== cur.units) : actOk.filter((r) => r.units !== cur.units && usedOf(r) > 0));
+  for (const u of [...new Set(otherRows.map((r) => r.units))]) {
+    const rs = otherRows.filter((r) => r.units === u);
+    const base = { TAIS: tais, 名前: cur.abbr || cur.name, 今の価格: price, 今の行: `${cur.id}:${cur.abbr || cur.name}`, ほかの価格: u * 10, ほかの行: rs.map((r) => `${r.id}:${r.abbr || r.name}(新${freshOfRow(r)}/実${usedOf(r)})`).join(" ") };
+    if (IS_CARESAPO) { R.G.push(base); continue; } // ケアサポは 今までどおり 候補として出すだけ
+    const qr = rs.find((r) => qtyOf(r) && qtyOf(r) !== qtyOf(cur));
+    if (qr) { R.C.push({ ...base, 理由: `本数・セットの違い (${qtyOf(qr)}) だが 正しいコードが見つからない` }); continue; }
+    // 古い価格の行を使った人が 全員 あとで今の価格の行に付け替わっている → 改定 (履歴)
+    const curUsers = usersOfRow(cur);
+    const oldUsers = new Map(rs.flatMap((r) => [...usersOfRow(r)]));
+    const switched = [...oldUsers].every(([n, sp]) => curUsers.has(n) && curUsers.get(n).min > sp.max);
+    const fresh = rs.reduce((a, r) => a + freshOfRow(r), 0);
+    const lastOld = [...oldUsers.values()].map((sp) => sp.max).sort().pop() ?? "-";
+    if (oldUsers.size && switched) R.B.push({ ...base, 理由: `古い価格を使った ${oldUsers.size} 名が 全員 あとで今の価格に付け替わっている (改定)`, 最後に使った月: lastOld });
+    else if (fresh === 0) R.B.push({ ...base, 理由: `新規に使われていない (今借りている人 ${[...oldUsers.values()].filter((sp) => sp.max === lastOld).length} 名は 古い価格のまま)`, 最後に使った月: lastOld });
+    else R.C.push({ ...base, 理由: `古い価格の行でも 新規が ${fresh} 件ある (古い行で登録した可能性・または別の品目)`, 最後に使った月: lastOld });
+  }
   const eqs = eqByTais.get(tais) ?? [];
   if (!eqs.length) { R.P1.push({ TAIS: tais, 名前: cur.abbr || cur.name, 種目: cur.cat, 価格: price }); continue; }
   const cps = [...new Set(eqs.map((e) => `${commonPrice(e, vfYm)}|${commonPrice(e, MONTH)}`))];
@@ -185,10 +216,10 @@ for (const x of [...R.P3]) {
 
 mkdirSync(OUT, { recursive: true });
 const esc = (v) => `"${String(Array.isArray(v) ? v.join(" / ") : v ?? "").replace(/"/g, '""')}"`;
-const label = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の品目が要る候補", V: "V_本数・セット違いの別品目" };
+const label = { P1: "P1_品目を足す", P2: "P2_同じ_何もしない", P3: "P3_事業所の価格の行を作る", J: "J_判断が要る", G: "G_古い世代の候補 (ケアサポ)", A: "A_本数違い_正しいコードへ", B: "B_古い価格_履歴へ", C: "C_user確認" };
 console.log(`事業所 ${FO.area} ${FO.bn} / FYGMST01 ${files.join(" / ")} / 使用中の TAIS ${[...byTais.values()].filter((rs) => rs.some((r) => !r.stop)).length}`);
 console.log(`控え ${snap.fetchedAt} / 事業所の行の valid_from ${VALID_FROM} / 影響を見る月 ${MONTH}${IS_CARESAPO ? " / 今の価格 = 中止=0 で ● の無い行 (複数なら ID 最大)" : " / 今の価格 = 中止=0 の行で 記号 ★ > ☆ > ◎◇▲ > 無印 (同じ記号なら ID 最大)"}\n`);
-for (const k of ["P1", "P2", "P3", "J", "G", "V"]) {
+for (const k of ["P1", "P2", "P3", "J", "G", "A", "B", "C"]) {
   const xs = R[k];
   console.log(`  ${label[k].padEnd(28)} ${String(xs.length).padStart(5)}`);
   for (const x of k === "P2" ? [] : xs.slice(0, Number(process.env.SHOW ?? 3))) console.log(`      - ${JSON.stringify(x).slice(0, 240)}`);
