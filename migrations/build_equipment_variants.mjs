@@ -186,6 +186,12 @@ if (EXECUTE) {
     // TAIS が化けた子は 親の TAIS に書き直す (どこから引いても 正しい TAIS になるように)。退避には元の値を残す
     // ★ 条件: 化けを直した子の TAIS が 親の tais_code と完全に一致するときだけ (= 同じ商品の重複行)。違えば書き換えない (taisKept に出す)
     tais_code: c.元TAIS, fixTais: c.TAIS化け && normTais(c.元TAIS) === g.parent.元TAIS && TAIS.test(String(g.parent.元TAIS)) ? g.parent.元TAIS : null })));
+  const keptRows = [...p.A, ...p.B].flatMap((g) => g.children.filter((c) => String(c.元TAIS ?? "") !== String(g.parent.元TAIS ?? "")
+    && !(c.TAIS化け && normTais(c.元TAIS) === g.parent.元TAIS && TAIS.test(String(g.parent.元TAIS)))));
+  if (keptRows.length && !argv.includes("--allow-kept")) {
+    console.error(`★ 止めた: 子だが TAIS が親と違う行が ${keptRows.length} 行ある (上の「残す」)。確かめてから --allow-kept を付けて流す`);
+    process.exit(2);
+  }
   const expect = Number(opt("--expect"));
   if (!Number.isFinite(expect) || expect !== rows.length) {
     console.error(`★ 止めた: 子にする行 ${rows.length} が --expect ${opt("--expect")} と違う (DRY RUN の後に DB が変わった)。DRY RUN からやり直す`);
