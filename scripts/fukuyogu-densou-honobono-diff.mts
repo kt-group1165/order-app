@@ -388,6 +388,8 @@ async function main() {
   const rows: FukuyoguSeikyuRow[] = [];
   const nameByKey = new Map<string, string>();
   let lateCount = 0;
+  // 群1 の除外見込み (2026-11-14・READ ONLY の数え上げ。出力・判定は変えない): ① 給付率を既定の 1 割にした人
+  const benefitDefaulted: string[] = [];
   const periodByKey = new Map<string, { startDate: string | null; stopDate: string | null }>();
   for (const [cid, lines] of dbLines) {
     if (isLate(cid)) { lateCount++; continue; }
@@ -419,6 +421,7 @@ async function main() {
           insurerNumber: rec?.insurer_number ?? null, insuredNumber: rec?.insured_number ?? null, careOfficeId: rec?.care_office_id ?? null }
       : { ...certFieldsForDensou(c, rec), insurerNumber: c.insurer_number, insuredNumber: c.insured_number ?? null, careOfficeId: c.care_office_id };
     const amt = libs.computeFukuyoguAmounts({ benefitRateRaw: benefitRaw, insuredNumber: c.insured_number, totalUnits, kohi, cmUnits: cmUnitsByClient.get(cid) ?? null });
+    if (!amt.kohiTandoku && amt.warnings.some((w) => w.includes("1 割 (90) で計算"))) benefitDefaulted.push(c.name);
     periodByKey.set(`${(c.insurer_number ?? "").trim().padStart(8, "0")}|${(c.insured_number ?? "").trim()}`, { startDate: fukuyoguServiceStartDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH), stopDate: fukuyoguServiceStopDate((rentalsByClient.get(cid) ?? []).map(toP), MONTH) });
     rows.push({
       userName: c.name, insurerNumber: dc.insurerNumber, insuredNumber: dc.insuredNumber,
@@ -444,6 +447,12 @@ async function main() {
   const [Y, M] = MONTH.split("-").map(Number);
   const built = buildFukuyoguDensou(rows, { officeNumber: PROVIDER_BN, year: Y, month: M });
   const mk = parseKk(built.content);
+  {
+    const kohiOver = built.warnings.filter((w) => w.includes("公費対象単位数 (") && w.includes("保険の単位数"));
+    const overActual = built.warnings.filter((w) => w.includes("保険請求の単位数 (") && w.includes("実績 ("));
+    console.log(`群1 の除外見込み: ① 給付率を既定 1 割 ${benefitDefaulted.length} 名${benefitDefaulted.length ? ` (${benefitDefaulted.join("・")})` : ""} / ③ 公費単位 > 保険単位 ${kohiOver.length} 名 / ④ 請求単位 > 実績 ${overActual.length} 名`);
+    for (const w of [...kohiOver, ...overActual]) console.log(`  ${w}`);
+  }
   console.log(`新システム: 対象 ${rows.length} 名 (月遅れで除外 ${lateCount} 名) / データ ${mk.recs.length} レコード / 警告 ${built.warnings.length} 件`);
 
   const P = (rs: ReturnType<typeof receipts>) => (kds ? projectReceipts(rs) : rs);
