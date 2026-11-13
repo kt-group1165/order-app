@@ -701,6 +701,14 @@ async function main() {
     p.notes.push(`[休止 ${a}〜${AS_OF != null && b > AS_OF ? AS_OF : b}]`);
   }
   console.log(`\n提供票 ${FIRST}〜${LAST}: 実績 ${rows.length} 行 → 台 ${planned.length} (継続中 ${planned.filter((p) => p.open).length} / 終了 ${planned.filter((p) => !p.open).length} / ${BEFORE_APR.slice(1, -1)} ${planned.filter((p) => p.beforeApr).length})`);
+  if (PARTIAL_LAST && months.length >= 2) {
+    const PREV = months[months.length - 2];
+    const prevUsers = new Set(rows.filter((r) => r.ym === PREV).map((r) => r.userNo));
+    const missing = [...prevUsers].filter((u) => !lastMonthUsers.has(u));
+    const prov = planned.filter((p) => p.notes.some((n) => n.startsWith("[暫定:")));
+    console.log(`  ★ --partial-last: ${LAST} に実績がある利用者 ${lastMonthUsers.size} 名 (${rows.filter((r) => r.ym === LAST).length} 行) / ${PREV} に実績があり ${LAST} に 1 行も無い利用者 ${missing.length} 名 (= 暫定扱いの範囲)`);
+    console.log(`    そのうち ${PREV} 末まで借りている台がある (= 暫定で継続にした) ${new Set(prov.map((p) => p.userNo)).size} 名 / ${prov.length} 台`);
+  }
   console.log(`  うち 品目を請求の出力 (KDS0031) で決めた台 ${planned.filter((p) => p.notes.includes(BILLED_TAIS_MARK)).length} (notes に ${BILLED_TAIS_MARK}。KDS0031 との答え合わせでは当然一致する = 一致率の分母から外して読む)`);
   { // 開始月の分布 (仮置きの「○/1以前から」は別に数える。2026-11-13 誉田の受入れで追加)
     const by = new Map();
