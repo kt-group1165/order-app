@@ -50,3 +50,6 @@ next-env.d.ts
 # 2026-11-14 時点で追跡済みは 0 件・未追跡 64 件だったので、丸ごと除外しても失うものは無い
 migrations/_backup_*.json
 migrations/_backup_*/
+
+# 受け取った業務ファイル (xlsx・利用者情報を含む)
+住宅改修進行表/
