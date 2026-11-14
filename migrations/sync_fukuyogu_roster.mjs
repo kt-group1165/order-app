@@ -88,7 +88,7 @@ const ROSTER = {
 async function fetchAll(table, select, filter = (q) => q) {
   const out = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await filter(sb.from(table).select(select).range(from, from + 999));
+    const { data, error } = await filter(sb.from(table).select(select).order("id").range(from, from + 999));
     if (error) throw new Error(`${table}: ${error.message}`);
     out.push(...(data ?? []));
     if ((data ?? []).length < 1000) break;
@@ -203,7 +203,8 @@ for (const c of plan.memberUpdate) {
   }
 }
 // 既存 member の性別も埋める (更新対象外でも gender が空なら入れる)
-for (const [officeName, list] of Object.entries(ROSTER)) {
+// ★ 事業所名は使わないので捨てる (ESLint は 0 errors / 0 warnings を維持する)
+for (const [, list] of Object.entries(ROSTER)) {
   for (const [name, furigana, gender] of list) {
     const m = membersByName.get(norm(name));
     if (!m?.id) continue;

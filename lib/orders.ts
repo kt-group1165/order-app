@@ -10,6 +10,7 @@ export async function getMembers(tenantId: string): Promise<Member[]> {
       ? supabase.from("members").select("id", { count: "exact", head: true })
       : supabase.from("members").select("*"))
       .eq("tenant_id", tenantId)
+      .is("deleted_at", null)
       .order("sort_order", { nullsFirst: false })
       .order("name")
       .order("id");

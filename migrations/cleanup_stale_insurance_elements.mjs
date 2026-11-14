@@ -47,7 +47,7 @@ async function fetchAll(table, cols, f) {
   const all = [];
   let from = 0;
   while (true) {
-    let q = sb.from(table).select(cols).range(from, from + PAGE - 1);
+    let q = sb.from(table).select(cols).order("id").range(from, from + PAGE - 1);
     if (f) q = f(q);
     const { data, error } = await q;
     if (error) throw error;

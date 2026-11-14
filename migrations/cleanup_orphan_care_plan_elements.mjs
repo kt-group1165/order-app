@@ -43,7 +43,7 @@ async function fetchAll(table, columns, applyFilter) {
   const all = [];
   let from = 0;
   while (true) {
-    let q = sb.from(table).select(columns).range(from, from + PAGE - 1);
+    let q = sb.from(table).select(columns).order("id").range(from, from + PAGE - 1);
     if (applyFilter) q = applyFilter(q);
     const { data, error } = await q;
     if (error) throw error;
