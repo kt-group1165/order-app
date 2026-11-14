@@ -14,6 +14,7 @@
  */
 import { densouExcludeReasons, densouLoadBlockers, summarizeExcluded, type DensouExcludeInput } from "../lib/kokuho-densou/densou-exclude";
 import { computeFukuyoguAmounts, type KohiPiece } from "../lib/kokuho-densou/fukuyogu-amounts";
+import { dateNum, isUnreadableDate } from "../lib/kokuho-densou/date-num";
 import { buildFukuyoguDensou, type FukuyoguDetailLine, type FukuyoguSeikyuRow } from "../lib/kokuho-densou/build";
 
 /** 群1 だけを見る (details 等を持たない行で 群1 の判定を単独に確かめる) */
@@ -88,6 +89,16 @@ for (const [k, r] of Object.entries(okFull)) eq(`外れない: ${k}`, densouExcl
 console.log("══ 群2 — わざと壊した行は その理由で外れる (負のコントロール) ══");
 eq("★ 生年月日が空 → birth_date_missing", densouExcludeReasons(full({ birthDate: null })), ["birth_date_missing"]);
 eq("★ 生年月日が空白だけ → birth_date_missing", densouExcludeReasons(full({ birthDate: "  " })), ["birth_date_missing"]);
+// 読めない日付 (2026-11-14 追加)。判定は date-num.ts の dateNum (= 伝送の項13・17・18 と同じ関数)
+eq("★ 生年月日 \"S15.3.3\" (和暦) → birth_date_unreadable (「空」とは別の理由)", densouExcludeReasons(full({ birthDate: "S15.3.3" })), ["birth_date_unreadable"]);
+eq("★ 生年月日 \"昭和15年3月3日\" → birth_date_unreadable", densouExcludeReasons(full({ birthDate: "昭和15年3月3日" })), ["birth_date_unreadable"]);
+eq("★ 認定開始 \"R8/8/1\" → cert_period_unreadable", densouExcludeReasons(full({ certStart: "R8/8/1", certEnd: "2029-07-31" })), ["cert_period_unreadable"]);
+eq("★ 認定終了だけ読めない (\"2029年7月31日\") → cert_period_unreadable", densouExcludeReasons(full({ certStart: "2026-08-01", certEnd: "2029年7月31日" })), ["cert_period_unreadable"]);
+eq("外れない: 生年月日 \"1940/5/3\"・\"１９４０－０５－０３\" (全角)・\"1940-05-03 00:00:00\"", [
+  densouExcludeReasons(full({ birthDate: "1940/5/3" })), densouExcludeReasons(full({ birthDate: "１９４０-０５-０３" })), densouExcludeReasons(full({ birthDate: "1940-05-03 00:00:00" }))], [[], [], []]);
+eq("外れない: 認定期間が空 (従来どおり外さない) / \"2026/8/1\"〜\"2029/7/31\"", [
+  densouExcludeReasons(full({ certStart: null, certEnd: "" })), densouExcludeReasons(full({ certStart: "2026/8/1", certEnd: "2029/7/31" }))], [[], []]);
+eq("★ 判定と伝送が同じ関数: 読めない値は dateNum で空欄 / 読める値は 8 桁", [dateNum("S15.3.3"), dateNum("R8/8/1"), dateNum("1940/5/3"), isUnreadableDate(""), isUnreadableDate("S15.3.3")], ["", "", "19400503", false, true]);
 eq("★ 公費あり・負担者番号が空 → kohi_futansha_missing", densouExcludeReasons(full({ kohiHobetsu: "12", kohiFutansha: null, kohiUnits: 1000 })), ["kohi_futansha_missing"]);
 eq("★ 公費単独 (H) で公費情報なし → kohi_futansha_missing (fukuyogu-amounts:345 の型)", densouExcludeReasons(full({ kohiTandoku: true, kohiHobetsu: "12", kohiFutansha: "", kohiUnits: 1000 })), ["kohi_futansha_missing"]);
 eq("★ 明細の合計 1000 ≠ 限度額管理対象 1100 → detail_sum_mismatch", densouExcludeReasons({ ...full(), limitTargetUnits: 1100, totalUnits: 1100 }), ["detail_sum_mismatch"]);

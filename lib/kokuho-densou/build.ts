@@ -45,6 +45,7 @@
  */
 import { fukuyoguLinePieces, type KohiPiece } from "./fukuyogu-amounts";
 import { densouExcludeReasons, DENSOU_EXCLUDE_LABEL } from "./densou-exclude";
+import { dateNum } from "./date-num";
 import { rentalDayMask, type DateRange } from "../half-month-units";
 
 // ─── コード値 ────────────────────────────────────────────────────────────────
@@ -306,15 +307,7 @@ export interface DensouBuildResult {
   excluded: { userName: string; reason: string; totalCost: number }[];
 }
 
-// ★ 2026-11-09: clients.certification_start/end_date に "2026/2/19" 形式 (ほのぼの由来) が混ざっていた
-//   (2026-09 の請求対象で 認定開始 61 名・終了 58 名)。"-" を消すだけだと "2026/2/19" のまま出て
-//   数字8 の項目に "/" が入る。YYYY-MM-DD / YYYY/M/D のどちらも YYYYMMDD に直す。読めない値は空欄にして警告。
-const dateNum = (s: string | null | undefined) => {
-  const t = (s ?? "").normalize("NFKC").trim();
-  if (!t) return "";
-  const m = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  return m ? `${m[1]}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}` : "";
-};
+// 日付 → 数字8 は lib/kokuho-densou/date-num.ts (除外判定と同じ関数)
 const genderCode = (g: string | null) =>
   g == null ? "" : g.includes("女") ? "2" : g.includes("男") ? "1" : "";
 

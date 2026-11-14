@@ -12,6 +12,8 @@
  *   ④ billed_over_actual    … 保険請求の単位数 > 実績 (限度額管理対象単位数) (計算不整合 = 過大請求)
  * 群2 (返戻になる型。2026-11-14 ★居宅版チェック と合意して 同じ関数に入れた):
  *   birth_date_missing     … 生年月日が空 (01 項13 必須) → 返戻。7111 の件数・金額にも入っていた
+ *   birth_date_unreadable  … 生年月日はあるが日付として読めない ("S15.3.3" 等。date-num.ts の dateNum が空欄にする) → 返戻
+ *   cert_period_unreadable … 認定有効期間 (01 項17・18) が読めない (空は外さない) → 返戻
  *   kohi_futansha_missing  … 公費があるのに負担者番号が空 (公費単独 H で公費情報が無い場合も) → 返戻
  *   detail_sum_mismatch    … 明細 02 のサービス単位の合計 ≠ 限度額管理対象単位数 (10 項10) → 突合せず返戻
  *   kohi_detail_mismatch   … 明細 02 の公費対象単位の合計 ≠ 公費対象単位数 (01 項39) → 突合せず返戻 (頭打ちした人は除く = build.ts と同じ)
@@ -25,10 +27,11 @@
 
 import type { FukuyoguSeikyuRow } from "./build";
 import { fukuyoguLinePieces } from "./fukuyogu-amounts";
+import { isUnreadableDate } from "./date-num";
 
 export type DensouExcludeReason =
   | "benefit_rate_defaulted" | "kohi_units_over" | "billed_over_actual"
-  | "birth_date_missing" | "kohi_futansha_missing" | "detail_sum_mismatch" | "kohi_detail_mismatch"
+  | "birth_date_missing" | "birth_date_unreadable" | "cert_period_unreadable" | "kohi_futansha_missing" | "detail_sum_mismatch" | "kohi_detail_mismatch"
   | "unit_overflow" | "service_code_invalid";
 
 export const DENSOU_EXCLUDE_LABEL: Record<DensouExcludeReason, string> = {
@@ -36,6 +39,8 @@ export const DENSOU_EXCLUDE_LABEL: Record<DensouExcludeReason, string> = {
   kohi_units_over: "公費対象単位数が保険の単位数を超えている",
   billed_over_actual: "保険請求の単位数が実績を超えている",
   birth_date_missing: "生年月日が未登録",
+  birth_date_unreadable: "生年月日を日付として読めない (伝送では空欄になる)",
+  cert_period_unreadable: "認定有効期間を日付として読めない (伝送では空欄になる)",
   kohi_futansha_missing: "公費の負担者番号が未登録",
   detail_sum_mismatch: "明細の単位の合計が限度額管理対象単位数と合わない",
   kohi_detail_mismatch: "明細の公費対象単位の合計が公費対象単位数と合わない",
@@ -46,7 +51,7 @@ export const DENSOU_EXCLUDE_LABEL: Record<DensouExcludeReason, string> = {
 /** 判定に使う項目 (FukuyoguSeikyuRow の一部)。群1 だけを見る呼び方 (details 等を省く) もできる */
 export type DensouExcludeInput =
   Pick<FukuyoguSeikyuRow, "totalUnits" | "limitTargetUnits" | "kohiTandoku" | "kohiHobetsu" | "kohiUnits">
-  & Partial<Pick<FukuyoguSeikyuRow, "birthDate" | "kohiFutansha" | "details">>
+  & Partial<Pick<FukuyoguSeikyuRow, "birthDate" | "certStart" | "certEnd" | "kohiFutansha" | "details">>
   & {
     /** computeFukuyoguAmounts の benefitRateDefaulted をそのまま渡す */
     benefitRateDefaulted: boolean;
@@ -65,6 +70,9 @@ export function densouExcludeReasons(r: DensouExcludeInput): DensouExcludeReason
   if (r.group2 === false) return out;
   // ── 群2 ──
   if (!(r.birthDate ?? "").trim()) out.push("birth_date_missing");
+  else if (isUnreadableDate(r.birthDate)) out.push("birth_date_unreadable");
+  // 認定有効期間 (01 項17・18): 空は従来どおり (外さない)。値があるのに読めないときだけ外す
+  if (isUnreadableDate(r.certStart) || isUnreadableDate(r.certEnd)) out.push("cert_period_unreadable");
   if (hasKohi && !(r.kohiFutansha ?? "").trim()) out.push("kohi_futansha_missing");
   const details = r.details ?? [];
   const detailSum = details.reduce((s, d) => s + d.units, 0);
