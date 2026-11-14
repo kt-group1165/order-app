@@ -635,8 +635,11 @@ async function main() {
   // ── 負のコントロール: 新システム側を 1 か所わざと壊して検出できるか ──
   console.log("\n══ 負のコントロール ══");
   const broken = parseKk(built.content);
-  const firstDetail = broken.recs.find((r) => r.v[1] === "02" && r.v[0] !== "7111");
-  const firstHead = broken.recs.find((r) => r.v[1] === "01" && r.v[0] !== "7111");
+  // ★ 2026-11-14: 壊す対象は ほのぼのにもある (比べられる) レセプトから選ぶ。
+  //   先頭の 1 本が「当方だけ」だと比べる相手が無く、壊しても差が 0 で NG と誤って出る (誉田 2026-10 で起きた)
+  const inHono = (r: Rec) => hono.byKey.has(`${r.v[0]}|${r.v[4]}|${r.v[5]}`);
+  const firstDetail = broken.recs.find((r) => r.v[1] === "02" && r.v[0] !== "7111" && inHono(r));
+  const firstHead = broken.recs.find((r) => r.v[1] === "01" && r.v[0] !== "7111" && inHono(r));
   let ncOk = true;
   if (firstDetail && firstHead) {
     const before = compare(hono, P(receipts(mk.recs)), nameOf);
