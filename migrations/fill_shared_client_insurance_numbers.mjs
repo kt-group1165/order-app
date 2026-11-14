@@ -13,6 +13,13 @@
  * 引き当て: KK の (保険者, 被保番) と一致する client_insurance_records を持つ client が **1 人だけ** で、
  *   その client の clients.insurer_number / insured_number が **両方空** のときだけ書く。片方でも値があれば触らない。
  * 記録: data_import_batches / data_import_rows (before/after)。update は「空のまま」を条件に付ける。
+ *
+ * ★ 2026-11-14 --from-cert-rows --area <拠点> [--month YYYY-MM]: 元を KK (請求の出力 = 答え合わせ側) ではなく
+ *   認定行 (client_insurance_records = ほのぼのの利用者マスタ由来の入力側) にする。循環させないため。
+ *   対象 = その事業所に割当 (client_office_assignments) がある利用者で clients の番号が両方空の人。
+ *   その月 (既定 = 先月) に有効な認定行の (保険者, 被保番) が 1 通りに決まる人だけ書く (2 通り以上・0 は書かずに出す)。
+ *   全件読みはしない (割当 → clients → 認定行 の順に その事業所の分だけ引く)。
+ *   誉田 2026-10: 伝送から 37 名 (レセプト 37 本) がこれで落ちていた (build.ts は clients の番号を使う)。
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
@@ -37,6 +44,11 @@ const opt = (name) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 
 const EXECUTE = argv.includes("--execute");
 const REVERT = opt("--revert");
 const REPO_ROOT = resolve(HERE, "../../..");
+const FROM_CERT = argv.includes("--from-cert-rows");
+const { resolveFukuyoguOffice } = await import("./_fukuyogu_office.mjs");
+const FO = FROM_CERT ? resolveFukuyoguOffice(argv) : null;
+const CERT_MONTH = opt("--month") ?? (() => { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 7); })();
+if (FROM_CERT && !/^\d{4}-\d{2}$/.test(CERT_MONTH)) { console.error("--month は YYYY-MM"); process.exit(1); }
 const KK_PATH = resolve(opt("--kk") ?? join(HERE, "../../kaigo-app/伝送データ/ケアサポ/福祉用具/202609/ほのぼのから/KK261004.CSV"));
 const SCRIPT_REL = "apps/order-app/migrations/fill_shared_client_insurance_numbers.mjs";
 let EXEC_LOCK = null; // 同じ script の同時 --execute を止める (_exec_lock.mjs)。--execute の最初に execLockStart で取る
@@ -80,7 +92,31 @@ function readKk(path) {
   return recs;
 }
 
+async function planFromCertRows(sb) {
+  const lastDay = new Date(Date.UTC(Number(CERT_MONTH.slice(0, 4)), Number(CERT_MONTH.slice(5, 7)), 0)).getUTCDate();
+  const ms = `${CERT_MONTH}-01`, me = `${CERT_MONTH}-${String(lastDay).padStart(2, "0")}`;
+  const coa = await selectAll(sb, "client_office_assignments", "id,client_id,office_id", (q) => q.eq("office_id", FO.officeId));
+  const ids = [...new Set(coa.map((a) => a.client_id))];
+  const clients = await selectIn(sb, "clients", "id,name,insurer_number,insured_number,office_id,deleted_at", "id", ids);
+  const blank = clients.filter((c) => !c.deleted_at && empty(c.insurer_number) && empty(c.insured_number));
+  const partial = clients.filter((c) => !c.deleted_at && (empty(c.insurer_number) !== empty(c.insured_number))); // 片方だけ空 = 触らない (上書きの事故を避ける)
+  const ins = await selectIn(sb, "client_insurance_records", "id,client_id,insurer_number,insured_number,certification_start_date,certification_end_date", "client_id", blank.map((c) => c.id));
+  const allCoa = await selectIn(sb, "client_office_assignments", "id,client_id,office_id", "client_id", blank.map((c) => c.id));
+  const ops = [], skip = [];
+  for (const c of blank) {
+    const rows = ins.filter((r) => r.client_id === c.id && !empty(r.insurer_number) && !empty(r.insured_number)
+      && (r.certification_start_date ?? "9999") <= me && (r.certification_end_date ?? "9999") >= ms);
+    const keys = [...new Set(rows.map((r) => `${nInsurer(r.insurer_number)}|${nInsured(r.insured_number)}`))];
+    if (keys.length !== 1) { skip.push({ name: c.name, why: keys.length ? `${CERT_MONTH} に有効な認定の番号が ${keys.length} 通り (${keys.join(" / ")})` : `${CERT_MONTH} に有効な認定行が無い` }); continue; }
+    const [insurer, insured] = keys[0].split("|");
+    const shared = allCoa.some((a) => a.client_id === c.id && a.office_id !== FO.officeId);
+    ops.push({ id: c.id, name: c.name, key: `認定行|${insurer}|${insured}`, shared, before: { insurer_number: null, insured_number: null }, patch: { insurer_number: insurer, insured_number: insured } });
+  }
+  return { ops, skip, kkCount: 0, label: `${FO.area}: 割当 ${ids.length} 名 / clients の番号が両方空 ${blank.length} 名 / 片方だけ空 ${partial.length} 名 (触らない) (${CERT_MONTH} に有効な認定行で埋める・うち他事業所にも割当がある共有 ${ops.filter((o) => o.shared).length} 名)` };
+}
+
 async function plan(sb) {
+  if (FROM_CERT) return planFromCertRows(sb);
   const kk = readKk(KK_PATH);
   const ins = await selectAll(sb, "client_insurance_records", "id,client_id,insurer_number,insured_number", (q) => q.eq("tenant_id", TENANT));
   const byKey = new Map();
@@ -110,8 +146,8 @@ async function plan(sb) {
 
 async function execute(sb, ops) {
   const batch = await execLockAcquire(sb, EXEC_LOCK, {
-    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: [relative(REPO_ROOT, KK_PATH).replace(/\\/g, "/")], script: SCRIPT_REL,
-    args: argv.join(" "), step: STEP_NAME, notes: `共有の利用者で clients の保険者番号・被保番が両方空の ${ops.length} 名を KK で埋める`,
+    tenant_id: TENANT, source_system: SOURCE_SYSTEM, source_files: FROM_CERT ? [] : [relative(REPO_ROOT, KK_PATH).replace(/\\/g, "/")], script: SCRIPT_REL,
+    args: argv.join(" "), step: STEP_NAME, notes: FROM_CERT ? `${FO.area}: clients の保険者番号・被保番が両方空の ${ops.length} 名を ${CERT_MONTH} に有効な認定行で埋める` : `共有の利用者で clients の保険者番号・被保番が両方空の ${ops.length} 名を KK で埋める`,
   });
   const BATCH = batch.id;
   console.log(`batch ${BATCH}`);
@@ -126,7 +162,7 @@ async function execute(sb, ops) {
       .eq("id", o.id).eq("tenant_id", TENANT).is("insurer_number", null).is("insured_number", null);
     if (error) await fail(`update clients ${o.id}: ${error.message}`);
     if (count !== 1) await fail(`update clients ${o.id} (${o.name}): 更新件数 ${count} (空でなくなった可能性)`);
-    const { error: e2 } = await sb.from("data_import_rows").insert({ batch_id: BATCH, tenant_id: TENANT, table_name: "clients", row_id: o.id, op: "update", source_key: o.key, source_ref: { 理由: "共有・両方空を KK で埋める" }, before: o.before, after: o.patch });
+    const { error: e2 } = await sb.from("data_import_rows").insert({ batch_id: BATCH, tenant_id: TENANT, table_name: "clients", row_id: o.id, op: "update", source_key: o.key, source_ref: { 理由: FROM_CERT ? `両方空を ${CERT_MONTH} に有効な認定行で埋める` : "共有・両方空を KK で埋める" }, before: o.before, after: o.patch });
     if (e2) await fail(`data_import_rows: ${e2.message}`);
   }
   const { count, error } = await sb.from("data_import_rows").select("id", { count: "exact", head: true }).eq("batch_id", BATCH);
@@ -159,8 +195,9 @@ async function revert(sb, batchId) {
 const sb = await makeSb();
 if (EXECUTE) EXEC_LOCK = await execLockStart(sb, { script: SCRIPT_REL, argv }); // ★ 計画の DB 読みより前 (同時実行なら exit 2)
 if (REVERT) { await revert(sb, REVERT); process.exit(0); }
-const { ops, skip, kkCount } = await plan(sb);
-console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  KK 基本レコード ${kkCount} / 埋める ${ops.length} 名 / 対象外 ${skip.length}`);
+const { ops, skip, kkCount, label } = await plan(sb);
+if (label) console.log(label);
+console.log(`${EXECUTE ? "★★ EXECUTE" : "DRY RUN"}  ${FROM_CERT ? "元 = 認定行" : `KK 基本レコード ${kkCount}`} / 埋める ${ops.length} 名 / 対象外 ${skip.length}`);
 for (const o of ops) console.log(`  - ${o.name}  → ${o.patch.insurer_number} | ${o.patch.insured_number}`);
 for (const s of skip.slice(0, 20)) console.log(`  (対象外) ${JSON.stringify(s)}`);
 if (EXECUTE && ops.length) await execute(sb, ops);
