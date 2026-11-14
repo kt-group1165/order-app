@@ -45,3 +45,8 @@ next-env.d.ts
 # PII を含む CSV (国保請求 export / 利用者一覧 等) は repo に入れない
 *.CSV
 *.csv
+
+# 退避 JSON (ミリ秒スタンプ付き・手元にだけ置く。kaigo-app / payroll-app と同じ扱い)
+# 2026-11-14 時点で追跡済みは 0 件・未追跡 64 件だったので、丸ごと除外しても失うものは無い
+migrations/_backup_*.json
+migrations/_backup_*/
